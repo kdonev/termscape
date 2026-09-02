@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import Fastify, { type FastifyInstance } from 'fastify';
 import websocket from '@fastify/websocket';
@@ -277,10 +277,32 @@ export async function serve(opts: ServeOptions): Promise<ServeResult> {
   if (!opts.headless) {
     const root = webRoot();
     if (root) {
-      await app.register(fastifyStatic, { root, wildcard: false });
+      await app.register(fastifyStatic, {
+        root,
+        wildcard: false,
+        // Asset filenames are content-hashed by vite, so they may be cached
+        // forever. index.html must NOT be: a cached copy points at the
+        // previous build's hashed bundle, which now 404s, leaving a blank
+        // page that only a manual hard-reload fixes.
+        setHeaders: (res, filePath) => {
+          const immutable = filePath.includes(`${sep}assets${sep}`);
+          res.header(
+            'cache-control',
+            immutable ? 'public, max-age=31536000, immutable' : 'no-cache',
+          );
+        },
+      });
+
+      // SPA fallback, but only for navigations. Serving index.html for a
+      // missing /assets/*.js turns a cache-stale asset into a confusing MIME
+      // type error instead of an honest 404, so anything that looks like a
+      // file must 404 as a file.
       app.setNotFoundHandler((req, reply) => {
-        if (req.raw.url?.startsWith('/api') || req.raw.url?.startsWith('/mcp')) {
-          return reply.code(404).send({ error: 'not found' });
+        const url = (req.raw.url ?? '/').split('?')[0]!;
+        const looksLikeFile = /\.[a-z0-9]+$/i.test(url);
+        const isApi = url.startsWith('/mcp') || url.startsWith('/hook') || url.startsWith('/ws');
+        if (looksLikeFile || isApi) {
+          return reply.code(404).send({ error: 'not found', path: url });
         }
         return reply.sendFile('index.html');
       });
