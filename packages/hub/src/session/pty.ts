@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events';
 import { createRequire } from 'node:module';
 import { platform } from 'node:process';
 import type { AgentStatus } from '@aicanvas/protocol';
+import { buildAgentEnv } from '../agents/env.js';
 // Type-only imports are erased at compile time, so they are safe against the
 // CJS interop problem described below while still typing the values.
 import type { IPty } from 'node-pty';
@@ -101,7 +102,9 @@ export class PtySession extends EventEmitter {
       cols: opts.cols,
       rows: opts.rows,
       cwd: opts.cwd,
-      env: { ...process.env, ...opts.env } as Record<string, string>,
+      // Strips the parent agent CLI's own session state; see agents/env.ts for
+      // why inheriting it wholesale breaks resume and leaks an IPC channel.
+      env: buildAgentEnv(process.env, opts.env),
       // ConPTY is the only way to get a real PTY on Windows; node-pty falls
       // back to winpty on older builds, which we do not support.
       useConpty: platform === 'win32' ? true : undefined,

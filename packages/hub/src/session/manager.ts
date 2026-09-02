@@ -8,7 +8,8 @@ import {
   type WindowRect,
 } from '@aicanvas/protocol';
 import { DEFAULT_WINDOW, Store, type SessionLaunchSpec } from '../db/store.js';
-import { ProfileRegistry, templateAll, type AgentProfile } from '../agents/profiles.js';
+import { ProfileRegistry, template, templateAll, type AgentProfile } from '../agents/profiles.js';
+import { resolveCommand } from '../agents/resolve.js';
 import { TokenRegistry } from '../agents/tokens.js';
 import { writeWiring } from '../agents/wiring.js';
 import { PtySession } from './pty.js';
@@ -128,8 +129,17 @@ export class SessionManager extends EventEmitter {
     }
 
     const argTemplate = resume && profile.resumeArgs ? profile.resumeArgs : profile.args;
+
+    // Resolve to an absolute path here rather than at spawn time, so the
+    // stored argv is exactly what will be run and a missing CLI is reported
+    // as a clear error instead of node-pty's bare "File not found:".
+    const { argv } = resolveCommand(
+      template(profile.command, vars),
+      templateAll(argTemplate, vars),
+    );
+
     return {
-      argv: [profile.command, ...templateAll(argTemplate, vars)],
+      argv,
       env: Object.fromEntries(
         Object.entries(profile.env).map(([k, v]) => [k, templateAll([v], vars)[0]!]),
       ),
