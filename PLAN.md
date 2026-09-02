@@ -291,3 +291,50 @@ Command palette, cross-terminal search, keybindings, session templates ("open wo
 - Phase 6: add a remote host, open a remote workspace, confirm agents start there, message a local agent, then kill the SSH tunnel and confirm sessions are still alive and re-attach with correct scrollback.
 
 **Cross-platform gate before each release:** Phase 1 and Phase 4 manual checks run on Windows, macOS, and Linux. node-pty and `better-sqlite3` are the two native deps; if a platform lacks prebuilds, that is a release blocker.
+
+---
+
+## Status
+
+Phases 1-6 are implemented; Phase 7 is partial (README, hosts panel, fit/zoom
+shortcuts; no command palette or cross-terminal search yet). 61 tests pass.
+
+Verified by running it, not only by tests:
+- Real PTYs streaming to the canvas on Windows/ConPTY, LOD swap at the zoom
+  threshold, hard kill (`Stop-Process -Force`) followed by a restart that
+  restored window positions, zoom and last screens, then resumed.
+- A real Claude Code agent launched in a canvas window, with the hub's MCP
+  tools (`whoami`, `list_agents`, `read_screen`) answering correctly and
+  identity taken from its bearer token.
+- Agent-to-agent delivery and cross-host routing, both with real PTYs and the
+  real MCP endpoint, no LLM in the loop.
+
+Not verified here: SSH deployment against a real remote host, and two Claude
+Code agents holding a conversation (the sandbox this was built in blocks a
+spawned CLI from reaching its credentials; a plain `claude` spawned outside the
+hub fails the same way, so it is environmental).
+
+### What running it changed
+
+Five things were wrong in ways no amount of planning would have caught:
+
+1. **node-pty does no PATH lookup.** A profile command like `claude` failed with
+   `File not found:`. Commands are now resolved to an absolute path, probing
+   PATHEXT on Windows and wrapping `.cmd`/`.bat` shims in `cmd.exe /c`.
+2. **Environment inheritance leaked the parent agent's session.** Launching the
+   hub from inside Claude Code passed `CLAUDE_CODE_CHILD_SESSION` to every
+   spawned agent, which disables transcript saving - silently breaking the
+   `--resume` this plan is built on - and handed them the parent's private IPC
+   socket. Parent-session variables are now stripped.
+3. **The CJS/ESM trap.** node-pty and the xterm packages typecheck with named
+   imports and throw at runtime; they are loaded via `createRequire`.
+4. **zustand v5 dropped implicit shallow comparison**, so object selectors
+   re-rendered forever.
+5. **Fastify's `close()` never returns while a WebSocket is open**, so shutdown
+   hung. Sockets are terminated explicitly.
+
+### Deviation from the plan
+
+`@xterm/headless` serves as both the persisted-snapshot source and the
+in-memory scrollback, so there is no separate raw ring buffer. One parser means
+the replayed screen always matches what the program actually drew.
