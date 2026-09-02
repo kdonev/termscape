@@ -1,0 +1,375 @@
+import {
+  makeAddress,
+  type Host,
+  type Message,
+  type Session,
+  type Viewport,
+  type WindowRect,
+  type Workspace,
+} from '@aicanvas/protocol';
+import type { Db } from './index.js';
+
+/** Row shapes as they come back from SQLite (snake_case, 0/1 booleans). */
+interface SessionRow {
+  id: string;
+  workspace_id: string;
+  name: string;
+  profile: string;
+  cwd: string;
+  agent_session_uuid: string | null;
+  argv_json: string;
+  env_json: string;
+  spawned_by: string | null;
+  state: string;
+  status_text: string | null;
+  title: string | null;
+  pid: number | null;
+  exit_code: number | null;
+  cols: number;
+  rows: number;
+  created_at: number;
+  exited_at: number | null;
+  last_active_at: number;
+  workspace_name: string;
+  x: number | null;
+  y: number | null;
+  w: number | null;
+  h: number | null;
+  z: number | null;
+  collapsed: number | null;
+}
+
+export const DEFAULT_WINDOW: WindowRect = {
+  x: 0,
+  y: 0,
+  w: 720,
+  h: 460,
+  z: 0,
+  collapsed: false,
+};
+
+/** Persisted fields that live only in the DB, not on the wire Session. */
+export interface SessionLaunchSpec {
+  argv: string[];
+  env: Record<string, string>;
+}
+
+export class Store {
+  constructor(private readonly db: Db) {}
+
+  /* ---------------------------------------------------------------- hosts */
+
+  listHosts(): Host[] {
+    const rows = this.db.prepare('SELECT * FROM host ORDER BY label').all() as any[];
+    return rows.map((r) => ({
+      id: r.id,
+      label: r.label,
+      sshHost: r.ssh_host,
+      sshUser: r.ssh_user,
+      sshPort: r.ssh_port,
+      hubVersion: r.hub_version,
+      state: r.state,
+      lastSeenAt: r.last_seen_at,
+      error: r.error,
+    }));
+  }
+
+  upsertHost(h: Host & { keyRef?: string | null }): void {
+    this.db
+      .prepare(
+        `INSERT INTO host (id, label, ssh_host, ssh_user, ssh_port, key_ref,
+                           hub_version, state, last_seen_at, error)
+         VALUES (@id, @label, @sshHost, @sshUser, @sshPort, @keyRef,
+                 @hubVersion, @state, @lastSeenAt, @error)
+         ON CONFLICT(id) DO UPDATE SET
+           label=@label, ssh_host=@sshHost, ssh_user=@sshUser, ssh_port=@sshPort,
+           key_ref=COALESCE(@keyRef, key_ref), hub_version=@hubVersion,
+           state=@state, last_seen_at=@lastSeenAt, error=@error`,
+      )
+      .run({ ...h, keyRef: h.keyRef ?? null });
+  }
+
+  removeHost(id: string): void {
+    this.db.prepare('DELETE FROM host WHERE id = ?').run(id);
+  }
+
+  hostKeyRef(id: string): string | null {
+    const r = this.db.prepare('SELECT key_ref FROM host WHERE id = ?').get(id) as
+      | { key_ref: string | null }
+      | undefined;
+    return r?.key_ref ?? null;
+  }
+
+  /* ----------------------------------------------------------- workspaces */
+
+  listWorkspaces(): Workspace[] {
+    const rows = this.db
+      .prepare('SELECT * FROM workspace WHERE archived_at IS NULL ORDER BY created_at')
+      .all() as any[];
+    return rows.map((r) => ({
+      id: r.id,
+      name: r.name,
+      kind: r.kind,
+      rootPath: r.root_path,
+      hostId: r.host_id,
+      color: r.color,
+      createdAt: r.created_at,
+      archivedAt: r.archived_at,
+    }));
+  }
+
+  getWorkspace(id: string): Workspace | null {
+    return this.listWorkspaces().find((w) => w.id === id) ?? null;
+  }
+
+  getWorkspaceByName(name: string): Workspace | null {
+    return this.listWorkspaces().find((w) => w.name === name) ?? null;
+  }
+
+  insertWorkspace(w: Workspace): void {
+    this.db
+      .prepare(
+        `INSERT INTO workspace (id, name, kind, root_path, host_id, color, created_at, archived_at)
+         VALUES (@id, @name, @kind, @rootPath, @hostId, @color, @createdAt, @archivedAt)`,
+      )
+      .run(w);
+  }
+
+  removeWorkspace(id: string): void {
+    this.db.prepare('DELETE FROM workspace WHERE id = ?').run(id);
+  }
+
+  /* ------------------------------------------------------------- sessions */
+
+  private rowToSession(r: SessionRow, resumable: boolean): Session {
+    return {
+      id: r.id,
+      workspaceId: r.workspace_id,
+      name: r.name,
+      address: makeAddress(r.workspace_name, r.name),
+      profile: r.profile,
+      cwd: r.cwd,
+      agentSessionUuid: r.agent_session_uuid,
+      spawnedBy: r.spawned_by,
+      state: r.state as Session['state'],
+      // Live status is held in memory by the SessionManager; a row loaded from
+      // disk is by definition not running, so it reads as unknown until start.
+      status: 'unknown',
+      statusText: r.status_text,
+      title: r.title,
+      pid: r.pid,
+      exitCode: r.exit_code,
+      cols: r.cols,
+      rows: r.rows,
+      resumable,
+      createdAt: r.created_at,
+      exitedAt: r.exited_at,
+      lastActiveAt: r.last_active_at,
+      window: {
+        x: r.x ?? DEFAULT_WINDOW.x,
+        y: r.y ?? DEFAULT_WINDOW.y,
+        w: r.w ?? DEFAULT_WINDOW.w,
+        h: r.h ?? DEFAULT_WINDOW.h,
+        z: r.z ?? DEFAULT_WINDOW.z,
+        collapsed: r.collapsed === 1,
+      },
+    };
+  }
+
+  private readonly selectSession = `
+    SELECT s.*, w.name AS workspace_name,
+           win.x, win.y, win.w, win.h, win.z, win.collapsed
+    FROM session s
+    JOIN workspace w ON w.id = s.workspace_id
+    LEFT JOIN window win ON win.session_id = s.id
+  `;
+
+  listSessions(isResumable: (profile: string) => boolean): Session[] {
+    const rows = this.db
+      .prepare(`${this.selectSession} ORDER BY s.created_at`)
+      .all() as SessionRow[];
+    return rows.map((r) => this.rowToSession(r, isResumable(r.profile)));
+  }
+
+  getSession(id: string, isResumable: (profile: string) => boolean): Session | null {
+    const r = this.db
+      .prepare(`${this.selectSession} WHERE s.id = ?`)
+      .get(id) as SessionRow | undefined;
+    return r ? this.rowToSession(r, isResumable(r.profile)) : null;
+  }
+
+  namesInWorkspace(workspaceId: string): string[] {
+    return (
+      this.db
+        .prepare('SELECT name FROM session WHERE workspace_id = ?')
+        .all(workspaceId) as { name: string }[]
+    ).map((r) => r.name);
+  }
+
+  insertSession(s: Session, spec: SessionLaunchSpec): void {
+    const tx = this.db.transaction(() => {
+      this.db
+        .prepare(
+          `INSERT INTO session (
+             id, workspace_id, name, profile, cwd, agent_session_uuid,
+             argv_json, env_json, spawned_by, state, status_text, title,
+             pid, exit_code, cols, rows, created_at, exited_at, last_active_at)
+           VALUES (
+             @id, @workspaceId, @name, @profile, @cwd, @agentSessionUuid,
+             @argvJson, @envJson, @spawnedBy, @state, @statusText, @title,
+             @pid, @exitCode, @cols, @rows, @createdAt, @exitedAt, @lastActiveAt)`,
+        )
+        .run({
+          id: s.id,
+          workspaceId: s.workspaceId,
+          name: s.name,
+          profile: s.profile,
+          cwd: s.cwd,
+          agentSessionUuid: s.agentSessionUuid,
+          argvJson: JSON.stringify(spec.argv),
+          envJson: JSON.stringify(spec.env),
+          spawnedBy: s.spawnedBy,
+          state: s.state,
+          statusText: s.statusText,
+          title: s.title,
+          pid: s.pid,
+          exitCode: s.exitCode,
+          cols: s.cols,
+          rows: s.rows,
+          createdAt: s.createdAt,
+          exitedAt: s.exitedAt,
+          lastActiveAt: s.lastActiveAt,
+        });
+      this.saveWindow(s.id, s.window);
+    });
+    tx();
+  }
+
+  /** Fields that change over a session's life. Layout is written separately. */
+  updateSession(
+    id: string,
+    patch: Partial<
+      Pick<
+        Session,
+        'state' | 'pid' | 'exitCode' | 'statusText' | 'title' | 'cols' | 'rows' | 'exitedAt' | 'lastActiveAt' | 'agentSessionUuid'
+      >
+    >,
+  ): void {
+    const map: Record<string, string> = {
+      state: 'state',
+      pid: 'pid',
+      exitCode: 'exit_code',
+      statusText: 'status_text',
+      title: 'title',
+      cols: 'cols',
+      rows: 'rows',
+      exitedAt: 'exited_at',
+      lastActiveAt: 'last_active_at',
+      agentSessionUuid: 'agent_session_uuid',
+    };
+    const entries = Object.entries(patch).filter(([, v]) => v !== undefined);
+    if (entries.length === 0) return;
+    const sets = entries.map(([k]) => `${map[k]} = @${k}`).join(', ');
+    this.db
+      .prepare(`UPDATE session SET ${sets} WHERE id = @id`)
+      .run({ id, ...Object.fromEntries(entries) });
+  }
+
+  getLaunchSpec(id: string): SessionLaunchSpec | null {
+    const r = this.db
+      .prepare('SELECT argv_json, env_json FROM session WHERE id = ?')
+      .get(id) as { argv_json: string; env_json: string } | undefined;
+    if (!r) return null;
+    return { argv: JSON.parse(r.argv_json), env: JSON.parse(r.env_json) };
+  }
+
+  setLaunchSpec(id: string, spec: SessionLaunchSpec): void {
+    this.db
+      .prepare('UPDATE session SET argv_json = ?, env_json = ? WHERE id = ?')
+      .run(JSON.stringify(spec.argv), JSON.stringify(spec.env), id);
+  }
+
+  removeSession(id: string): void {
+    this.db.prepare('DELETE FROM session WHERE id = ?').run(id);
+  }
+
+  /* --------------------------------------------------------------- layout */
+
+  saveWindow(sessionId: string, rect: WindowRect): void {
+    this.db
+      .prepare(
+        `INSERT INTO window (session_id, x, y, w, h, z, collapsed)
+         VALUES (@sessionId, @x, @y, @w, @h, @z, @collapsed)
+         ON CONFLICT(session_id) DO UPDATE SET
+           x=@x, y=@y, w=@w, h=@h, z=@z, collapsed=@collapsed`,
+      )
+      .run({ sessionId, ...rect, collapsed: rect.collapsed ? 1 : 0 });
+  }
+
+  getViewport(): Viewport {
+    const r = this.db.prepare('SELECT * FROM viewport WHERE id = 1').get() as
+      | { pan_x: number; pan_y: number; zoom: number }
+      | undefined;
+    return r ? { panX: r.pan_x, panY: r.pan_y, zoom: r.zoom } : { panX: 0, panY: 0, zoom: 1 };
+  }
+
+  saveViewport(v: Viewport): void {
+    this.db
+      .prepare(
+        `INSERT INTO viewport (id, pan_x, pan_y, zoom) VALUES (1, @panX, @panY, @zoom)
+         ON CONFLICT(id) DO UPDATE SET pan_x=@panX, pan_y=@panY, zoom=@zoom`,
+      )
+      .run(v);
+  }
+
+  /* ------------------------------------------------------------ snapshots */
+
+  saveSnapshot(sessionId: string, serialized: string, cols: number, rows: number): void {
+    this.db
+      .prepare(
+        `INSERT INTO session_snapshot (session_id, serialized, cols, rows, captured_at)
+         VALUES (@sessionId, @serialized, @cols, @rows, @capturedAt)
+         ON CONFLICT(session_id) DO UPDATE SET
+           serialized=@serialized, cols=@cols, rows=@rows, captured_at=@capturedAt`,
+      )
+      .run({ sessionId, serialized, cols, rows, capturedAt: Date.now() });
+  }
+
+  getSnapshot(
+    sessionId: string,
+  ): { serialized: string; cols: number; rows: number } | null {
+    const r = this.db
+      .prepare('SELECT serialized, cols, rows FROM session_snapshot WHERE session_id = ?')
+      .get(sessionId) as { serialized: string; cols: number; rows: number } | undefined;
+    return r ?? null;
+  }
+
+  /* ------------------------------------------------------------- messages */
+
+  listMessages(limit = 500): Message[] {
+    const rows = this.db
+      .prepare('SELECT * FROM message ORDER BY sent_at DESC LIMIT ?')
+      .all(limit) as any[];
+    return rows
+      .map((r) => ({
+        id: r.id,
+        fromAddr: r.from_addr,
+        toAddr: r.to_addr,
+        body: r.body,
+        sentAt: r.sent_at,
+        deliveredAt: r.delivered_at,
+        deliveryState: r.delivery_state,
+        error: r.error,
+      }))
+      .reverse();
+  }
+
+  insertMessage(m: Message): void {
+    this.db
+      .prepare(
+        `INSERT INTO message (id, from_addr, to_addr, body, sent_at, delivered_at, delivery_state, error)
+         VALUES (@id, @fromAddr, @toAddr, @body, @sentAt, @deliveredAt, @deliveryState, @error)`,
+      )
+      .run(m);
+  }
+}
