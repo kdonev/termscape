@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { dirname, join, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -6,6 +7,10 @@ import websocket from '@fastify/websocket';
 import fastifyStatic from '@fastify/static';
 import {
   ClientMsg,
+  PeerRequest,
+  PEER_SCHEMA_VERSION,
+  type PeerResponse,
+  type Session,
   BinaryFrameKind,
   decodeBinaryFrame,
   encodeBinaryFrame,
@@ -99,6 +104,161 @@ export async function serve(opts: ServeOptions): Promise<ServeResult> {
     return reply;
   });
 
+  /* --------------------------------------------------------- peer (hub↔hub) */
+
+  /**
+   * The server half of the hub-to-hub link. A remote hub serves this; the
+   * local hub connects to it through an SSH tunnel, so this endpoint is only
+   * ever reachable over loopback on the remote machine.
+   */
+  const peerSockets = new Set<import('ws').WebSocket>();
+  const peerAttached = new Map<import('ws').WebSocket, Set<string>>();
+
+  const peerSend = (ws: import('ws').WebSocket, msg: PeerResponse): void => {
+    if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(msg));
+  };
+
+  hub.on('session', (s: Session) => {
+    for (const ws of peerSockets) peerSend(ws, { t: 'sessionUpserted', session: s });
+  });
+  hub.on('removed', (_id: string, address: string | null) => {
+    // Peers address sessions by name, not by this hub's internal id, which is
+    // why the address travels with the event rather than being looked up
+    // after the row is already gone.
+    if (!address) return;
+    for (const ws of peerSockets) peerSend(ws, { t: 'sessionRemoved', address });
+  });
+  hub.on('data', (sessionId: string, chunk: string) => {
+    if (peerSockets.size === 0) return;
+    const s = hub.sessions.get(sessionId);
+    if (!s) return;
+    for (const ws of peerSockets) {
+      if (peerAttached.get(ws)?.has(s.address)) {
+        peerSend(ws, { t: 'output', address: s.address, data: chunk });
+      }
+    }
+  });
+
+  app.get('/peer', { websocket: true }, (socket) => {
+    let authed = false;
+
+    socket.on('message', async (raw: Buffer) => {
+      let parsed;
+      try {
+        parsed = PeerRequest.safeParse(JSON.parse(raw.toString('utf8')));
+      } catch {
+        return;
+      }
+      if (!parsed.success) return;
+      const req = parsed.data;
+
+      if (!authed) {
+        if (req.t !== 'hello' || req.token !== clientToken) {
+          socket.close();
+          return;
+        }
+        authed = true;
+        peerSockets.add(socket);
+        peerAttached.set(socket, new Set());
+        peerSend(socket, {
+          t: 'welcome',
+          hubVersion: HUB_VERSION,
+          schemaVersion: PEER_SCHEMA_VERSION,
+        });
+        return;
+      }
+      if (req.t === 'hello') return;
+
+      const ok = (result: unknown) => peerSend(socket, { t: 'ok', id: req.id, result });
+      const err = (message: string) => peerSend(socket, { t: 'err', id: req.id, message });
+
+      try {
+        switch (req.t) {
+          case 'listSessions':
+            return ok(hub.sessions.list());
+
+          case 'deliver': {
+            // The originating hub already authenticated the sender, so its
+            // reported `from` is trusted. Attribution is still applied here,
+            // so the receiving agent sees the true origin address.
+            const r = hub.router.send(req.from, req.to, req.body);
+            return r.delivered ? ok({ delivered: true }) : err(r.error ?? 'delivery failed');
+          }
+
+          case 'readScreen': {
+            const target = hub.sessions.getByAddress(req.address);
+            if (!target) return err(`no agent at address "${req.address}"`);
+            const pty = hub.sessions.pty(target.id);
+            return ok({
+              address: req.address,
+              running: pty?.running ?? false,
+              screen: pty ? pty.tailLines(req.lines ?? 40) : '(not running)',
+            });
+          }
+
+          case 'startSession': {
+            let ws = hub.store.getWorkspaceByName(req.workspaceName);
+            if (!ws) ws = hub.createWorkspace(req.workspaceName, req.rootPath, null);
+            const s = await hub.startSession({
+              workspaceId: ws.id,
+              profile: req.profile,
+              name: req.name,
+            });
+            return ok(s);
+          }
+
+          case 'stopSession': {
+            const t = hub.sessions.getByAddress(req.address);
+            if (!t) return err(`no agent at address "${req.address}"`);
+            hub.sessions.stop(t.id);
+            return ok({ stopped: req.address });
+          }
+
+          case 'resumeSession': {
+            const t = hub.sessions.getByAddress(req.address);
+            if (!t) return err(`no agent at address "${req.address}"`);
+            return ok(await hub.sessions.resume(t.id));
+          }
+
+          case 'attach': {
+            peerAttached.get(socket)?.add(req.address);
+            const t = hub.sessions.getByAddress(req.address);
+            if (t) {
+              const snap = hub.sessions.snapshotForAttach(t.id);
+              if (snap) peerSend(socket, { t: 'output', address: req.address, data: snap.serialized });
+            }
+            return ok({ attached: req.address });
+          }
+
+          case 'detach':
+            peerAttached.get(socket)?.delete(req.address);
+            return ok({ detached: req.address });
+
+          case 'input': {
+            const t = hub.sessions.getByAddress(req.address);
+            if (!t) return err(`no agent at address "${req.address}"`);
+            hub.sessions.write(t.id, req.data);
+            return ok({ ok: true });
+          }
+
+          case 'resize': {
+            const t = hub.sessions.getByAddress(req.address);
+            if (!t) return err(`no agent at address "${req.address}"`);
+            hub.sessions.resize(t.id, req.cols, req.rows);
+            return ok({ ok: true });
+          }
+        }
+      } catch (e) {
+        err((e as Error).message);
+      }
+    });
+
+    socket.on('close', () => {
+      peerSockets.delete(socket);
+      peerAttached.delete(socket);
+    });
+  });
+
   /* ---------------------------------------------------------- WebSocket */
 
   const clients = new Set<import('ws').WebSocket>();
@@ -114,7 +274,7 @@ export async function serve(opts: ServeOptions): Promise<ServeResult> {
     hubVersion: HUB_VERSION,
     hosts: hub.store.listHosts(),
     workspaces: hub.store.listWorkspaces(),
-    sessions: hub.sessions.list(),
+    sessions: hub.allSessions(),
     messages: hub.messages(),
     viewport: hub.store.getViewport(),
     profiles: hub.profiles.list().map((p) => ({
@@ -130,6 +290,13 @@ export async function serve(opts: ServeOptions): Promise<ServeResult> {
   hub.on('workspace', (w) => broadcast({ t: 'workspaceUpserted', workspace: w }));
   hub.on('workspaceRemoved', (id) => broadcast({ t: 'workspaceRemoved', workspaceId: id }));
   hub.on('message', (m) => broadcast({ t: 'messageSent', message: m }));
+  hub.on('host', (h) => broadcast({ t: 'hostUpserted', host: h }));
+  hub.on('hostRemoved', (id) => broadcast({ t: 'hostRemoved', hostId: id }));
+  // A peer connecting, dropping, or resyncing changes many sessions at
+  // once, so push the whole list rather than diffing it here.
+  hub.on('peersChanged', () => {
+    for (const s of hub.peers.sessions()) broadcast({ t: 'sessionUpserted', session: s });
+  });
 
   // Terminal output goes only to clients that have attached to that window,
   // so a canvas showing 20 terminals zoomed out is not paying for 20 streams.
@@ -156,7 +323,15 @@ export async function serve(opts: ServeOptions): Promise<ServeResult> {
           if (!authed) return;
           const f = decodeBinaryFrame(new Uint8Array(raw));
           if (f.kind === BinaryFrameKind.PtyInput) {
-            hub.sessions.write(f.sessionId, Buffer.from(f.payload).toString('utf8'));
+            const data = Buffer.from(f.payload).toString('utf8');
+            const remote = hub.peers.find(f.sessionId);
+            if (remote) {
+              void remote.peer.request({
+                t: 'input', id: randomUUID(), address: f.sessionId, data,
+              });
+            } else {
+              hub.sessions.write(f.sessionId, data);
+            }
           }
           return;
         }
@@ -200,8 +375,15 @@ export async function serve(opts: ServeOptions): Promise<ServeResult> {
         case 'hello':
           return;
 
+        // Remote sessions are keyed by their address, so a single lookup
+        // decides whether a request is served locally or forwarded to a peer.
         case 'attach': {
           attached.get(socket)?.add(msg.sessionId);
+          const remote = hub.peers.find(msg.sessionId);
+          if (remote) {
+            await remote.peer.attach(msg.sessionId);
+            return;
+          }
           const snap = hub.sessions.snapshotForAttach(msg.sessionId);
           if (snap) {
             send(socket, {
@@ -215,13 +397,28 @@ export async function serve(opts: ServeOptions): Promise<ServeResult> {
           return;
         }
 
-        case 'detach':
+        case 'detach': {
           attached.get(socket)?.delete(msg.sessionId);
+          const remote = hub.peers.find(msg.sessionId);
+          if (remote) await remote.peer.detach(msg.sessionId);
           return;
+        }
 
-        case 'resize':
+        case 'resize': {
+          const remote = hub.peers.find(msg.sessionId);
+          if (remote) {
+            await remote.peer.request({
+              t: 'resize',
+              id: randomUUID(),
+              address: msg.sessionId,
+              cols: msg.cols,
+              rows: msg.rows,
+            });
+            return;
+          }
           hub.sessions.resize(msg.sessionId, msg.cols, msg.rows);
           return;
+        }
 
         case 'createWorkspace':
           hub.createWorkspace(msg.name, msg.rootPath, msg.hostId ?? null);
@@ -240,28 +437,61 @@ export async function serve(opts: ServeOptions): Promise<ServeResult> {
           });
           return;
 
-        case 'stopSession':
+        case 'stopSession': {
+          const remote = hub.peers.find(msg.sessionId);
+          if (remote) {
+            await remote.peer.request({ t: 'stopSession', id: randomUUID(), address: msg.sessionId });
+            return;
+          }
           hub.sessions.stop(msg.sessionId);
           return;
+        }
 
         case 'removeSession':
           hub.sessions.remove(msg.sessionId);
           return;
 
-        case 'resumeSession':
+        case 'resumeSession': {
+          const remote = hub.peers.find(msg.sessionId);
+          if (remote) {
+            await remote.peer.request({ t: 'resumeSession', id: randomUUID(), address: msg.sessionId });
+            return;
+          }
           await hub.sessions.resume(msg.sessionId);
           return;
+        }
 
         case 'resumeWorkspace':
           await hub.resumeWorkspace(msg.workspaceId);
           return;
 
         case 'moveWindow':
-          hub.moveWindow(msg.sessionId, msg.rect);
+          // Layout is always local, even for a peer's session.
+          if (!hub.peers.saveLayout(msg.sessionId, msg.rect)) {
+            hub.moveWindow(msg.sessionId, msg.rect);
+          }
           return;
 
         case 'setViewport':
           hub.setViewport(msg.viewport);
+          return;
+
+        case 'addHost': {
+          const host = hub.addHost(msg);
+          // Connect immediately: adding a host the user then has to connect
+          // by hand is a pointless second step.
+          void hub.connectHost(host.id).catch((e) =>
+            send(socket, { t: 'error', message: `connect ${host.label}: ${e.message}` }),
+          );
+          return;
+        }
+
+        case 'removeHost':
+          hub.removeHost(msg.hostId);
+          return;
+
+        case 'connectHost':
+          await hub.connectHost(msg.hostId);
           return;
 
         default:
@@ -308,6 +538,34 @@ export async function serve(opts: ServeOptions): Promise<ServeResult> {
       });
     }
   }
+
+  /* ----------------------------------------------------------- shutdown */
+
+  /**
+   * Fastify's close() waits for open connections to drain, and a WebSocket
+   * never drains on its own — an idle browser tab or a connected peer would
+   * hang shutdown indefinitely. Terminate them explicitly instead.
+   */
+  app.addHook('onClose', async () => {
+    for (const ws of clients) {
+      try {
+        ws.terminate();
+      } catch {
+        // Already gone.
+      }
+    }
+    for (const ws of peerSockets) {
+      try {
+        ws.terminate();
+      } catch {
+        // Already gone.
+      }
+    }
+    clients.clear();
+    peerSockets.clear();
+    attached.clear();
+    peerAttached.clear();
+  });
 
   /* --------------------------------------------------------------- bind */
 

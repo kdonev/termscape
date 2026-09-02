@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { existsSync } from 'node:fs';
 import { basename, resolve } from 'node:path';
@@ -6,6 +6,7 @@ import {
   encodeInjection,
   slugify,
   type Message,
+  type Host,
   type Session,
   type Viewport,
   type WindowRect,
@@ -18,6 +19,8 @@ import { TokenRegistry } from './agents/tokens.js';
 import { MessageRouter } from './agents/router.js';
 import { SessionManager } from './session/manager.js';
 import type { AgentApi } from './mcp/server.js';
+import { PeerRegistry } from './remote/registry.js';
+import { deploy, type DeployResult } from './remote/deployer.js';
 import { paths } from './paths.js';
 
 export const HUB_VERSION = '0.1.0';
@@ -51,6 +54,9 @@ export class Hub extends EventEmitter implements AgentApi {
   readonly tokens: TokenRegistry;
   readonly sessions: SessionManager;
   readonly router: MessageRouter;
+  readonly peers: PeerRegistry;
+  /** Live SSH tunnels, keyed by host id. Not persisted: they die with the hub. */
+  private readonly tunnels = new Map<string, DeployResult>();
   private readonly spawnCap: number;
 
   constructor(opts: HubOptions = {}) {
@@ -74,11 +80,35 @@ export class Hub extends EventEmitter implements AgentApi {
     );
 
     this.sessions.on('session', (s: Session) => this.emit('session', s));
-    this.sessions.on('removed', (id: string) => this.emit('removed', id));
+    this.sessions.on('removed', (id: string, address: string | null) =>
+      this.emit('removed', id, address),
+    );
     this.sessions.on('data', (id: string, chunk: string) => this.emit('data', id, chunk));
+
+    this.peers = new PeerRegistry(this.store, HUB_VERSION);
+    this.peers.on('host', (h) => this.emit('host', h));
+    this.peers.on('peerSession', (s: Session) => this.emit('session', s));
+    this.peers.on('peerSessionRemoved', (addr: string) => this.emit('removed', addr, addr));
+    this.peers.on('peerSessionsChanged', () => this.emit('peersChanged'));
+    this.peers.on('output', (address: string, data: string) => {
+      // Remote output is addressed by name; the browser keys on session id,
+      // and for remote sessions the address *is* the id it was given.
+      this.emit('data', address, data);
+    });
 
     // Anything the DB still calls running died with the previous hub.
     this.sessions.reconcileOnBoot();
+  }
+
+  /** Local sessions plus every session reported by a connected peer. */
+  allSessions(): Session[] {
+    return [...this.sessions.list(), ...this.peers.sessions()];
+  }
+
+  /** Resolve an address to a local session, a remote one, or nothing. */
+  private locate(address: string): 'local' | 'remote' | null {
+    if (this.sessions.getByAddress(address)) return 'local';
+    return this.peers.find(address) ? 'remote' : null;
   }
 
   setOrigin(origin: string): void {
@@ -118,6 +148,73 @@ export class Hub extends EventEmitter implements AgentApi {
     }
     this.store.removeWorkspace(id);
     this.emit('workspaceRemoved', id);
+  }
+
+  /* --------------------------------------------------------------- hosts */
+
+  addHost(input: {
+    label: string;
+    sshHost: string;
+    sshUser: string;
+    sshPort: number;
+    privateKeyPath?: string;
+  }): Host {
+    const host: Host = {
+      id: randomUUID(),
+      label: input.label || `${input.sshUser}@${input.sshHost}`,
+      sshHost: input.sshHost,
+      sshUser: input.sshUser,
+      sshPort: input.sshPort,
+      hubVersion: null,
+      state: 'disconnected',
+      lastSeenAt: null,
+      error: null,
+    };
+    this.store.upsertHost({ ...host, keyRef: input.privateKeyPath ?? null });
+    this.emit('host', host);
+    return host;
+  }
+
+  removeHost(hostId: string): void {
+    this.peers.remove(hostId);
+    void this.tunnels.get(hostId)?.dispose().catch(() => {});
+    this.tunnels.delete(hostId);
+    this.store.removeHost(hostId);
+    this.emit('hostRemoved', hostId);
+  }
+
+  /**
+   * Deploy the hub to a host if needed, tunnel to it, and join it to the
+   * directory. The peer token is minted per connection and never written to
+   * the local database.
+   */
+  async connectHost(hostId: string): Promise<void> {
+    const host = this.store.listHosts().find((h) => h.id === hostId);
+    if (!host) throw new Error(`unknown host ${hostId}`);
+
+    const token = randomBytes(24).toString('base64url');
+    this.store.upsertHost({ ...host, state: 'connecting', error: null });
+    this.emit('host', { ...host, state: 'connecting', error: null });
+
+    try {
+      const result = await deploy({
+        sshHost: host.sshHost,
+        sshUser: host.sshUser,
+        sshPort: host.sshPort,
+        privateKeyPath: this.store.hostKeyRef(hostId) ?? undefined,
+        token,
+        expectedVersion: HUB_VERSION,
+        packagePath: process.env.AICANVAS_HUB_TARBALL,
+        log: (line) => this.emit('hostLog', hostId, line),
+      });
+      this.tunnels.set(hostId, result);
+      this.peers.add(host, result.localUrl, token);
+    } catch (err) {
+      const message = (err as Error).message;
+      this.store.upsertHost({ ...host, state: 'error', error: message });
+      this.emit('host', { ...host, state: 'error', error: message });
+      throw err;
+    }
   }
 
   /* ------------------------------------------------------------ sessions */
@@ -186,31 +283,83 @@ export class Hub extends EventEmitter implements AgentApi {
     };
   }
 
+  /**
+   * One flat directory across every hub. An agent should not have to know or
+   * care whether a peer is on this machine or a remote one; the address is
+   * the whole interface.
+   */
   async listAgents(sessionId: string, workspace?: string) {
     const me = this.requireSession(sessionId);
     const wsById = new Map(this.store.listWorkspaces().map((w) => [w.id, w]));
-    return this.sessions
-      .list()
-      .filter((s) => !workspace || wsById.get(s.workspaceId)?.name === workspace)
-      .map((s) => ({
+
+    const local = this.sessions.list().map((s) => ({
+      address: s.address,
+      workspace: wsById.get(s.workspaceId)?.name ?? null,
+      profile: s.profile,
+      state: s.state,
+      status: s.status,
+      statusText: s.statusText,
+      host: 'local' as string,
+      isYou: s.id === me.id,
+    }));
+
+    const hostLabels = new Map(this.store.listHosts().map((h) => [h.id, h.label]));
+    const remote = this.peers.sessions().map((s) => {
+      // A remote session's workspace row lives on its own hub, not here, so
+      // the workspace name comes from the address and the host from the
+      // registry rather than from a local join that would always miss.
+      const hostId = this.peers.hostIdFor(s.address);
+      return {
         address: s.address,
-        workspace: wsById.get(s.workspaceId)?.name ?? null,
+        workspace: s.address.split('/')[0] ?? null,
         profile: s.profile,
         state: s.state,
         status: s.status,
         statusText: s.statusText,
-        isYou: s.id === me.id,
-      }));
+        host: (hostId ? hostLabels.get(hostId) : undefined) ?? 'remote',
+        isYou: false,
+      };
+    });
+
+    return [...local, ...remote].filter((a) => !workspace || a.workspace === workspace);
   }
 
   async sendMessage(sessionId: string, to: string, text: string) {
     const me = this.requireSession(sessionId);
-    if (this.sessions.getByAddress(to)?.id === me.id) {
-      throw new Error('cannot send a message to yourself');
+    if (me.address === to) throw new Error('cannot send a message to yourself');
+
+    // An unknown address goes down the local path deliberately: the router
+    // records the failed attempt with its reason, which is what keeps the
+    // promise that no message is ever dropped silently.
+    if (this.locate(to) !== 'remote') {
+      const r = this.router.send(me.address, to, text);
+      if (!r.delivered) throw new Error(r.error ?? 'delivery failed');
+      return { delivered: true, to, deliveredAt: r.deliveredAt };
     }
-    const r = this.router.send(me.address, to, text);
-    if (!r.delivered) throw new Error(r.error ?? 'delivery failed');
-    return { delivered: true, to, deliveredAt: r.deliveredAt };
+
+    // Cross-host: the peer performs the actual injection. We still record the
+    // attempt locally so the message log and the canvas edge are complete.
+    const id = randomUUID();
+    const sentAt = Date.now();
+    try {
+      await this.peers.deliver(me.address, to, text);
+      const m: Message = {
+        id, fromAddr: me.address, toAddr: to, body: text,
+        sentAt, deliveredAt: Date.now(), deliveryState: 'delivered', error: null,
+      };
+      this.store.insertMessage(m);
+      this.emit('message', m);
+      return { delivered: true, to, deliveredAt: m.deliveredAt };
+    } catch (err) {
+      const m: Message = {
+        id, fromAddr: me.address, toAddr: to, body: text,
+        sentAt, deliveredAt: null, deliveryState: 'failed',
+        error: (err as Error).message,
+      };
+      this.store.insertMessage(m);
+      this.emit('message', m);
+      throw err;
+    }
   }
 
   async spawnAgent(
@@ -289,6 +438,9 @@ export class Hub extends EventEmitter implements AgentApi {
 
   async readScreen(sessionId: string, address: string, lines?: number) {
     this.requireSession(sessionId);
+    if (this.locate(address) === 'remote') {
+      return this.peers.readScreen(address, lines);
+    }
     const target = this.sessions.getByAddress(address);
     if (!target) throw new Error(`no agent at address "${address}"`);
     const pty = this.sessions.pty(target.id);
@@ -327,6 +479,9 @@ export class Hub extends EventEmitter implements AgentApi {
   }
 
   shutdown(): void {
+    for (const t of this.tunnels.values()) void t.dispose().catch(() => {});
+    this.tunnels.clear();
+    this.peers.closeAll();
     this.sessions.shutdown();
     try {
       this.db.close();

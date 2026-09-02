@@ -104,6 +104,30 @@ export const MIGRATIONS: Migration[] = [
       CREATE INDEX idx_workspace_host    ON workspace(host_id);
     `,
   },
+  {
+    version: 2,
+    name: 'remote_windows',
+    up: `
+      -- Canvas layout for sessions that live on a peer hub.
+      --
+      -- Remote session state is deliberately NOT cached locally: the peer
+      -- owns its sessions and their snapshots. But the layout is the user's
+      -- view of their own canvas, so it belongs here, keyed by address rather
+      -- than by a session id this database does not have.
+      CREATE TABLE remote_window (
+        address    TEXT PRIMARY KEY,
+        host_id    TEXT NOT NULL REFERENCES host(id) ON DELETE CASCADE,
+        x          REAL NOT NULL,
+        y          REAL NOT NULL,
+        w          REAL NOT NULL,
+        h          REAL NOT NULL,
+        z          INTEGER NOT NULL DEFAULT 0,
+        collapsed  INTEGER NOT NULL DEFAULT 0
+      );
+
+      CREATE INDEX idx_remote_window_host ON remote_window(host_id);
+    `,
+  },
 ];
 
 export function runMigrations(db: Database): number {

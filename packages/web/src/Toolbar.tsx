@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { useStore } from './state/store.js';
+import { Hosts } from './Hosts.js';
 
 /** Workspace creation, agent launching, and the message log. */
 export function Toolbar() {
@@ -120,6 +121,8 @@ export function Toolbar() {
       </div>
 
       <span className="spacer" />
+
+      <Hosts />
 
       <button className="btn" onClick={() => setShowLog((v) => !v)}>
         messages ({messages.length})

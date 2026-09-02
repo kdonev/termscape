@@ -322,6 +322,37 @@ export class Store {
       .run(v);
   }
 
+  /* -------------------------------------------------- remote window layout */
+
+  /**
+   * Layout for peer-hosted sessions, keyed by address. Remote session state
+   * itself is never cached here; the peer owns it.
+   */
+  getRemoteWindows(): Map<string, WindowRect> {
+    const rows = this.db.prepare('SELECT * FROM remote_window').all() as any[];
+    return new Map(
+      rows.map((r) => [
+        r.address as string,
+        { x: r.x, y: r.y, w: r.w, h: r.h, z: r.z, collapsed: r.collapsed === 1 },
+      ]),
+    );
+  }
+
+  saveRemoteWindow(address: string, hostId: string, rect: WindowRect): void {
+    this.db
+      .prepare(
+        `INSERT INTO remote_window (address, host_id, x, y, w, h, z, collapsed)
+         VALUES (@address, @hostId, @x, @y, @w, @h, @z, @collapsed)
+         ON CONFLICT(address) DO UPDATE SET
+           host_id=@hostId, x=@x, y=@y, w=@w, h=@h, z=@z, collapsed=@collapsed`,
+      )
+      .run({ address, hostId, ...rect, collapsed: rect.collapsed ? 1 : 0 });
+  }
+
+  removeRemoteWindow(address: string): void {
+    this.db.prepare('DELETE FROM remote_window WHERE address = ?').run(address);
+  }
+
   /* ------------------------------------------------------------ snapshots */
 
   saveSnapshot(sessionId: string, serialized: string, cols: number, rows: number): void {

@@ -322,13 +322,16 @@ export class SessionManager extends EventEmitter {
   }
 
   remove(sessionId: string): void {
+    // Capture the address before the row goes: peers address sessions by
+    // name, and after the delete there is nothing left to look it up from.
+    const address = this.get(sessionId)?.address ?? null;
     this.live.get(sessionId)?.dispose();
     this.live.delete(sessionId);
     this.clearTimer(this.snapshotTimers, sessionId);
     this.clearTimer(this.layoutTimers, sessionId);
     this.tokens.revoke(sessionId);
     this.store.removeSession(sessionId);
-    this.emit('removed', sessionId);
+    this.emit('removed', sessionId, address);
   }
 
   /* ------------------------------------------------------------ snapshots */
