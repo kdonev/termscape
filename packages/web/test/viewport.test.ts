@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
+import type { Viewport } from '@aicanvas/protocol';
 import {
   alignViewport,
   alignZoom,
   clampZoom,
   fitTo,
+  focusRect,
   rectsIntersect,
   renderScaleFor,
   screenToWorld,
@@ -269,5 +271,78 @@ describe('fitTo', () => {
 
   it('returns a sane viewport for an empty canvas', () => {
     expect(fitTo([], 1000, 800)).toEqual({ panX: 0, panY: 0, zoom: 1 });
+  });
+});
+
+describe('focusRect', () => {
+  const VIEW = { w: 1600, h: 1000 };
+
+  /** The rect's on-screen box after applying the viewport. */
+  const screenBox = (r: { x: number; y: number; w: number; h: number }, v: Viewport) => {
+    const tl = worldToScreen({ x: r.x, y: r.y }, v);
+    const br = worldToScreen({ x: r.x + r.w, y: r.y + r.h }, v);
+    return { ...tl, w: br.x - tl.x, h: br.y - tl.y, cx: (tl.x + br.x) / 2, cy: (tl.y + br.y) / 2 };
+  };
+
+  it('centres the rect in the viewport', () => {
+    for (const r of [
+      { x: 0, y: 0, w: 720, h: 460 },
+      { x: -1840, y: 920, w: 720, h: 460 },
+    ]) {
+      const box = screenBox(r, focusRect(r, VIEW.w, VIEW.h));
+      expect(box.cx).toBeCloseTo(VIEW.w / 2);
+      expect(box.cy).toBeCloseTo(VIEW.h / 2);
+    }
+  });
+
+  it('covers the requested share of the constraining axis', () => {
+    // 720x460 in 1600x1000: height is the tighter fit, so it is the axis that
+    // lands on exactly 90% while the width comes in under it.
+    const r = { x: 40, y: -12, w: 720, h: 460 };
+    const box = screenBox(r, focusRect(r, VIEW.w, VIEW.h, 0.9));
+    expect(box.h).toBeCloseTo(VIEW.h * 0.9);
+    expect(box.w).toBeLessThanOrEqual(VIEW.w * 0.9 + 1e-9);
+  });
+
+  it('picks the constraining axis for wide and tall rects alike', () => {
+    const wide = { x: 0, y: 0, w: 4000, h: 200 };
+    const wideBox = screenBox(wide, focusRect(wide, VIEW.w, VIEW.h, 0.9));
+    expect(wideBox.w).toBeCloseTo(VIEW.w * 0.9);
+
+    const tall = { x: 0, y: 0, w: 200, h: 4000 };
+    const tallBox = screenBox(tall, focusRect(tall, VIEW.w, VIEW.h, 0.9));
+    expect(tallBox.h).toBeCloseTo(VIEW.h * 0.9);
+  });
+
+  it('never overflows the viewport', () => {
+    for (const r of [
+      { x: 0, y: 0, w: 720, h: 460 },
+      { x: 5000, y: -3000, w: 4000, h: 200 },
+      { x: 0, y: 0, w: 200, h: 4000 },
+    ]) {
+      const box = screenBox(r, focusRect(r, VIEW.w, VIEW.h));
+      expect(box.x).toBeGreaterThanOrEqual(-0.01);
+      expect(box.y).toBeGreaterThanOrEqual(-0.01);
+      expect(box.x + box.w).toBeLessThanOrEqual(VIEW.w + 0.01);
+      expect(box.y + box.h).toBeLessThanOrEqual(VIEW.h + 0.01);
+    }
+  });
+
+  it('clamps a tiny rect to MAX_ZOOM and still centres it', () => {
+    // Filling 90% would need ~5x here. Magnifying that far is worse than
+    // leaving the window smaller than asked, so the zoom clamp wins.
+    const r = { x: 300, y: 300, w: 320, h: 200 };
+    const v = focusRect(r, VIEW.w, VIEW.h);
+    expect(v.zoom).toBe(MAX_ZOOM);
+    const box = screenBox(r, v);
+    expect(box.cx).toBeCloseTo(VIEW.w / 2);
+    expect(box.cy).toBeCloseTo(VIEW.h / 2);
+  });
+
+  it('survives a degenerate rect', () => {
+    const v = focusRect({ x: 10, y: 10, w: 0, h: 0 }, VIEW.w, VIEW.h);
+    expect(Number.isFinite(v.zoom)).toBe(true);
+    expect(Number.isFinite(v.panX)).toBe(true);
+    expect(Number.isFinite(v.panY)).toBe(true);
   });
 });

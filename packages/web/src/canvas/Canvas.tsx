@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
+import type { Viewport } from '@aicanvas/protocol';
 import { useStore } from '../state/store.js';
 import { TerminalWindow } from '../window/TerminalWindow.js';
 import { MessageEdges } from './MessageEdges.js';
@@ -8,6 +9,7 @@ import {
   alignViewport,
   clampZoom,
   fitTo,
+  focusRect,
   rectsIntersect,
   renderScaleFor,
   visibleWorldRect,
@@ -216,6 +218,69 @@ export function Canvas() {
     [setViewport],
   );
 
+  /* -------------------------------------------------------- maximize */
+
+  /**
+   * Which window the canvas is zoomed to, the viewport to put back when it is
+   * dismissed, and the viewport we left behind.
+   *
+   * `applied` is how a still-maximized canvas is told apart from one the user
+   * has since panned away from: after a manual gesture `restore` is stale, and
+   * the button should maximize again rather than jump somewhere unexpected.
+   */
+  const [maximized, setMaximized] = useState<
+    null | { sessionId: string; restore: Viewport; applied: Viewport }
+  >(null);
+
+  // Every input to toggleMaximize is read through a ref so the callback keeps
+  // one identity for the life of the canvas. It is handed to every memoised
+  // TerminalWindow, and a new function per viewport change would re-render all
+  // of them on every wheel tick.
+  const viewportRef = useRef(viewport);
+  viewportRef.current = viewport;
+  const sessionsRef = useRef(sessions);
+  sessionsRef.current = sessions;
+  const maximizedRef = useRef(maximized);
+  maximizedRef.current = maximized;
+  // The tracked ratio rather than a fresh dpr() read: the alignment effect
+  // aligns against this one, and a disagreement would leave `applied` stale.
+  const dprRef = useRef(devicePixelRatio);
+  dprRef.current = devicePixelRatio;
+
+  const toggleMaximize = useCallback(
+    (sessionId: string) => {
+      const target = sessionsRef.current.find((s) => s.id === sessionId);
+      if (!target) return;
+      // A window worth zooming to is a window worth typing into.
+      select(sessionId);
+
+      const { w, h } = sizeRef.current;
+      const current = viewportRef.current;
+      const state = maximizedRef.current;
+      const intact = state !== null && sameViewport(current, state.applied);
+
+      if (intact && state.sessionId === sessionId) {
+        setMaximized(null);
+        applyViewport(state.restore);
+        return;
+      }
+
+      // Aligned up front so the settle effect finds nothing to nudge, which is
+      // what keeps `applied` equal to the live viewport for the check above.
+      const next = alignViewport(focusRect(target.window, w, h), w, h, dprRef.current);
+      setMaximized({
+        sessionId,
+        // Going straight from one maximized window to another keeps the
+        // original view, so dismissing still returns to the overview rather
+        // than to the previous window's close-up.
+        restore: intact ? state.restore : current,
+        applied: next,
+      });
+      applyViewport(next);
+    },
+    [applyViewport, select],
+  );
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       // Never steal keys from a focused terminal.
@@ -236,11 +301,23 @@ export function Canvas() {
           ),
         );
       }
+      if (e.key === '2' && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        if (selectedId) toggleMaximize(selectedId);
+      }
       if (e.key === 'Escape') select(null);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [sessions, size, applyViewport, select]);
+  }, [sessions, size, applyViewport, select, selectedId, toggleMaximize]);
+
+  /**
+   * The window whose button should offer to go back, rather than the one we
+   * last zoomed to. They differ once the user pans or zooms by hand: at that
+   * point the toggle maximizes again, so the icon has to say so.
+   */
+  const maximizedId =
+    maximized && sameViewport(viewport, maximized.applied) ? maximized.sessionId : null;
 
   /* ------------------------------------------------ LOD + culling */
 
@@ -339,6 +416,8 @@ export function Canvas() {
               renderScale={renderScale}
               live={live}
               selected={selectedId === session.id}
+              maximized={maximizedId === session.id}
+              onMaximize={toggleMaximize}
             />
           ) : null,
         )}

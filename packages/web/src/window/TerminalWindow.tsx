@@ -14,6 +14,9 @@ interface Props {
   renderScale: number;
   live: boolean;
   selected: boolean;
+  /** True while the canvas is zoomed to this window. */
+  maximized: boolean;
+  onMaximize: (sessionId: string) => void;
 }
 
 const MIN_W = 320;
@@ -40,6 +43,8 @@ export const TerminalWindow = memo(function TerminalWindow({
   renderScale,
   live,
   selected,
+  maximized,
+  onMaximize,
 }: Props) {
   const { moveWindow, select, client } = useStore(useShallow((s) => ({
     moveWindow: s.moveWindow,
@@ -118,6 +123,22 @@ export const TerminalWindow = memo(function TerminalWindow({
           {session.statusText ?? statusLabel(session)}
         </span>
         <span className="spacer" />
+        {/*
+          Offered for stopped windows too: zooming in to read an agent's last
+          output is exactly as useful as zooming in to type at a live one.
+        */}
+        <button
+          className="btn"
+          title={
+            maximized
+              ? 'Back to the previous view (Ctrl+2)'
+              : 'Zoom the canvas to this terminal (Ctrl+2)'
+          }
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={() => onMaximize(session.id)}
+        >
+          {maximized ? '⤡' : '⤢'}
+        </button>
         {stopped && (
           // Both paths call resumeSession. For a resumable profile the hub
           // swaps in --resume and the conversation continues; for one without

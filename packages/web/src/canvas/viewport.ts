@@ -172,6 +172,15 @@ export function rectsIntersect(a: Rect, b: Rect): boolean {
   return !(a.x + a.w < b.x || b.x + b.w < a.x || a.y + a.h < b.y || b.y + b.h < a.y);
 }
 
+/** The pan that centres a world rect in the viewport at a given zoom. */
+function centreOn(r: Rect, zoom: number, viewportW: number, viewportH: number): Viewport {
+  return {
+    zoom,
+    panX: (viewportW - r.w * zoom) / 2 - r.x * zoom,
+    panY: (viewportH - r.h * zoom) / 2 - r.y * zoom,
+  };
+}
+
 /** Fit a set of world rects into the viewport with margin. */
 export function fitTo(
   rects: Rect[],
@@ -184,14 +193,41 @@ export function fitTo(
   const minY = Math.min(...rects.map((r) => r.y));
   const maxX = Math.max(...rects.map((r) => r.x + r.w));
   const maxY = Math.max(...rects.map((r) => r.y + r.h));
-  const w = Math.max(1, maxX - minX);
-  const h = Math.max(1, maxY - minY);
-  const zoom = clampZoom(
-    Math.min((viewportW - margin * 2) / w, (viewportH - margin * 2) / h),
-  );
-  return {
-    zoom,
-    panX: (viewportW - w * zoom) / 2 - minX * zoom,
-    panY: (viewportH - h * zoom) / 2 - minY * zoom,
+  const bounds = {
+    x: minX,
+    y: minY,
+    w: Math.max(1, maxX - minX),
+    h: Math.max(1, maxY - minY),
   };
+  const zoom = clampZoom(
+    Math.min((viewportW - margin * 2) / bounds.w, (viewportH - margin * 2) / bounds.h),
+  );
+  return centreOn(bounds, zoom, viewportW, viewportH);
+}
+
+/**
+ * The share of the viewport a maximized window is asked to cover. Not 1: a
+ * window flush against the edges reads as broken rather than focused, and the
+ * gap is what tells you the canvas continues past it.
+ */
+export const DEFAULT_FILL = 0.9;
+
+/**
+ * Zoom and pan so one world rect covers `fill` of the viewport, centred.
+ *
+ * Unlike fitTo this is a fraction rather than a fixed margin, so the result
+ * looks the same on a laptop and on a large display. The zoom is clamped like
+ * any other, so a small window on a big screen lands centred at MAX_ZOOM
+ * covering less than `fill` rather than magnifying without limit.
+ */
+export function focusRect(
+  rect: Rect,
+  viewportW: number,
+  viewportH: number,
+  fill = DEFAULT_FILL,
+): Viewport {
+  const w = Math.max(1, rect.w);
+  const h = Math.max(1, rect.h);
+  const zoom = clampZoom(Math.min((viewportW * fill) / w, (viewportH * fill) / h));
+  return centreOn({ ...rect, w, h }, zoom, viewportW, viewportH);
 }
