@@ -1,20 +1,30 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
-import type { Viewport } from '@aicanvas/protocol';
+import type { Session, Viewport } from '@aicanvas/protocol';
 import { useStore } from '../state/store.js';
 import { TerminalWindow } from '../window/TerminalWindow.js';
 import { MessageEdges } from './MessageEdges.js';
 import {
   LIVE_ZOOM_THRESHOLD,
+  PINCH_GAP_MS,
   alignViewport,
+  boundsOf,
   clampZoom,
   fitTo,
   focusRect,
+  lerpViewport,
+  pinchIntent,
+  rectContainsPoint,
   rectsIntersect,
   renderScaleFor,
+  screenToWorld,
+  stepOutTo,
   visibleWorldRect,
+  wheelZoomFactor,
+  workspaceBounds,
   zoomAt,
 } from './viewport.js';
+import type { Point, Rect } from './viewport.js';
 
 /**
  * How long the viewport must be still before we call a gesture finished.
@@ -24,12 +34,37 @@ import {
  */
 const SETTLE_MS = 140;
 
+/**
+ * How long a commanded viewport move takes. Long enough to read as movement —
+ * a hard cut straight out of a fluid pinch reads as a glitch — and short
+ * enough that it still feels like a shortcut rather than a transition.
+ */
+const GLIDE_MS = 180;
+
+const easeOut = (t: number) => 1 - (1 - t) ** 3;
+
 function dpr(): number {
   return typeof window === 'undefined' ? 1 : window.devicePixelRatio || 1;
 }
 
 function sameViewport(a: { panX: number; panY: number; zoom: number }, b: typeof a): boolean {
   return a.panX === b.panX && a.panY === b.panY && a.zoom === b.zoom;
+}
+
+/** The window whose centre is closest to a world point. */
+function nearestSession(sessions: Session[], p: Point): Session | undefined {
+  let best: Session | undefined;
+  let bestDistance = Infinity;
+  for (const s of sessions) {
+    const dx = s.window.x + s.window.w / 2 - p.x;
+    const dy = s.window.y + s.window.h / 2 - p.y;
+    const d = dx * dx + dy * dy;
+    if (d < bestDistance) {
+      bestDistance = d;
+      best = s;
+    }
+  }
+  return best;
 }
 
 /**
@@ -73,12 +108,25 @@ export function Canvas() {
     return () => ro.disconnect();
   }, []);
 
-  /* ------------------------------------------------ gesture settling */
+  /* --------------------------------------------------------------- refs */
 
-  // Read through a ref: the settle timer fires long after the render that armed
-  // it, by which point a captured size would be stale.
+  // Everything a gesture or a timer needs to read long after the render that
+  // armed it, by which point a captured value would be stale. Mirroring them is
+  // also what lets the callbacks below keep one identity for the life of the
+  // canvas: `onMaximize` is handed to every memoised TerminalWindow, and a new
+  // function per viewport change would re-render all of them on every tick.
   const sizeRef = useRef(size);
   sizeRef.current = size;
+  const viewportRef = useRef(viewport);
+  viewportRef.current = viewport;
+  const sessionsRef = useRef(sessions);
+  sessionsRef.current = sessions;
+  // The tracked ratio rather than a fresh dpr() read: the alignment effect
+  // aligns against this one, and a disagreement would leave `applied` stale.
+  const dprRef = useRef(devicePixelRatio);
+  dprRef.current = devicePixelRatio;
+
+  /* ------------------------------------------------ gesture settling */
 
   /**
    * Align whenever the canvas is at rest. Driving this off the viewport rather
@@ -97,11 +145,24 @@ export function Canvas() {
     setInteracting(false);
   }, []);
 
+  /** An animation in flight, abandoned wherever it is if a gesture arrives. */
+  const glideRef = useRef<{ raf: number; startedAt: number } | null>(null);
+
+  const cancelGlide = useCallback(() => {
+    const g = glideRef.current;
+    if (!g) return;
+    glideRef.current = null;
+    cancelAnimationFrame(g.raf);
+  }, []);
+
   const markInteracting = useCallback(() => {
+    // The hand on the trackpad always wins: an animation still running gives
+    // way rather than fighting the gesture for the viewport.
+    cancelGlide();
     setInteracting(true);
     if (settleRef.current !== null) window.clearTimeout(settleRef.current);
     settleRef.current = window.setTimeout(settle, SETTLE_MS);
-  }, [settle]);
+  }, [cancelGlide, settle]);
 
   useEffect(
     () => () => {
@@ -134,35 +195,6 @@ export function Canvas() {
     const next = renderScaleFor(viewport.zoom, devicePixelRatio);
     setRenderScale((cur) => (cur === next ? cur : next));
   }, [viewport.zoom, devicePixelRatio, interacting]);
-
-  /* ------------------------------------------------------------ wheel */
-
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-
-    // Registered natively and non-passive: React's synthetic wheel handler is
-    // passive, so preventDefault there would not stop the browser's own zoom.
-    const onWheel = (e: WheelEvent) => {
-      e.preventDefault();
-      markInteracting();
-      const rect = el.getBoundingClientRect();
-      const point = { x: e.clientX - rect.left, y: e.clientY - rect.top };
-
-      if (e.ctrlKey || e.metaKey) {
-        setViewport(zoomAt(viewport, point, viewport.zoom * (1 - e.deltaY * 0.01)));
-      } else {
-        setViewport({
-          ...viewport,
-          panX: viewport.panX - e.deltaX,
-          panY: viewport.panY - e.deltaY,
-        });
-      }
-    };
-
-    el.addEventListener('wheel', onWheel, { passive: false });
-    return () => el.removeEventListener('wheel', onWheel);
-  }, [viewport, setViewport, markInteracting]);
 
   /* -------------------------------------------------------------- pan */
 
@@ -199,7 +231,7 @@ export function Canvas() {
     markInteracting();
   }, [markInteracting]);
 
-  /* ----------------------------------------------------- keyboard nav */
+  /* -------------------------------------------------- viewport commands */
 
   /**
    * Buttons and shortcuts land on a final viewport in one step, so they cancel
@@ -218,6 +250,46 @@ export function Canvas() {
     [setViewport],
   );
 
+  /**
+   * Animate to a settled viewport.
+   *
+   * `interacting` stays true for the duration, which freezes the terminals'
+   * render scale and keeps the alignment effect from nudging the viewport out
+   * from under the animation — the same cover a wheel gesture already gets.
+   * Frames go through the ordinary setViewport, so they reach the hub the way
+   * wheel ticks do: a dozen per glide, against the dozens a pinch already sends.
+   */
+  const glideTo = useCallback(
+    (to: Viewport) => {
+      cancelGlide();
+      if (settleRef.current !== null) {
+        window.clearTimeout(settleRef.current);
+        settleRef.current = null;
+      }
+      const from = viewportRef.current;
+      setInteracting(true);
+
+      const step = (now: number) => {
+        const g = glideRef.current;
+        if (!g) return;
+        const t = (now - g.startedAt) / GLIDE_MS;
+        if (t >= 1) {
+          glideRef.current = null;
+          // Ends on the exact target, so a caller that pre-aligned it can still
+          // compare the live viewport against what it asked for.
+          applyViewport(to);
+          return;
+        }
+        const { w, h } = sizeRef.current;
+        setViewport(lerpViewport(from, to, easeOut(t), w, h));
+        g.raf = requestAnimationFrame(step);
+      };
+
+      glideRef.current = { raf: requestAnimationFrame(step), startedAt: performance.now() };
+    },
+    [applyViewport, cancelGlide, setViewport],
+  );
+
   /* -------------------------------------------------------- maximize */
 
   /**
@@ -232,23 +304,20 @@ export function Canvas() {
     null | { sessionId: string; restore: Viewport; applied: Viewport }
   >(null);
 
-  // Every input to toggleMaximize is read through a ref so the callback keeps
-  // one identity for the life of the canvas. It is handed to every memoised
-  // TerminalWindow, and a new function per viewport change would re-render all
-  // of them on every wheel tick.
-  const viewportRef = useRef(viewport);
-  viewportRef.current = viewport;
-  const sessionsRef = useRef(sessions);
-  sessionsRef.current = sessions;
   const maximizedRef = useRef(maximized);
   maximizedRef.current = maximized;
-  // The tracked ratio rather than a fresh dpr() read: the alignment effect
-  // aligns against this one, and a disagreement would leave `applied` stale.
-  const dprRef = useRef(devicePixelRatio);
-  dprRef.current = devicePixelRatio;
 
-  const toggleMaximize = useCallback(
-    (sessionId: string) => {
+  /**
+   * Zoom to one window. Always focuses, never dismisses — a quick pinch in on
+   * the window you are already on must not fly you back out, which is what
+   * makes this separate from the toggle below.
+   *
+   * `restore` overrides where a dismissal returns to. The pinch passes the
+   * viewport from before its own gesture, so ⤡ goes back to where you were
+   * when you started pinching rather than to the half-zoomed frame it ended on.
+   */
+  const focusSession = useCallback(
+    (sessionId: string, restore?: Viewport) => {
       const target = sessionsRef.current.find((s) => s.id === sessionId);
       if (!target) return;
       // A window worth zooming to is a window worth typing into.
@@ -257,29 +326,204 @@ export function Canvas() {
       const { w, h } = sizeRef.current;
       const current = viewportRef.current;
       const state = maximizedRef.current;
-      const intact = state !== null && sameViewport(current, state.applied);
-
-      if (intact && state.sessionId === sessionId) {
-        setMaximized(null);
-        applyViewport(state.restore);
-        return;
-      }
+      // Going straight from one maximized window to another keeps the original
+      // view, so dismissing still returns to the overview rather than to the
+      // previous window's close-up.
+      const carried =
+        state !== null && sameViewport(current, state.applied) ? state.restore : current;
 
       // Aligned up front so the settle effect finds nothing to nudge, which is
-      // what keeps `applied` equal to the live viewport for the check above.
+      // what keeps `applied` equal to the live viewport once the glide lands.
       const next = alignViewport(focusRect(target.window, w, h), w, h, dprRef.current);
-      setMaximized({
-        sessionId,
-        // Going straight from one maximized window to another keeps the
-        // original view, so dismissing still returns to the overview rather
-        // than to the previous window's close-up.
-        restore: intact ? state.restore : current,
-        applied: next,
-      });
-      applyViewport(next);
+      setMaximized({ sessionId, restore: restore ?? carried, applied: next });
+      glideTo(next);
     },
-    [applyViewport, select],
+    [glideTo, select],
   );
+
+  const toggleMaximize = useCallback(
+    (sessionId: string) => {
+      const state = maximizedRef.current;
+      if (
+        state !== null &&
+        state.sessionId === sessionId &&
+        sameViewport(viewportRef.current, state.applied)
+      ) {
+        setMaximized(null);
+        select(sessionId);
+        glideTo(state.restore);
+        return;
+      }
+      focusSession(sessionId);
+    },
+    [focusSession, glideTo, select],
+  );
+
+  /* ----------------------------------------------------- wheel + pinch */
+
+  /*
+   * A precision trackpad reports a pinch as a stream of ctrl+wheel events,
+   * which is also how the canvas gets its continuous zoom. The burst below
+   * watches that same stream for a flick — a pinch that was both fast and
+   * large — and takes it as a command to navigate: in to the window under the
+   * fingers, out one level of the workspace ladder. Anything slower or smaller
+   * is left alone, so precise zooming is never hijacked.
+   */
+  const burstRef = useRef<null | {
+    startedAt: number;
+    lastAt: number;
+    events: number;
+    /** Product of the wheel factors so far: the zoom the pinch asked for. */
+    ratio: number;
+    /** Canvas-relative point the pinch started at. */
+    anchor: Point;
+    /** Resolves that anchor to world space, and is where a dismissal returns. */
+    startViewport: Viewport;
+    timer: number | null;
+  }>(null);
+
+  const discardBurst = useCallback(() => {
+    const b = burstRef.current;
+    if (!b) return;
+    burstRef.current = null;
+    if (b.timer !== null) window.clearTimeout(b.timer);
+  }, []);
+
+  /**
+   * A pinch has stopped. If it was a flick, navigate; otherwise the continuous
+   * zoom it already performed is the whole of its effect.
+   */
+  const finishBurst = useCallback(() => {
+    const b = burstRef.current;
+    if (!b) return;
+    burstRef.current = null;
+    if (b.timer !== null) window.clearTimeout(b.timer);
+
+    const intent = pinchIntent({
+      ratio: b.ratio,
+      durationMs: b.lastAt - b.startedAt,
+      events: b.events,
+    });
+    if (!intent) return;
+
+    const world = screenToWorld(b.anchor, b.startViewport);
+    const all = sessionsRef.current;
+    // Topmost, so a pinch over overlapping windows picks the one you can see.
+    const under = all
+      .filter((s) => rectContainsPoint(s.window, world))
+      .sort((a, c) => a.window.z - c.window.z)
+      .at(-1);
+
+    if (intent === 'in') {
+      // Nothing under the fingers means nothing was aimed at, and the pinch's
+      // own zoom is all that happens.
+      if (!under) return;
+      focusSession(under.id, b.startViewport);
+      return;
+    }
+
+    // Zooming out has an obvious answer even when the pinch was over empty
+    // canvas, so fall back to the nearest window rather than giving up.
+    const anchorSession = under ?? nearestSession(all, world);
+    const containers = [
+      anchorSession
+        ? workspaceBounds(
+            all.filter((s) => s.workspaceId === anchorSession.workspaceId).map((s) => s.window),
+          )
+        : null,
+      boundsOf(all.map((s) => s.window)),
+    ].filter((r): r is Rect => r !== null);
+
+    const { w, h } = sizeRef.current;
+    const next = stepOutTo(containers, viewportRef.current, w, h);
+    if (!next) return;
+    // The view is no longer one window's close-up, so the ⤡ state stops
+    // describing it.
+    setMaximized(null);
+    glideTo(alignViewport(next, w, h, dprRef.current));
+  }, [focusSession, glideTo]);
+
+  const notePinch = useCallback(
+    (anchor: Point, factor: number) => {
+      const now = performance.now();
+      const b = burstRef.current;
+      if (b && now - b.lastAt <= PINCH_GAP_MS) {
+        if (b.timer !== null) window.clearTimeout(b.timer);
+        b.lastAt = now;
+        b.events += 1;
+        b.ratio *= factor;
+        b.timer = window.setTimeout(finishBurst, PINCH_GAP_MS);
+        return;
+      }
+      discardBurst();
+      burstRef.current = {
+        startedAt: now,
+        lastAt: now,
+        events: 1,
+        ratio: factor,
+        anchor,
+        startViewport: viewportRef.current,
+        timer: window.setTimeout(finishBurst, PINCH_GAP_MS),
+      };
+    },
+    [discardBurst, finishBurst],
+  );
+
+  useEffect(
+    () => () => {
+      cancelGlide();
+      discardBurst();
+    },
+    [cancelGlide, discardBurst],
+  );
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+
+    const onWheel = (e: WheelEvent) => {
+      // A live xterm ends its own wheel handling in cancel(ev, force), which
+      // calls stopPropagation: a pinch that starts over a terminal would never
+      // reach a listener on the canvas. Hence the capture phase — but that
+      // makes the canvas first in line for every wheel event on the page, so
+      // the one case that is genuinely the terminal's gets handed straight
+      // back. Scrolling belongs to the terminal under the pointer; zooming
+      // belongs to the canvas, wherever the pointer happens to be.
+      const zooming = e.ctrlKey || e.metaKey;
+      if (!zooming && (e.target as Element | null)?.closest?.('.term-host')) return;
+
+      // preventDefault stops the browser's own page zoom, and stopPropagation
+      // keeps the terminal below from also acting on an event we have taken.
+      e.preventDefault();
+      e.stopPropagation();
+      markInteracting();
+      const rect = el.getBoundingClientRect();
+      const point = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+
+      if (zooming) {
+        const factor = wheelZoomFactor(e.deltaY);
+        // Recorded before the zoom is applied, so the burst keeps the viewport
+        // the pinch started from.
+        notePinch(point, factor);
+        setViewport(zoomAt(viewport, point, viewport.zoom * factor));
+      } else {
+        discardBurst();
+        setViewport({
+          ...viewport,
+          panX: viewport.panX - e.deltaX,
+          panY: viewport.panY - e.deltaY,
+        });
+      }
+    };
+
+    // Non-passive so preventDefault actually takes effect; React's synthetic
+    // wheel handler is passive, which is why this is registered natively.
+    const opts = { passive: false, capture: true } as const;
+    el.addEventListener('wheel', onWheel, opts);
+    return () => el.removeEventListener('wheel', onWheel, opts);
+  }, [viewport, setViewport, markInteracting, notePinch, discardBurst]);
+
+  /* ----------------------------------------------------- keyboard nav */
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -289,11 +533,11 @@ export function Canvas() {
 
       if (e.key === '0' && (e.ctrlKey || e.metaKey)) {
         e.preventDefault();
-        applyViewport({ panX: 0, panY: 0, zoom: 1 });
+        glideTo({ panX: 0, panY: 0, zoom: 1 });
       }
       if (e.key === '1' && (e.ctrlKey || e.metaKey)) {
         e.preventDefault();
-        applyViewport(
+        glideTo(
           fitTo(
             sessions.map((s) => s.window),
             size.w,
@@ -309,7 +553,7 @@ export function Canvas() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [sessions, size, applyViewport, select, selectedId, toggleMaximize]);
+  }, [sessions, size, glideTo, select, selectedId, toggleMaximize]);
 
   /**
    * The window whose button should offer to go back, rather than the one we
@@ -348,17 +592,12 @@ export function Canvas() {
   /* --------------------------------------------- workspace grouping */
 
   const groups = useMemo(() => {
-    const out: { ws: (typeof workspaces)[number]; x: number; y: number; w: number; h: number }[] =
-      [];
+    const out: { ws: (typeof workspaces)[number]; box: Rect }[] = [];
     for (const ws of workspaces) {
-      const members = sessions.filter((s) => s.workspaceId === ws.id);
-      if (members.length === 0) continue;
-      const pad = 28;
-      const minX = Math.min(...members.map((m) => m.window.x)) - pad;
-      const minY = Math.min(...members.map((m) => m.window.y)) - pad - 24;
-      const maxX = Math.max(...members.map((m) => m.window.x + m.window.w)) + pad;
-      const maxY = Math.max(...members.map((m) => m.window.y + m.window.h)) + pad;
-      out.push({ ws, x: minX, y: minY, w: maxX - minX, h: maxY - minY });
+      const box = workspaceBounds(
+        sessions.filter((s) => s.workspaceId === ws.id).map((s) => s.window),
+      );
+      if (box) out.push({ ws, box });
     }
     return out;
   }, [workspaces, sessions]);
@@ -390,9 +629,9 @@ export function Canvas() {
             key={g.ws.id}
             className="ws-group"
             style={{
-              transform: `translate(${g.x}px, ${g.y}px)`,
-              width: g.w,
-              height: g.h,
+              transform: `translate(${g.box.x}px, ${g.box.y}px)`,
+              width: g.box.w,
+              height: g.box.h,
               borderColor: g.ws.color,
             }}
           >
@@ -425,12 +664,12 @@ export function Canvas() {
 
       <ZoomIndicator
         zoom={viewport.zoom}
-        onReset={() => applyViewport({ panX: 0, panY: 0, zoom: 1 })}
+        onReset={() => glideTo({ panX: 0, panY: 0, zoom: 1 })}
         onFit={() =>
-          applyViewport(fitTo(sessions.map((s) => s.window), size.w, size.h))
+          glideTo(fitTo(sessions.map((s) => s.window), size.w, size.h))
         }
         onZoom={(dir) =>
-          applyViewport(
+          glideTo(
             zoomAt(
               viewport,
               { x: size.w / 2, y: size.h / 2 },

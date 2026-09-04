@@ -172,6 +172,24 @@ export function rectsIntersect(a: Rect, b: Rect): boolean {
   return !(a.x + a.w < b.x || b.x + b.w < a.x || a.y + a.h < b.y || b.y + b.h < a.y);
 }
 
+export function rectContainsPoint(r: Rect, p: Point): boolean {
+  return p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h;
+}
+
+/**
+ * Whether `inner` lies wholly within `outer`. The epsilon absorbs the fraction
+ * of a pixel that centring and device-pixel rounding leave behind, so a rect
+ * the canvas has just fitted still reads as fully visible.
+ */
+export function rectContains(outer: Rect, inner: Rect, epsilon = 0.5): boolean {
+  return (
+    inner.x >= outer.x - epsilon &&
+    inner.y >= outer.y - epsilon &&
+    inner.x + inner.w <= outer.x + outer.w + epsilon &&
+    inner.y + inner.h <= outer.y + outer.h + epsilon
+  );
+}
+
 /** The pan that centres a world rect in the viewport at a given zoom. */
 function centreOn(r: Rect, zoom: number, viewportW: number, viewportH: number): Viewport {
   return {
@@ -181,6 +199,19 @@ function centreOn(r: Rect, zoom: number, viewportW: number, viewportH: number): 
   };
 }
 
+/**
+ * The box enclosing a set of world rects, or null for none. Width and height
+ * are floored at 1 so a degenerate set still divides safely.
+ */
+export function boundsOf(rects: Rect[]): Rect | null {
+  if (rects.length === 0) return null;
+  const minX = Math.min(...rects.map((r) => r.x));
+  const minY = Math.min(...rects.map((r) => r.y));
+  const maxX = Math.max(...rects.map((r) => r.x + r.w));
+  const maxY = Math.max(...rects.map((r) => r.y + r.h));
+  return { x: minX, y: minY, w: Math.max(1, maxX - minX), h: Math.max(1, maxY - minY) };
+}
+
 /** Fit a set of world rects into the viewport with margin. */
 export function fitTo(
   rects: Rect[],
@@ -188,17 +219,8 @@ export function fitTo(
   viewportH: number,
   margin = 80,
 ): Viewport {
-  if (rects.length === 0) return { panX: 0, panY: 0, zoom: 1 };
-  const minX = Math.min(...rects.map((r) => r.x));
-  const minY = Math.min(...rects.map((r) => r.y));
-  const maxX = Math.max(...rects.map((r) => r.x + r.w));
-  const maxY = Math.max(...rects.map((r) => r.y + r.h));
-  const bounds = {
-    x: minX,
-    y: minY,
-    w: Math.max(1, maxX - minX),
-    h: Math.max(1, maxY - minY),
-  };
+  const bounds = boundsOf(rects);
+  if (!bounds) return { panX: 0, panY: 0, zoom: 1 };
   const zoom = clampZoom(
     Math.min((viewportW - margin * 2) / bounds.w, (viewportH - margin * 2) / bounds.h),
   );
@@ -230,4 +252,165 @@ export function focusRect(
   const h = Math.max(1, rect.h);
   const zoom = clampZoom(Math.min((viewportW * fill) / w, (viewportH * fill) / h));
   return centreOn({ ...rect, w, h }, zoom, viewportW, viewportH);
+}
+
+/* --------------------------------------------------- workspace grouping */
+
+/** Breathing room drawn around a workspace's windows. */
+export const WS_PAD = 28;
+/** Extra room above them for the workspace's name. */
+export const WS_LABEL_H = 24;
+
+/**
+ * The box drawn around one workspace's windows. Shared by the group rendering
+ * and by the pinch-out ladder, so the view a gesture flies to is by
+ * construction the box the user can see.
+ */
+export function workspaceBounds(members: Rect[]): Rect | null {
+  const b = boundsOf(members);
+  if (!b) return null;
+  return {
+    x: b.x - WS_PAD,
+    y: b.y - WS_PAD - WS_LABEL_H,
+    w: b.w + WS_PAD * 2,
+    h: b.h + WS_PAD * 2 + WS_LABEL_H,
+  };
+}
+
+/* ----------------------------------------------------- pinch gestures */
+
+/*
+ * A precision trackpad reports a pinch as a stream of wheel events with
+ * ctrlKey set. Those already drive the continuous zoom; the recogniser below
+ * watches the same stream for a *flick* — a pinch that was both fast and large
+ * — and treats that as a command to snap somewhere, leaving slow deliberate
+ * pinches to zoom exactly as they always have.
+ */
+
+/** The zoom multiplier one wheel tick asks for. */
+export function wheelZoomFactor(deltaY: number): number {
+  // Clamped because a mouse notch reports deltaY 100, which the raw formula
+  // turns into a factor of zero: a single notch slams the canvas to a zoom
+  // limit, and an accumulated ratio built from zeroes says nothing at all.
+  // Trackpad pinch deltas are small and never reach these bounds.
+  return Math.min(5, Math.max(0.2, 1 - deltaY * 0.01));
+}
+
+/**
+ * Idle gap that ends one pinch burst.
+ *
+ * This is dead time you can feel: the zoom stops at the pinch's last position
+ * and nothing moves until it elapses, because the verdict needs the whole
+ * gesture. So it wants to be as short as it can be without splitting one pinch
+ * into two — a trackpad reports a pinch once per compositor frame, making this
+ * four idle frames at 60Hz. Still under the canvas settle delay, so the snap is
+ * decided before the viewport is ever called at rest.
+ */
+export const PINCH_GAP_MS = 70;
+
+/**
+ * How fast a flick has to be, in e-folds of zoom per second — |ln ratio|
+ * divided by the seconds it took.
+ *
+ * Speed rather than a duration cap is the whole test, because "quick" is not a
+ * stopwatch reading: a confident pinch that happens to run 400ms covers far
+ * more ground than a careful one of the same length, and only a rate tells
+ * them apart. A doubling inside 1.1s sits right on this line.
+ *
+ * Deliberately generous, and settled against a real trackpad rather than
+ * reasoned about: a gesture that will not fire reads as broken, while one that
+ * fires too eagerly is only ever a pinch away from being undone.
+ */
+export const PINCH_MIN_SPEED = 0.6;
+
+/** And it has to actually travel. Below this it is a nudge, however brisk. */
+export const PINCH_MIN_RATIO = 1.15;
+
+/**
+ * Past this the gesture is aiming at a zoom level rather than flicking, no
+ * matter how much ground it covered on the way.
+ */
+export const PINCH_MAX_MS = 900;
+
+/**
+ * A trackpad pinch is a stream of small deltas; ctrl held over a mouse wheel is
+ * one large event per notch. The count is what tells them apart.
+ */
+export const PINCH_MIN_EVENTS = 3;
+
+export interface PinchBurst {
+  /** Product of the burst's wheel factors: the zoom change that was asked for. */
+  ratio: number;
+  durationMs: number;
+  events: number;
+}
+
+/**
+ * Whether a finished burst reads as a quick pinch, and in which direction.
+ *
+ * The ratio is the requested zoom rather than the achieved one, so a flick
+ * still registers when the canvas was already parked at a zoom limit.
+ */
+export function pinchIntent(b: PinchBurst): 'in' | 'out' | null {
+  if (b.events < PINCH_MIN_EVENTS) return null;
+  if (!(b.ratio > 0) || !Number.isFinite(b.ratio)) return null;
+  if (!(b.durationMs >= 0 && b.durationMs <= PINCH_MAX_MS)) return null;
+
+  const travel = Math.abs(Math.log(b.ratio));
+  if (travel < Math.log(PINCH_MIN_RATIO)) return null;
+  // A burst delivered inside a single frame has no measurable duration. It is
+  // as fast as anything can be, so it passes on distance alone.
+  const speed = b.durationMs > 0 ? travel / (b.durationMs / 1000) : Infinity;
+  if (speed < PINCH_MIN_SPEED) return null;
+
+  return b.ratio > 1 ? 'in' : 'out';
+}
+
+/**
+ * One step out: fit the smallest of `containers` that is not already wholly on
+ * screen. Containers are given innermost first — a window's workspace, then
+ * every window on the canvas.
+ *
+ * Reading the level off the screen rather than off a stored "we are at level 2"
+ * is what stops panning by hand between gestures from desyncing the ladder.
+ * Null means there is nothing left to reveal, and the gesture is ignored.
+ */
+export function stepOutTo(
+  containers: Rect[],
+  v: Viewport,
+  viewportW: number,
+  viewportH: number,
+): Viewport | null {
+  const visible = visibleWorldRect(v, viewportW, viewportH, 0);
+  const next = containers.find((c) => !rectContains(visible, c));
+  return next ? fitTo([next], viewportW, viewportH) : null;
+}
+
+/* ----------------------------------------------------- viewport tweening */
+
+/**
+ * One frame between two viewports.
+ *
+ * Zoom is interpolated geometrically and the pan is derived from the world
+ * point under the viewport centre, rather than lerping panX/panY directly.
+ * Linear pan against exponential zoom is what makes map animations swoop out
+ * and back; this holds the centre on a straight path the whole way.
+ */
+export function lerpViewport(
+  a: Viewport,
+  b: Viewport,
+  t: number,
+  viewportW: number,
+  viewportH: number,
+): Viewport {
+  if (t <= 0) return a;
+  // Exactly b, so the last frame of an animation is bit-identical to its target.
+  if (t >= 1) return b;
+  const zoom = Math.exp(Math.log(a.zoom) + (Math.log(b.zoom) - Math.log(a.zoom)) * t);
+  const centre = { x: viewportW / 2, y: viewportH / 2 };
+  const from = screenToWorld(centre, a);
+  const to = screenToWorld(centre, b);
+  const x = from.x + (to.x - from.x) * t;
+  const y = from.y + (to.y - from.y) * t;
+  return { zoom, panX: centre.x - x * zoom, panY: centre.y - y * zoom };
 }

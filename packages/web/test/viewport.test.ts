@@ -3,15 +3,23 @@ import type { Viewport } from '@aicanvas/protocol';
 import {
   alignViewport,
   alignZoom,
+  boundsOf,
   clampZoom,
   fitTo,
   focusRect,
+  lerpViewport,
+  pinchIntent,
+  rectContains,
+  rectContainsPoint,
   rectsIntersect,
   renderScaleFor,
   screenToWorld,
   snapWorldPx,
+  stepOutTo,
   terminalFontSize,
   visibleWorldRect,
+  wheelZoomFactor,
+  workspaceBounds,
   worldToScreen,
   zoomAt,
   BASE_FONT_SIZE,
@@ -20,6 +28,11 @@ import {
   MAX_ZOOM,
   MIN_DEVICE_FONT,
   MIN_ZOOM,
+  PINCH_MAX_MS,
+  PINCH_MIN_EVENTS,
+  PINCH_MIN_RATIO,
+  WS_LABEL_H,
+  WS_PAD,
 } from '../src/canvas/viewport.js';
 
 /** The display scalings that actually matter: 100%, 125%, 150%, 200%. */
@@ -344,5 +357,189 @@ describe('focusRect', () => {
     expect(Number.isFinite(v.zoom)).toBe(true);
     expect(Number.isFinite(v.panX)).toBe(true);
     expect(Number.isFinite(v.panY)).toBe(true);
+  });
+});
+
+describe('bounds', () => {
+  it('encloses a set of rects', () => {
+    expect(
+      boundsOf([
+        { x: 0, y: 0, w: 100, h: 50 },
+        { x: 200, y: -30, w: 40, h: 40 },
+      ]),
+    ).toEqual({ x: 0, y: -30, w: 240, h: 80 });
+  });
+
+  it('has nothing to enclose for an empty set', () => {
+    expect(boundsOf([])).toBeNull();
+    expect(workspaceBounds([])).toBeNull();
+  });
+
+  it('pads a workspace box, with extra room above it for the label', () => {
+    expect(workspaceBounds([{ x: 100, y: 100, w: 200, h: 100 }])).toEqual({
+      x: 100 - WS_PAD,
+      y: 100 - WS_PAD - WS_LABEL_H,
+      w: 200 + WS_PAD * 2,
+      h: 100 + WS_PAD * 2 + WS_LABEL_H,
+    });
+  });
+});
+
+describe('containment', () => {
+  const outer = { x: 0, y: 0, w: 100, h: 100 };
+
+  it('accepts a rect inside and rejects one that pokes out', () => {
+    expect(rectContains(outer, { x: 10, y: 10, w: 50, h: 50 })).toBe(true);
+    expect(rectContains(outer, { x: 10, y: 10, w: 200, h: 50 })).toBe(false);
+    expect(rectContains(outer, { x: -20, y: 10, w: 50, h: 50 })).toBe(false);
+  });
+
+  it('forgives the fraction of a pixel that centring leaves behind', () => {
+    expect(rectContains(outer, { x: -0.3, y: -0.3, w: 100.6, h: 100.6 })).toBe(true);
+    expect(rectContains(outer, { x: -2, y: 0, w: 100, h: 100 })).toBe(false);
+  });
+
+  it('locates a point, edges included', () => {
+    expect(rectContainsPoint(outer, { x: 50, y: 50 })).toBe(true);
+    expect(rectContainsPoint(outer, { x: 100, y: 100 })).toBe(true);
+    expect(rectContainsPoint(outer, { x: 101, y: 50 })).toBe(false);
+    expect(rectContainsPoint(outer, { x: 50, y: -1 })).toBe(false);
+  });
+});
+
+describe('wheelZoomFactor', () => {
+  it('passes trackpad-sized deltas straight through', () => {
+    expect(wheelZoomFactor(0)).toBe(1);
+    expect(wheelZoomFactor(-4)).toBeCloseTo(1.04);
+    expect(wheelZoomFactor(6)).toBeCloseTo(0.94);
+  });
+
+  it('maps the sign of the delta to zooming in and out', () => {
+    expect(wheelZoomFactor(-10)).toBeGreaterThan(1);
+    expect(wheelZoomFactor(10)).toBeLessThan(1);
+  });
+
+  it('clamps a mouse notch instead of collapsing to zero', () => {
+    // deltaY 100 is one notch of a mouse wheel. The unclamped formula turns
+    // that into a factor of zero: the canvas slams to a zoom limit, and a
+    // ratio accumulated from zeroes says nothing about what was asked for.
+    expect(wheelZoomFactor(100)).toBeGreaterThan(0);
+    expect(wheelZoomFactor(1000)).toBe(0.2);
+    expect(wheelZoomFactor(-1000)).toBe(5);
+  });
+});
+
+describe('pinchIntent', () => {
+  const flick = { ratio: 2, durationMs: 140, events: 8 };
+
+  it('reads a fast, large burst as a direction', () => {
+    expect(pinchIntent(flick)).toBe('in');
+    expect(pinchIntent({ ...flick, ratio: 0.5 })).toBe('out');
+  });
+
+  it('judges by speed, not by a stopwatch', () => {
+    // The reason there is no duration cap doing the real work: a confident
+    // pinch that happens to run 400ms is still a flick, and rejecting it is
+    // what makes the gesture feel like it misfires.
+    expect(pinchIntent({ ratio: 2, durationMs: 400, events: 24 })).toBe('in');
+    expect(pinchIntent({ ratio: 0.5, durationMs: 400, events: 24 })).toBe('out');
+  });
+
+  it('ignores the same distance covered slowly', () => {
+    // The regression that matters most: a deliberate pinch has to keep zooming
+    // exactly where the fingers left it, never snapping somewhere else.
+    expect(pinchIntent({ ratio: 1.4, durationMs: 600, events: 40 })).toBeNull();
+    expect(pinchIntent({ ...flick, ratio: 0.5, durationMs: 1500 })).toBeNull();
+  });
+
+  it('stops calling anything a flick once it has run long enough', () => {
+    expect(pinchIntent({ ratio: 8, durationMs: PINCH_MAX_MS + 1, events: 40 })).toBeNull();
+  });
+
+  it('ignores a burst too small to be a flick, however brisk', () => {
+    expect(pinchIntent({ ...flick, ratio: PINCH_MIN_RATIO - 0.01, durationMs: 20 })).toBeNull();
+    expect(pinchIntent({ ...flick, ratio: 1 / (PINCH_MIN_RATIO - 0.01), durationMs: 20 })).toBeNull();
+    expect(pinchIntent({ ...flick, ratio: 1 })).toBeNull();
+  });
+
+  it('lets a burst delivered inside one frame through on distance alone', () => {
+    expect(pinchIntent({ ratio: 2, durationMs: 0, events: 5 })).toBe('in');
+  });
+
+  it('ignores a lone large event, which is a mouse wheel and not a pinch', () => {
+    expect(
+      pinchIntent({ ratio: 5, durationMs: 0, events: PINCH_MIN_EVENTS - 1 }),
+    ).toBeNull();
+  });
+
+  it('rejects a nonsensical burst', () => {
+    expect(pinchIntent({ ...flick, ratio: 0 })).toBeNull();
+    expect(pinchIntent({ ...flick, ratio: Number.NaN })).toBeNull();
+    expect(pinchIntent({ ...flick, durationMs: -1 })).toBeNull();
+  });
+});
+
+describe('stepOutTo', () => {
+  const VIEW = { w: 1600, h: 1000 };
+  const one = { x: 0, y: 0, w: 720, h: 460 };
+  const two = { x: 900, y: 0, w: 720, h: 460 };
+  const far = { x: 4000, y: 2000, w: 720, h: 460 };
+  const ws = workspaceBounds([one, two])!;
+  const all = boundsOf([one, two, far])!;
+  const sees = (v: { panX: number; panY: number; zoom: number }, r: typeof one) =>
+    rectContains(visibleWorldRect(v, VIEW.w, VIEW.h, 0), r);
+
+  it('steps from one window close-up out to its workspace', () => {
+    const next = stepOutTo([ws, all], focusRect(one, VIEW.w, VIEW.h), VIEW.w, VIEW.h)!;
+    expect(next).not.toBeNull();
+    expect(sees(next, ws)).toBe(true);
+    // and stops there rather than skipping a rung.
+    expect(sees(next, all)).toBe(false);
+  });
+
+  it('steps from the workspace out to every window', () => {
+    const next = stepOutTo([ws, all], fitTo([ws], VIEW.w, VIEW.h), VIEW.w, VIEW.h)!;
+    expect(next).not.toBeNull();
+    expect(sees(next, all)).toBe(true);
+  });
+
+  it('has nothing left to reveal once everything is on screen', () => {
+    expect(stepOutTo([ws, all], fitTo([all], VIEW.w, VIEW.h), VIEW.w, VIEW.h)).toBeNull();
+  });
+});
+
+describe('lerpViewport', () => {
+  const VIEW = { w: 1600, h: 1000 };
+  const a = { panX: 0, panY: 0, zoom: 0.4 };
+  const b = { panX: -1200, panY: -640, zoom: 1.9 };
+
+  it('reproduces the endpoints exactly', () => {
+    expect(lerpViewport(a, b, 0, VIEW.w, VIEW.h)).toEqual(a);
+    expect(lerpViewport(a, b, 1, VIEW.w, VIEW.h)).toEqual(b);
+    expect(lerpViewport(a, b, 1.4, VIEW.w, VIEW.h)).toEqual(b);
+  });
+
+  it('stays inside the zoom range it is travelling', () => {
+    for (const t of [0.1, 0.25, 0.5, 0.75, 0.9]) {
+      const z = lerpViewport(a, b, t, VIEW.w, VIEW.h).zoom;
+      expect(z).toBeGreaterThan(a.zoom);
+      expect(z).toBeLessThan(b.zoom);
+    }
+  });
+
+  it('carries the centre of the view straight from one to the other', () => {
+    // Lerping panX/panY against an exponential zoom is what makes map
+    // animations swoop out and back. The centre has to travel evenly instead.
+    const centre = { x: VIEW.w / 2, y: VIEW.h / 2 };
+    const from = screenToWorld(centre, a);
+    const to = screenToWorld(centre, b);
+    let previous = -1;
+    for (const t of [0, 0.2, 0.4, 0.6, 0.8, 1]) {
+      const at = screenToWorld(centre, lerpViewport(a, b, t, VIEW.w, VIEW.h));
+      const progress = (at.x - from.x) / (to.x - from.x);
+      expect(progress).toBeCloseTo(t);
+      expect(progress).toBeGreaterThan(previous);
+      previous = progress;
+    }
   });
 });
