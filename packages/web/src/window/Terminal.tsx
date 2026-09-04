@@ -1,15 +1,26 @@
-import { useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { Terminal as XTerm } from '@xterm/xterm';
-import { FitAddon } from '@xterm/addon-fit';
 import { WebglAddon } from '@xterm/addon-webgl';
 import '@xterm/xterm/css/xterm.css';
 import { useStore } from '../state/store.js';
+import { terminalFontSize } from '../canvas/viewport.js';
+import {
+  TERMINAL_FONT_FAMILY,
+  TERMINAL_LINE_HEIGHT,
+  gridFor,
+  measureBaseCell,
+} from './grid.js';
 
 interface Props {
   sessionId: string;
   /** Redraws when the window is resized so cols/rows follow the geometry. */
   w: number;
   h: number;
+  /**
+   * The canvas zoom, quantised to a whole device pixel of text height and
+   * shared by every terminal. See the host scaling note below.
+   */
+  renderScale: number;
   focused: boolean;
 }
 
@@ -32,12 +43,55 @@ const THEME = {
  * unmounting is how the canvas stays cheap. On mount it replays the hub's
  * serialized screen before the live stream, so a re-attached window shows its
  * real content immediately instead of flashing empty.
+ *
+ * ## Why the host is scaled
+ *
+ * xterm rasterizes glyphs into a canvas sized in CSS pixels times
+ * devicePixelRatio. It has no idea the canvas sits inside `scale(zoom)`, so the
+ * world transform resamples an already-finished bitmap — blurry above zoom 1,
+ * smeared below it. Nothing inside xterm can fix that, because a canvas bitmap
+ * cannot be re-rasterized by the compositor the way DOM text can.
+ *
+ * So the terminal is rendered into a host `k` times larger with a `k` times
+ * larger font, then counter-scaled by `1/k`. For a frame `W` CSS px wide the
+ * backing store is `W·k·dpr` device px and it paints at `W·k·(1/k)·zoom` CSS px,
+ * a ratio of `k : zoom` — exactly 1:1 when `k` is the zoom.
+ *
+ * The grid does not come from that scaled box — see grid.ts for why it cannot.
+ * cols/rows are computed from the window's own size, so zooming never reflows
+ * the agent's output.
  */
-export function TerminalView({ sessionId, w, h, focused }: Props) {
+export function TerminalView({ sessionId, w, h, renderScale, focused }: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
+  const frameRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<XTerm | null>(null);
-  const fitRef = useRef<FitAddon | null>(null);
   const client = useStore((s) => s.client);
+
+  // Read through a ref inside the mount effect: the initial font size must
+  // match the current zoom (a terminal mounted while zoomed in has to start
+  // sharp) without renderScale becoming a remount trigger.
+  const scaleRef = useRef(renderScale);
+  scaleRef.current = renderScale;
+
+  /**
+   * Size the PTY from the window geometry. The frame's clientWidth/Height are
+   * layout sizes, unaffected by the world transform or by the host's own
+   * counter-scale, so this is world pixels at any zoom.
+   */
+  const applyGrid = useCallback(() => {
+    const term = termRef.current;
+    const frame = frameRef.current;
+    if (!term || !frame || !client) return;
+    const { cols, rows } = gridFor(
+      frame.clientWidth,
+      frame.clientHeight,
+      measureBaseCell(),
+      TERMINAL_LINE_HEIGHT,
+    );
+    if (cols === term.cols && rows === term.rows) return;
+    term.resize(cols, rows);
+    client.send({ t: 'resize', sessionId, cols, rows });
+  }, [client, sessionId]);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -45,17 +99,14 @@ export function TerminalView({ sessionId, w, h, focused }: Props) {
 
     const term = new XTerm({
       theme: THEME,
-      fontFamily:
-        'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace',
-      fontSize: 12,
-      lineHeight: 1.2,
+      fontFamily: TERMINAL_FONT_FAMILY,
+      fontSize: terminalFontSize(scaleRef.current),
+      lineHeight: TERMINAL_LINE_HEIGHT,
       cursorBlink: focused,
       scrollback: 5000,
       allowProposedApi: true,
 convertEol: false,
     });
-    const fit = new FitAddon();
-    term.loadAddon(fit);
     term.open(host);
 
     try {
@@ -65,7 +116,6 @@ convertEol: false,
     }
 
     termRef.current = term;
-    fitRef.current = fit;
 
     // Replay the hub's snapshot first, then subscribe to live output. Doing it
     // in this order is what prevents a visible empty flash on reattach.
@@ -75,42 +125,33 @@ convertEol: false,
     const detach = client.attach(sessionId, (chunk) => term.write(chunk));
     const onData = term.onData((d) => client.sendInput(sessionId, d));
 
-    // clientWidth/Height are layout sizes, unaffected by the canvas CSS
-    // transform, so fit computes the right cols/rows at any zoom level.
-    try {
-      fit.fit();
-      client.send({ t: 'resize', sessionId, cols: term.cols, rows: term.rows });
-    } catch {
-      // Element not laid out yet; the size effect below will retry.
-    }
+    applyGrid();
 
     return () => {
       onData.dispose();
       detach();
       term.dispose();
       termRef.current = null;
-      fitRef.current = null;
     };
-    // Deliberately not re-running on w/h/focused: remounting a terminal loses
-    // its viewport. Those are handled by the effects below.
+    // Deliberately not re-running on w/h/renderScale/focused: remounting a
+    // terminal loses its viewport. Those are handled by the effects below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId, client]);
 
-  // Geometry changes reflow the PTY rather than rebuilding the terminal.
+  // Only the window geometry changes the grid. Zoom deliberately does not.
+  useEffect(() => {
+    const id = requestAnimationFrame(applyGrid);
+    return () => cancelAnimationFrame(id);
+  }, [w, h, applyGrid]);
+
+  // Re-rasterize at the new resolution, keeping the same grid. No resize is
+  // sent: the PTY's view of the terminal has not changed, only its sharpness.
   useEffect(() => {
     const term = termRef.current;
-    const fit = fitRef.current;
-    if (!term || !fit || !client) return;
-    const id = requestAnimationFrame(() => {
-      try {
-        fit.fit();
-        client.send({ t: 'resize', sessionId, cols: term.cols, rows: term.rows });
-      } catch {
-        // Zero-sized during a collapse animation; nothing to do.
-      }
-    });
-    return () => cancelAnimationFrame(id);
-  }, [w, h, sessionId, client]);
+    if (!term) return;
+    const fontSize = terminalFontSize(renderScale);
+    if (term.options.fontSize !== fontSize) term.options.fontSize = fontSize;
+  }, [renderScale]);
 
   useEffect(() => {
     const term = termRef.current;
@@ -119,5 +160,17 @@ convertEol: false,
     if (focused) term.focus();
   }, [focused]);
 
-  return <div className="term-host" ref={hostRef} />;
+  return (
+    <div className="term-host" ref={frameRef}>
+      <div
+        className="term-scale"
+        ref={hostRef}
+        style={{
+          width: `${100 * renderScale}%`,
+          height: `${100 * renderScale}%`,
+          transform: `scale(${1 / renderScale})`,
+        }}
+      />
+    </div>
+  );
 }

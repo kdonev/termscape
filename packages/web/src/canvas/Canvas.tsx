@@ -5,12 +5,30 @@ import { TerminalWindow } from '../window/TerminalWindow.js';
 import { MessageEdges } from './MessageEdges.js';
 import {
   LIVE_ZOOM_THRESHOLD,
+  alignViewport,
   clampZoom,
   fitTo,
   rectsIntersect,
+  renderScaleFor,
   visibleWorldRect,
   zoomAt,
 } from './viewport.js';
+
+/**
+ * How long the viewport must be still before we call a gesture finished.
+ * Two things wait on this: dropping `will-change` so the compositor re-rasters
+ * the world at its settled scale, and changing the terminals' render scale,
+ * which rebuilds their glyph atlases and must not happen per wheel tick.
+ */
+const SETTLE_MS = 140;
+
+function dpr(): number {
+  return typeof window === 'undefined' ? 1 : window.devicePixelRatio || 1;
+}
+
+function sameViewport(a: { panX: number; panY: number; zoom: number }, b: typeof a): boolean {
+  return a.panX === b.panX && a.panY === b.panY && a.zoom === b.zoom;
+}
 
 /**
  * The infinite canvas.
@@ -25,6 +43,11 @@ export function Canvas() {
   const [size, setSize] = useState({ w: 1200, h: 800 });
   const [panning, setPanning] = useState(false);
   const panRef = useRef<{ x: number; y: number } | null>(null);
+  // True from the first wheel/drag event until SETTLE_MS after the last one.
+  // A superset of `panning`, which only tracks the grab cursor.
+  const [interacting, setInteracting] = useState(false);
+  const settleRef = useRef<number | null>(null);
+  const [devicePixelRatio, setDevicePixelRatio] = useState(dpr);
 
   const { sessions, workspaces, viewport, setViewport, selectedId, select } = useStore(
     useShallow((s) => ({
@@ -48,6 +71,68 @@ export function Canvas() {
     return () => ro.disconnect();
   }, []);
 
+  /* ------------------------------------------------ gesture settling */
+
+  // Read through a ref: the settle timer fires long after the render that armed
+  // it, by which point a captured size would be stale.
+  const sizeRef = useRef(size);
+  sizeRef.current = size;
+
+  /**
+   * Align whenever the canvas is at rest. Driving this off the viewport rather
+   * than only off the settle timer means a viewport restored from the hub comes
+   * up aligned too, instead of staying soft until the first gesture. Safe to
+   * run on every change because alignViewport is idempotent.
+   */
+  useEffect(() => {
+    if (interacting) return;
+    const aligned = alignViewport(viewport, sizeRef.current.w, sizeRef.current.h, devicePixelRatio);
+    if (!sameViewport(aligned, viewport)) setViewport(aligned);
+  }, [viewport, interacting, devicePixelRatio, setViewport]);
+
+  const settle = useCallback(() => {
+    settleRef.current = null;
+    setInteracting(false);
+  }, []);
+
+  const markInteracting = useCallback(() => {
+    setInteracting(true);
+    if (settleRef.current !== null) window.clearTimeout(settleRef.current);
+    settleRef.current = window.setTimeout(settle, SETTLE_MS);
+  }, [settle]);
+
+  useEffect(
+    () => () => {
+      if (settleRef.current !== null) window.clearTimeout(settleRef.current);
+    },
+    [],
+  );
+
+  // Moving the browser window to a monitor with different scaling changes what
+  // a device pixel is. Recording the new ratio re-runs the alignment and render
+  // scale effects against it; the query has to be rebuilt to watch for the next
+  // change, which is why it keys off the ratio it is currently matching.
+  useEffect(() => {
+    const mq = window.matchMedia(`(resolution: ${devicePixelRatio}dppx)`);
+    const onChange = () => setDevicePixelRatio(dpr());
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, [devicePixelRatio]);
+
+  /**
+   * One render scale for every terminal on the canvas, so they all show the
+   * same size text regardless of their window size. Frozen during a gesture:
+   * changing it rebuilds each terminal's glyph atlas.
+   */
+  const [renderScale, setRenderScale] = useState(() =>
+    renderScaleFor(viewport.zoom, dpr()),
+  );
+  useEffect(() => {
+    if (interacting) return;
+    const next = renderScaleFor(viewport.zoom, devicePixelRatio);
+    setRenderScale((cur) => (cur === next ? cur : next));
+  }, [viewport.zoom, devicePixelRatio, interacting]);
+
   /* ------------------------------------------------------------ wheel */
 
   useEffect(() => {
@@ -58,6 +143,7 @@ export function Canvas() {
     // passive, so preventDefault there would not stop the browser's own zoom.
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
+      markInteracting();
       const rect = el.getBoundingClientRect();
       const point = { x: e.clientX - rect.left, y: e.clientY - rect.top };
 
@@ -74,7 +160,7 @@ export function Canvas() {
 
     el.addEventListener('wheel', onWheel, { passive: false });
     return () => el.removeEventListener('wheel', onWheel);
-  }, [viewport, setViewport]);
+  }, [viewport, setViewport, markInteracting]);
 
   /* -------------------------------------------------------------- pan */
 
@@ -94,6 +180,7 @@ export function Canvas() {
     (e: React.PointerEvent) => {
       const p = panRef.current;
       if (!p) return;
+      markInteracting();
       setViewport({
         ...viewport,
         panX: viewport.panX + (e.clientX - p.x),
@@ -101,15 +188,33 @@ export function Canvas() {
       });
       panRef.current = { x: e.clientX, y: e.clientY };
     },
-    [viewport, setViewport],
+    [viewport, setViewport, markInteracting],
   );
 
   const endPan = useCallback(() => {
     panRef.current = null;
     setPanning(false);
-  }, []);
+    markInteracting();
+  }, [markInteracting]);
 
   /* ----------------------------------------------------- keyboard nav */
+
+  /**
+   * Buttons and shortcuts land on a final viewport in one step, so they cancel
+   * any pending settle rather than waiting out one they will never trigger.
+   * Alignment itself is left to the effect above.
+   */
+  const applyViewport = useCallback(
+    (next: typeof viewport) => {
+      if (settleRef.current !== null) {
+        window.clearTimeout(settleRef.current);
+        settleRef.current = null;
+      }
+      setViewport(next);
+      setInteracting(false);
+    },
+    [setViewport],
+  );
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -119,11 +224,11 @@ export function Canvas() {
 
       if (e.key === '0' && (e.ctrlKey || e.metaKey)) {
         e.preventDefault();
-        setViewport({ panX: 0, panY: 0, zoom: 1 });
+        applyViewport({ panX: 0, panY: 0, zoom: 1 });
       }
       if (e.key === '1' && (e.ctrlKey || e.metaKey)) {
         e.preventDefault();
-        setViewport(
+        applyViewport(
           fitTo(
             sessions.map((s) => s.window),
             size.w,
@@ -135,7 +240,7 @@ export function Canvas() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [sessions, size, setViewport, select]);
+  }, [sessions, size, applyViewport, select]);
 
   /* ------------------------------------------------ LOD + culling */
 
@@ -190,8 +295,15 @@ export function Canvas() {
       onPointerUp={endPan}
       onPointerCancel={endPan}
     >
+      {/*
+        `will-change: transform` is applied only while a gesture is in flight.
+        Left on permanently it tells the compositor the transform is animating,
+        which suppresses raster-scale recomputation: the layer stays rasterized
+        at whatever scale it was promoted at and every zoom after that is a GPU
+        resample. Dropping the hint on settle is what re-sharpens the DOM text.
+      */}
       <div
-        className="world"
+        className={`world${interacting ? ' interacting' : ''}`}
         style={{
           transform: `translate(${viewport.panX}px, ${viewport.panY}px) scale(${viewport.zoom})`,
         }}
@@ -223,6 +335,8 @@ export function Canvas() {
               session={session}
               workspace={wsById.get(session.workspaceId)}
               zoom={viewport.zoom}
+              dpr={devicePixelRatio}
+              renderScale={renderScale}
               live={live}
               selected={selectedId === session.id}
             />
@@ -232,12 +346,12 @@ export function Canvas() {
 
       <ZoomIndicator
         zoom={viewport.zoom}
-        onReset={() => setViewport({ panX: 0, panY: 0, zoom: 1 })}
+        onReset={() => applyViewport({ panX: 0, panY: 0, zoom: 1 })}
         onFit={() =>
-          setViewport(fitTo(sessions.map((s) => s.window), size.w, size.h))
+          applyViewport(fitTo(sessions.map((s) => s.window), size.w, size.h))
         }
         onZoom={(dir) =>
-          setViewport(
+          applyViewport(
             zoomAt(
               viewport,
               { x: size.w / 2, y: size.h / 2 },

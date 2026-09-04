@@ -99,8 +99,11 @@ body {
   position: absolute;
   inset: 0;
   transform-origin: 0 0;
-  will-change: transform;
 }
+/* Only during a gesture. Left on permanently it pins the compositor's raster
+   scale, so every zoom becomes a GPU resample of a stale bitmap and all the
+   DOM text on the canvas goes soft. See Canvas.tsx. */
+.world.interacting { will-change: transform; }
 
 .edges { position: absolute; pointer-events: none; overflow: visible; }
 
@@ -159,9 +162,21 @@ body {
 .window-bar .meta { color: var(--muted); font-size: 11px; }
 .window-bar .btn { padding: 2px 7px; font-size: 11px; }
 
-.window-body { flex: 1; min-height: 0; background: #0e1117; }
-.term-host { width: 100%; height: 100%; padding: 4px 6px; }
-.term-host .xterm { height: 100%; }
+.window-body { flex: 1; min-height: 0; background: #0e1117; position: relative; }
+
+/* .term-host is the terminal's true content box; the inset reproduces what used
+   to be its padding, while leaving it with none so .term-scale's percentages
+   resolve against exactly the terminal area. .term-scale is sized 100*k% and
+   counter-scaled by 1/k so xterm rasterizes at the canvas zoom (Terminal.tsx). */
+.term-host { position: absolute; inset: 4px 6px; overflow: hidden; }
+.term-scale { position: absolute; top: 0; left: 0; transform-origin: 0 0; }
+.term-scale .xterm { width: 100%; height: 100%; }
+/* The grid is computed from the window geometry (grid.ts), which cannot also
+   reserve room for a scrollbar: the scrollbar is a fixed CSS width, so in world
+   pixels it would grow and shrink with the zoom and take a column with it.
+   Hiding it keeps cols honest; the wheel still scrolls the buffer. */
+.term-scale .xterm-viewport { scrollbar-width: none; }
+.term-scale .xterm-viewport::-webkit-scrollbar { width: 0; height: 0; display: none; }
 
 .resize-handle {
   position: absolute;

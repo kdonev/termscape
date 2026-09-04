@@ -3,12 +3,15 @@ import { useShallow } from 'zustand/react/shallow';
 import type { Session, Workspace } from '@aicanvas/protocol';
 import { useStore } from '../state/store.js';
 import { TerminalView } from './Terminal.js';
-import { LIVE_ZOOM_THRESHOLD } from '../canvas/viewport.js';
+import { LIVE_ZOOM_THRESHOLD, snapWorldPx } from '../canvas/viewport.js';
 
 interface Props {
   session: Session;
   workspace: Workspace | undefined;
   zoom: number;
+  dpr: number;
+  /** Shared by every window, so all terminals show the same size text. */
+  renderScale: number;
   live: boolean;
   selected: boolean;
 }
@@ -33,6 +36,8 @@ export const TerminalWindow = memo(function TerminalWindow({
   session,
   workspace,
   zoom,
+  dpr,
+  renderScale,
   live,
   selected,
 }: Props) {
@@ -87,11 +92,18 @@ export const TerminalWindow = memo(function TerminalWindow({
   const { x, y, w, h } = session.window;
   const stopped = session.state !== 'running';
 
+  // Paint on a whole device pixel. Dragging divides by zoom, so x/y drift
+  // fractional, and a terminal canvas that starts mid-pixel gets resampled into
+  // blur however well its bitmap is sized. The stored rect keeps its exact
+  // value, so this never fights the drag handler or the hub.
+  const px = snapWorldPx(x, zoom, dpr);
+  const py = snapWorldPx(y, zoom, dpr);
+
   return (
     <div
       className={`window${selected ? ' selected' : ''}${stopped ? ' stopped' : ''}`}
       style={{
-        transform: `translate(${x}px, ${y}px)`,
+        transform: `translate(${px}px, ${py}px)`,
         width: w,
         height: h,
         zIndex: session.window.z + (selected ? 1000 : 0),
@@ -146,7 +158,13 @@ export const TerminalWindow = memo(function TerminalWindow({
 
       <div className="window-body">
         {live ? (
-          <TerminalView sessionId={session.id} w={w} h={h} focused={selected} />
+          <TerminalView
+            sessionId={session.id}
+            w={w}
+            h={h}
+            renderScale={renderScale}
+            focused={selected}
+          />
         ) : (
           <LodPlaceholder session={session} zoom={zoom} />
         )}

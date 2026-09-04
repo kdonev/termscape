@@ -1,16 +1,32 @@
 import { describe, expect, it } from 'vitest';
 import {
+  alignViewport,
+  alignZoom,
   clampZoom,
   fitTo,
   rectsIntersect,
+  renderScaleFor,
   screenToWorld,
+  snapWorldPx,
+  terminalFontSize,
   visibleWorldRect,
   worldToScreen,
   zoomAt,
+  BASE_FONT_SIZE,
   LIVE_ZOOM_THRESHOLD,
+  MAX_DEVICE_FONT,
   MAX_ZOOM,
+  MIN_DEVICE_FONT,
   MIN_ZOOM,
 } from '../src/canvas/viewport.js';
+
+/** The display scalings that actually matter: 100%, 125%, 150%, 200%. */
+const DPRS = [1, 1.25, 1.5, 2];
+
+/** A spread of awkward zooms, none of them landing on a round number. */
+const ZOOMS = [0.08, 0.19, 0.37, 0.6, 0.73, 0.91, 1, 1.13, 1.37, 1.62, 2.04, 2.5];
+
+const isInteger = (n: number) => Math.abs(n - Math.round(n)) < 1e-9;
 
 describe('coordinate transforms', () => {
   const v = { panX: 100, panY: 50, zoom: 2 };
@@ -85,6 +101,144 @@ describe('culling and level of detail', () => {
   it('has a live threshold inside the usable zoom range', () => {
     expect(LIVE_ZOOM_THRESHOLD).toBeGreaterThan(MIN_ZOOM);
     expect(LIVE_ZOOM_THRESHOLD).toBeLessThan(MAX_ZOOM);
+  });
+});
+
+describe('device-pixel alignment', () => {
+  it('lands text on a whole device pixel', () => {
+    for (const dpr of DPRS) {
+      for (const zoom of ZOOMS) {
+        const device = BASE_FONT_SIZE * alignZoom(zoom, dpr) * dpr;
+        if (device < MIN_DEVICE_FONT || device > MAX_DEVICE_FONT) continue;
+        expect(isInteger(device), `zoom ${zoom} @ dpr ${dpr} -> ${device}`).toBe(true);
+      }
+    }
+  });
+
+  it('nudges the zoom by at most half a device pixel of text', () => {
+    // This is the property that keeps zoom feeling continuous. A ladder of
+    // discrete zoom stops would pass every other test here and fail this one.
+    for (const dpr of DPRS) {
+      for (const zoom of ZOOMS) {
+        const aligned = alignZoom(zoom, dpr);
+        // The clamps at the ends of the range are allowed to move further.
+        if (aligned === MIN_ZOOM || aligned === MAX_ZOOM) continue;
+        expect(Math.abs(aligned - zoom)).toBeLessThanOrEqual(
+          0.5 / (BASE_FONT_SIZE * dpr) + 1e-9,
+        );
+      }
+    }
+  });
+
+  it('stays inside the zoom range', () => {
+    for (const dpr of DPRS) {
+      for (const zoom of [...ZOOMS, 0.001, 99]) {
+        const aligned = alignZoom(zoom, dpr);
+        expect(aligned).toBeGreaterThanOrEqual(MIN_ZOOM);
+        expect(aligned).toBeLessThanOrEqual(MAX_ZOOM);
+      }
+    }
+  });
+
+  it('is idempotent, so the settle effect cannot loop', () => {
+    for (const dpr of DPRS) {
+      for (const zoom of ZOOMS) {
+        const once = alignZoom(zoom, dpr);
+        expect(alignZoom(once, dpr)).toBeCloseTo(once, 12);
+      }
+    }
+  });
+});
+
+describe('renderScaleFor', () => {
+  it('matches the aligned zoom, so the terminal bitmap maps 1:1', () => {
+    for (const dpr of DPRS) {
+      for (const zoom of ZOOMS) {
+        const raw = BASE_FONT_SIZE * zoom * dpr;
+        if (raw < MIN_DEVICE_FONT || raw > MAX_DEVICE_FONT) continue;
+        expect(renderScaleFor(alignZoom(zoom, dpr), dpr)).toBeCloseTo(
+          alignZoom(zoom, dpr),
+          12,
+        );
+      }
+    }
+  });
+
+  it('keeps the glyph atlas within bounds at the extremes', () => {
+    for (const dpr of DPRS) {
+      for (const zoom of [MIN_ZOOM, MAX_ZOOM, 0.001, 99]) {
+        const device = terminalFontSize(renderScaleFor(zoom, dpr)) * dpr;
+        expect(device).toBeGreaterThanOrEqual(MIN_DEVICE_FONT - 1e-9);
+        expect(device).toBeLessThanOrEqual(MAX_DEVICE_FONT + 1e-9);
+      }
+    }
+  });
+
+  it('does not shrink text below legibility in the live band', () => {
+    // At LIVE_ZOOM_THRESHOLD a terminal is still interactive, so its text has
+    // to stay readable rather than following the zoom all the way down.
+    for (const dpr of DPRS) {
+      const device = terminalFontSize(renderScaleFor(LIVE_ZOOM_THRESHOLD, dpr)) * dpr;
+      expect(device).toBeGreaterThanOrEqual(MIN_DEVICE_FONT);
+    }
+  });
+});
+
+describe('alignViewport', () => {
+  const base = { panX: 137.42, panY: -88.6, zoom: 1.37 };
+
+  it('puts the pan on whole device pixels', () => {
+    for (const dpr of DPRS) {
+      const v = alignViewport(base, 1200, 800, dpr);
+      expect(isInteger(v.panX * dpr)).toBe(true);
+      expect(isInteger(v.panY * dpr)).toBe(true);
+    }
+  });
+
+  it('keeps the viewport centre fixed', () => {
+    for (const dpr of DPRS) {
+      const centre = { x: 600, y: 400 };
+      const world = screenToWorld(centre, base);
+      const back = worldToScreen(world, alignViewport(base, 1200, 800, dpr));
+      // Within the device pixel the pan was rounded to.
+      expect(Math.abs(back.x - centre.x)).toBeLessThanOrEqual(0.5 / dpr + 1e-9);
+      expect(Math.abs(back.y - centre.y)).toBeLessThanOrEqual(0.5 / dpr + 1e-9);
+    }
+  });
+
+  it('is idempotent', () => {
+    for (const dpr of DPRS) {
+      for (const zoom of ZOOMS) {
+        const once = alignViewport({ ...base, zoom }, 1200, 800, dpr);
+        expect(alignViewport(once, 1200, 800, dpr)).toEqual(once);
+      }
+    }
+  });
+});
+
+describe('snapWorldPx', () => {
+  it('lands a world coordinate on a whole device pixel', () => {
+    for (const dpr of DPRS) {
+      for (const zoom of ZOOMS) {
+        for (const v of [0, 137.42, -880.13, 4096.5]) {
+          expect(isInteger(snapWorldPx(v, zoom, dpr) * zoom * dpr)).toBe(true);
+        }
+      }
+    }
+  });
+
+  it('moves the coordinate by less than one device pixel', () => {
+    for (const dpr of DPRS) {
+      for (const zoom of ZOOMS) {
+        const moved = Math.abs(snapWorldPx(137.42, zoom, dpr) - 137.42) * zoom * dpr;
+        expect(moved).toBeLessThanOrEqual(0.5 + 1e-9);
+      }
+    }
+  });
+
+  it('passes the value through when there is no scale to snap to', () => {
+    expect(snapWorldPx(12.5, 0, 2)).toBe(12.5);
+    expect(snapWorldPx(12.5, Number.NaN, 2)).toBe(12.5);
   });
 });
 
