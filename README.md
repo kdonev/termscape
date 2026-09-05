@@ -27,11 +27,14 @@ npm run build
 npm run dev
 ```
 
-The hub prints a URL with a token. Open it, point a workspace at a folder, and
-start an agent in it.
+The hub prints a URL with a token. Open it and slide out the **machines**
+panel: every machine, the workspaces on it, and the agents in each. Point a
+workspace at a folder there, and start an agent in it.
 
-- **Scroll** to pan, **Ctrl/⌘ + scroll** to zoom, **Ctrl/⌘ + 1** to fit
+- **Scroll** to pan, **Ctrl/⌘ + scroll** to zoom, **Ctrl/⌘ + 1** to fit,
+  **Ctrl/⌘ + 2** to zoom to one terminal
 - Below 60% zoom terminals become preview cards — zoom in to interact
+- Clicking an agent in the panel brings the canvas to it
 
 ## How it fits together
 
@@ -78,16 +81,16 @@ one address you have to carry to another machine and enter by hand:
 - **The host** is this machine's own name when that name actually resolves to
   the address the hub bound — checked, not assumed. Windows resolves bare names
   over LLMNR/NetBIOS and macOS/Linux over mDNS, and neither is guaranteed, so
-  the hub prints the numeric URL underneath as a fallback and the hosts panel
-  offers it too. The canvas itself is reachable by name as well, token and all,
+  the hub prints the numeric URL underneath as a fallback and the machines
+  panel offers it too. The canvas itself is reachable by name as well, token and all,
   which is how you open it on a second screen or a phone.
 - **The port** is the first free one from `7777, 4242, 7333, 3333, ...`.
   `--port <n>` overrides it; `--port 0` takes whatever the OS hands out.
 
 That installs the hub into `~/.aicanvas` there and connects it back. The machine
-shows up in the **hosts** panel, and picking it when you create a workspace runs
-that workspace's agents on it — same addresses, same `send_message`, same
-canvas.
+appears in the **machines** panel with a node of its own, and a workspace added
+under that node runs its agents over there — same addresses, same
+`send_message`, same canvas.
 
 The installer works out what is missing before it changes anything:
 
@@ -109,9 +112,14 @@ listening. `~/.aicanvas/hub.log` on that machine has the detail.
 Re-running the join command on a machine that already joined is the supported
 way to update or repair it: it stops the hub running there, replaces the
 install, and rejoins with the token it already holds — or, if you had removed
-that host from the canvas, with the fresh key the command carries. Removing a host from the
-**hosts** panel stops its hub too, so the machine is not left running a daemon
-that belongs to nobody.
+that host from the canvas, with the fresh key the command carries. Removing a
+machine from the panel stops its hub too, so it is not left running a daemon
+that belongs to nobody — and takes the workspaces and agents on it with it,
+which the panel says before it does it.
+
+A re-join is quick after the first one: it keeps the dependency tree already
+installed there unless the dependencies, the Node version, or the platform
+have actually changed, and checks that tree really loads before trusting it.
 
 Two things worth knowing:
 
@@ -123,8 +131,8 @@ Two things worth knowing:
   rejoins by itself after a reboot or a dropped link — its agents keep running
   in the meantime.
 
-**If you can't stand at the other machine**, the hosts panel's *deploy over ssh*
-tab does the reverse: it connects with your SSH agent or a key, installs the hub
+**If you can't stand at the other machine**, the panel's *deploy over ssh* tab
+does the reverse: it connects with your SSH agent or a key, installs the hub
 over SFTP, starts it bound to that machine's loopback, and reaches it through a
 tunnel. Same protocol, opposite direction.
 
@@ -179,7 +187,7 @@ Two consequences worth knowing:
 
 ## Remote machines
 
-Add a host in the UI. The hub is copied over SSH, installed, and started as a
+Add a machine in the panel. The hub is copied over SSH, installed, and started as a
 detached daemon bound to the remote machine's loopback interface, reached only
 through an SSH tunnel. Because it is a daemon and not an `ssh` subprocess,
 remote agents keep running when the connection drops, and reattach with their
