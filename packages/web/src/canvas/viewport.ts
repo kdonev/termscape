@@ -277,6 +277,49 @@ export function workspaceBounds(members: Rect[]): Rect | null {
   };
 }
 
+/* ----------------------------------------------------- wheel gestures */
+
+/**
+ * Idle gap that ends one wheel gesture.
+ *
+ * Longer than PINCH_GAP_MS, which buys a verdict at the cost of dead time the
+ * user waits out. This one only has to outlast the pauses inside a single
+ * continuous two-finger scroll — including the momentum tail a trackpad keeps
+ * sending after the fingers lift — so it can afford to be generous.
+ */
+export const WHEEL_GAP_MS = 300;
+
+export type WheelOwner = 'canvas' | 'terminal';
+
+export interface WheelStream {
+  owner: WheelOwner;
+  lastAt: number;
+}
+
+/**
+ * Who the wheel stream in flight belongs to, given one more event.
+ *
+ * Ownership is settled at the *start* of a stream and then held. Deciding it per
+ * event instead — from whatever sits under the pointer right now — breaks the
+ * one gesture where the canvas is the thing moving: a two-finger pan started
+ * over empty canvas slides a window beneath a stationary cursor, and from that
+ * moment the rest of the gesture is delivered to the terminal, which starts
+ * scrolling while the canvas stops dead. Holding the owner is what makes a pan
+ * finish where it started, and symmetrically keeps a terminal's scroll its own.
+ *
+ * Zooming is the canvas's wherever the pointer is, which is the rule the wheel
+ * handler already followed.
+ */
+export function wheelStream(
+  prev: WheelStream | null,
+  ev: { now: number; zooming: boolean; overTerminal: boolean },
+): WheelStream {
+  if (prev && ev.now - prev.lastAt <= WHEEL_GAP_MS) {
+    return { owner: prev.owner, lastAt: ev.now };
+  }
+  return { owner: ev.overTerminal && !ev.zooming ? 'terminal' : 'canvas', lastAt: ev.now };
+}
+
 /* ----------------------------------------------------- pinch gestures */
 
 /*

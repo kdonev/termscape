@@ -20,11 +20,12 @@ import {
   screenToWorld,
   stepOutTo,
   visibleWorldRect,
+  wheelStream,
   wheelZoomFactor,
   workspaceBounds,
   zoomAt,
 } from './viewport.js';
-import type { Point, Rect } from './viewport.js';
+import type { Point, Rect, WheelStream } from './viewport.js';
 
 /**
  * How long the viewport must be still before we call a gesture finished.
@@ -80,6 +81,12 @@ export function Canvas() {
   const [size, setSize] = useState({ w: 1200, h: 800 });
   const [panning, setPanning] = useState(false);
   const panRef = useRef<{ x: number; y: number } | null>(null);
+  /**
+   * The wheel gesture in flight and who it belongs to. Held for the length of
+   * the gesture rather than re-decided per event, so a pan that started on the
+   * canvas is not handed to a window that has since slid under the pointer.
+   */
+  const streamRef = useRef<WheelStream | null>(null);
   // True from the first wheel/drag event until SETTLE_MS after the last one.
   // A superset of `panning`, which only tracks the grab cursor.
   const [interacting, setInteracting] = useState(false);
@@ -212,6 +219,12 @@ export function Canvas() {
 
   const onPointerMove = useCallback(
     (e: React.PointerEvent) => {
+      // A pointer that has actually moved is aiming somewhere new, so the next
+      // wheel event starts a fresh gesture instead of inheriting the last one's
+      // owner. Trackpad scrolling moves no cursor, so this only ever fires for
+      // a deliberate reaim with a mouse.
+      if (e.movementX || e.movementY) streamRef.current = null;
+
       const p = panRef.current;
       if (!p) return;
       markInteracting();
@@ -487,10 +500,16 @@ export function Canvas() {
       // reach a listener on the canvas. Hence the capture phase — but that
       // makes the canvas first in line for every wheel event on the page, so
       // the one case that is genuinely the terminal's gets handed straight
-      // back. Scrolling belongs to the terminal under the pointer; zooming
-      // belongs to the canvas, wherever the pointer happens to be.
+      // back. Scrolling belongs to the terminal the gesture *started* over;
+      // zooming belongs to the canvas, wherever the pointer happens to be.
       const zooming = e.ctrlKey || e.metaKey;
-      if (!zooming && (e.target as Element | null)?.closest?.('.term-host')) return;
+      const stream = wheelStream(streamRef.current, {
+        now: performance.now(),
+        zooming,
+        overTerminal: !!(e.target as Element | null)?.closest?.('.term-host'),
+      });
+      streamRef.current = stream;
+      if (!zooming && stream.owner === 'terminal') return;
 
       // preventDefault stops the browser's own page zoom, and stopPropagation
       // keeps the terminal below from also acting on an event we have taken.

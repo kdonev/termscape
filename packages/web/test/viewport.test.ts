@@ -18,6 +18,7 @@ import {
   stepOutTo,
   terminalFontSize,
   visibleWorldRect,
+  wheelStream,
   wheelZoomFactor,
   workspaceBounds,
   worldToScreen,
@@ -31,6 +32,7 @@ import {
   PINCH_MAX_MS,
   PINCH_MIN_EVENTS,
   PINCH_MIN_RATIO,
+  WHEEL_GAP_MS,
   WS_LABEL_H,
   WS_PAD,
 } from '../src/canvas/viewport.js';
@@ -541,5 +543,53 @@ describe('lerpViewport', () => {
       expect(progress).toBeGreaterThan(previous);
       previous = progress;
     }
+  });
+});
+
+describe('wheelStream', () => {
+  const at = (now: number, over: boolean, zooming = false) => ({
+    now,
+    overTerminal: over,
+    zooming,
+  });
+
+  it('keeps a pan on the canvas when a window slides under the pointer', () => {
+    // The reported bug: a two-finger pan started over empty canvas moves the
+    // world, a terminal drifts beneath a stationary cursor, and every event
+    // after that used to be handed to xterm mid-gesture.
+    let s = wheelStream(null, at(0, false));
+    expect(s.owner).toBe('canvas');
+    for (const t of [16, 32, 48, 64]) {
+      s = wheelStream(s, at(t, true));
+      expect(s.owner).toBe('canvas');
+      expect(s.lastAt).toBe(t);
+    }
+  });
+
+  it('keeps a scroll in the terminal it started in', () => {
+    let s = wheelStream(null, at(0, true));
+    expect(s.owner).toBe('terminal');
+    s = wheelStream(s, at(16, false));
+    expect(s.owner).toBe('terminal');
+  });
+
+  it('holds an owner across an unbroken gesture of any length', () => {
+    let s = wheelStream(null, at(0, false));
+    for (let t = WHEEL_GAP_MS; t <= WHEEL_GAP_MS * 10; t += WHEEL_GAP_MS) {
+      s = wheelStream(s, at(t, true));
+    }
+    expect(s.owner).toBe('canvas');
+  });
+
+  it('re-decides once the gesture has gone idle', () => {
+    const first = wheelStream(null, at(0, false));
+    const same = wheelStream(first, at(WHEEL_GAP_MS, true));
+    expect(same.owner).toBe('canvas');
+    const fresh = wheelStream(first, at(WHEEL_GAP_MS + 1, true));
+    expect(fresh.owner).toBe('terminal');
+  });
+
+  it('gives a pinch to the canvas wherever it starts', () => {
+    expect(wheelStream(null, at(0, true, true)).owner).toBe('canvas');
   });
 });
