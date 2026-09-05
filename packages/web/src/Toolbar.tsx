@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { useStore } from './state/store.js';
+import { pickValid } from './state/selection.js';
 import { Hosts } from './Hosts.js';
 
 /** Workspace creation, agent launching, and the message log. */
@@ -34,7 +35,12 @@ export function Toolbar() {
   const [showLog, setShowLog] = useState(false);
 
   const connectedHosts = hosts.filter((h) => h.state === 'connected');
-  const activeWs = wsId || workspaces[0]?.id || '';
+  // Resolved against the lists as they stand now rather than trusted: the
+  // socket reconnects without a page load, so a hub restart replaces every
+  // list while this component keeps the ids it picked before it.
+  const activeWs = pickValid(wsId, workspaces, true);
+  const activeHost = pickValid(hostId, connectedHosts);
+  const activeProfile = pickValid(profile, profiles, true);
   const stoppedInWs = sessions.filter(
     (s) => s.workspaceId === activeWs && s.state !== 'running',
   );
@@ -52,8 +58,8 @@ export function Toolbar() {
         <input
           className="input wide"
           placeholder={
-            hostId
-              ? `folder path on ${hosts.find((h) => h.id === hostId)?.label ?? 'that host'}`
+            activeHost
+              ? `folder path on ${hosts.find((h) => h.id === activeHost)!.label}`
               : 'folder path for a new workspace'
           }
           value={path}
@@ -71,7 +77,7 @@ export function Toolbar() {
           <select
             className="input"
             title="Which machine this workspace's folder is on"
-            value={hostId}
+            value={activeHost}
             onChange={(e) => setHostId(e.target.value)}
           >
             <option value="">this machine</option>
@@ -90,7 +96,7 @@ export function Toolbar() {
               t: 'createWorkspace',
               name: name.trim() || path.trim(),
               rootPath: path.trim(),
-              hostId: hostId || null,
+              hostId: activeHost || null,
             });
             setPath('');
             setName('');
@@ -117,7 +123,7 @@ export function Toolbar() {
 
         <select
           className="input"
-          value={profile}
+          value={activeProfile}
           onChange={(e) => setProfile(e.target.value)}
         >
           {profiles.map((p) => (
@@ -131,7 +137,11 @@ export function Toolbar() {
           className="btn primary"
           disabled={!activeWs}
           onClick={() =>
-            client?.send({ t: 'startSession', workspaceId: activeWs, profile })
+            client?.send({
+              t: 'startSession',
+              workspaceId: activeWs,
+              profile: activeProfile,
+            })
           }
         >
           start agent

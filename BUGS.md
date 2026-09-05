@@ -6,45 +6,7 @@ keeps the record.
 
 ---
 
-## 1. "unknown workspace" after a restart
-
-**What you see.** The hub is restarted. The canvas reconnects on its own and
-looks normal, but starting an agent fails with a red toast reading
-`unknown workspace <uuid>`. Reloading the page clears it.
-
-**What should happen.** A restart never leaves the canvas holding an identifier
-the hub does not have. If a workspace is gone, the picker drops it and says so
-rather than sending a dead id and surfacing the hub's internal error text.
-
-**Where it lives.**
-- `packages/hub/src/hub.ts:265` — the throw. It is the only one of the four
-  `unknown workspace` sites reachable from the browser: `startSession` looks up
-  `opts.workspaceId` exactly as it arrived on the wire. The two in
-  `session/manager.ts` sit behind `store.getSession`, whose `selectSession`
-  INNER JOINs `workspace` (`db/store.ts:207`), so a session whose workspace row
-  has gone is reported as an *unknown session* long before it reaches them.
-- `packages/web/src/Toolbar.tsx:32` — the likely source of the dead id. `wsId`,
-  `hostId` and `profile` are React state in a component that never unmounts.
-- `packages/web/src/net/client.ts:67` — the socket reconnects in place, without
-  a page load, and `packages/web/src/state/store.ts:87` then replaces
-  `workspaces`, `sessions` and the rest from the new `ready` frame. Component
-  state is not part of that, so a `wsId` chosen before the restart outlives the
-  workspace list it came from. `activeWs = wsId || workspaces[0]?.id` keeps
-  using it, and the `<select>` renders no matching `<option>` — so the control
-  looks like it is on the first workspace while sending a different id.
-- `store.ts:87` again for the same shape elsewhere: `ready` does not clear
-  `selectedId`, so a selection can outlive the session it points at.
-- Worth ruling out a second route to the same message before fixing only the
-  first: a workspace with a `hostId` is created on the peer as well
-  (`remote/peer-serve.ts:124`), and the session that comes back carries the
-  *peer's* workspace id, which is not a row in this database at all
-  (`remote/registry.ts:210`). Any local path that treats a remote session's
-  `workspaceId` as a local one produces this same error, and a host restarting
-  is when remote sessions are re-synced.
-
----
-
-## 2. The status dot does not follow what the agent is doing
+## 1. The status dot does not follow what the agent is doing
 
 **What you see.** The dot in a terminal's title bar stays on one colour. An
 agent that is mid-turn still shows green (idle), and one sitting at its prompt
@@ -74,7 +36,7 @@ plain shells via the heuristic.
 
 ---
 
-## 3. The window title never picks up the agent's own title
+## 2. The window title never picks up the agent's own title
 
 **What you see.** A terminal's header shows its canvas address
 (`workspace/name`) forever. Claude Code sets a terminal title describing what it

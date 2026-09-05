@@ -85,7 +85,7 @@ export const useStore = create<AppState>((set, get) => ({
   apply: (m) => {
     switch (m.t) {
       case 'ready':
-        set({
+        set((s) => ({
           hubVersion: m.state.hubVersion,
           enrollUrl: m.state.enrollUrl,
           enrollAltUrl: m.state.enrollAltUrl,
@@ -95,7 +95,14 @@ export const useStore = create<AppState>((set, get) => ({
           messages: m.state.messages,
           profiles: m.state.profiles,
           viewport: m.state.viewport,
-        });
+          // This arrives on every reconnect, not only the first, so it can
+          // replace the session list under a selection made before the hub
+          // restarted. Keeping that id would point the canvas at a window
+          // nothing draws any more.
+          selectedId: m.state.sessions.some((x) => x.id === s.selectedId)
+            ? s.selectedId
+            : null,
+        }));
         return;
 
       case 'sessionUpserted':
