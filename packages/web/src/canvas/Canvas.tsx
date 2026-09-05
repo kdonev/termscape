@@ -9,7 +9,6 @@ import {
   PINCH_GAP_MS,
   alignViewport,
   boundsOf,
-  clampZoom,
   fitTo,
   focusRect,
   lerpViewport,
@@ -680,53 +679,7 @@ export function Canvas() {
           ) : null,
         )}
       </div>
-
-      <ZoomIndicator
-        zoom={viewport.zoom}
-        onReset={() => glideTo({ panX: 0, panY: 0, zoom: 1 })}
-        onFit={() =>
-          glideTo(fitTo(sessions.map((s) => s.window), size.w, size.h))
-        }
-        onZoom={(dir) =>
-          glideTo(
-            zoomAt(
-              viewport,
-              { x: size.w / 2, y: size.h / 2 },
-              clampZoom(viewport.zoom * (dir > 0 ? 1.2 : 1 / 1.2)),
-            ),
-          )
-        }
-      />
     </div>
   );
 }
 
-function ZoomIndicator({
-  zoom,
-  onReset,
-  onFit,
-  onZoom,
-}: {
-  zoom: number;
-  onReset: () => void;
-  onFit: () => void;
-  onZoom: (dir: number) => void;
-}) {
-  return (
-    <div className="zoom-bar">
-      <button className="btn" onClick={() => onZoom(-1)} title="Zoom out">
-        −
-      </button>
-      <button className="btn wide" onClick={onReset} title="Reset to 100%">
-        {Math.round(zoom * 100)}%
-      </button>
-      <button className="btn" onClick={() => onZoom(1)} title="Zoom in">
-        +
-      </button>
-      <button className="btn" onClick={onFit} title="Fit all windows (Ctrl+1)">
-        fit
-      </button>
-      {zoom < LIVE_ZOOM_THRESHOLD && <span className="lod-badge">preview</span>}
-    </div>
-  );
-}

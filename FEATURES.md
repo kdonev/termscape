@@ -79,40 +79,7 @@ system without a place in the tree.
 
 ---
 
-## 2. Drop the zoom bar in the bottom-right corner
-
-**What it is.** Remove the floating zoom control — `−`, the percentage, `+`,
-`fit` — from the bottom-right of the canvas. Scroll and pinch already zoom, and
-the keyboard already resets and fits, so the bar is a fourth way to do what
-three other things do, sitting permanently on top of the canvas.
-
-**How it behaves.** It is gone. Nothing replaces it. What has to keep working
-after it goes:
-
-- **Ctrl/⌘ + scroll** and pinch to zoom, **Ctrl/⌘ + 0** to reset to 100%,
-  **Ctrl/⌘ + 1** to fit every window. These are the real controls and they are
-  already there — only the buttons go.
-- **The `preview` badge goes with the bar.** It lives inside it and is the one
-  thing in there that reports rather than acts: below `LIVE_ZOOM_THRESHOLD`
-  terminals become preview cards, and that badge is what says so. The cards
-  look different enough at that zoom to carry the message themselves, and the
-  empty state already spells out the rule. If it turns out to be missed, it
-  belongs on a card, not in a corner of the screen.
-
-**Where it lives.**
-
-- `packages/web/src/canvas/Canvas.tsx:684` — the `<ZoomIndicator>` element and
-  the `ZoomIndicator` component below it, along with the `onReset` / `onFit` /
-  `onZoom` closures passed to it. `glideTo`, `fitTo`, `zoomAt` and `clampZoom`
-  are all still used by the keyboard handler and the wheel path — check what is
-  left unused before deleting imports.
-- `packages/web/src/canvas/Canvas.tsx:547` — the keyboard handler, which keeps
-  every behaviour the bar offered. Nothing here changes.
-- `packages/web/src/styles.css:209` — the `.zoom-bar` and `.lod-badge` rules.
-
----
-
-## 3. The join script should not reinstall dependencies every time
+## 2. The join script should not reinstall dependencies every time
 
 **What it is.** Re-running the join command on a machine that has already
 joined spends a minute or two on `npm install`, every time, even when nothing

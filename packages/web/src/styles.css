@@ -204,28 +204,6 @@ body {
 .lod-status { font-size: 13px; color: var(--warn); }
 .lod-hint { font-size: 11px; opacity: 0.6; margin-top: 6px; }
 
-/* ---------------------------------------------------------- zoom bar */
-
-.zoom-bar {
-  position: absolute;
-  right: 14px; bottom: 14px;
-  display: flex;
-  gap: 4px;
-  align-items: center;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 4px;
-  z-index: 10;
-}
-.lod-badge {
-  font-size: 10px;
-  color: var(--warn);
-  padding: 0 6px;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-}
-
 /* ------------------------------------------------------- message log */
 
 .msg-log {
