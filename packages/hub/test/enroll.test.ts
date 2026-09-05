@@ -232,6 +232,36 @@ describe('the join page', () => {
     expect(ps).toContain('Invoke-Ticking');
   });
 
+  it('keeps a dependency tree that is still the right one', async () => {
+    const sh = (await app.inject({ method: 'GET', url: '/join.sh' })).body;
+    const ps = (await app.inject({ method: 'GET', url: '/join.ps1' })).body;
+
+    // Re-running the join command is the supported way to update or repair a
+    // machine, so it is the ordinary path - and npm install was the slowest
+    // step in it, every time, even with nothing about the tree changed.
+    for (const script of [sh, ps]) {
+      expect(script).toContain('deps.fingerprint');
+      expect(script).toContain('deps.stamp');
+      // The ABI, not only the dependency versions: these are compiled modules
+      // and a Node upgrade invalidates them without changing a version.
+      expect(script).toContain('process.platform');
+      // A stamp is a claim, not proof. The modules have to actually load.
+      expect(script).toContain('node-pty');
+    }
+
+    // Nothing to keep unless node_modules survives the install being replaced.
+    for (const script of [sh, ps]) expect(script).toContain('node_modules.kept');
+    expect(sh.indexOf('mv "$HOME_DIR/hub/node_modules"')).toBeLessThan(
+      sh.indexOf('rm -rf "$HOME_DIR/hub"'),
+    );
+
+    // PowerShell drops a double quote out of an argument on its way to a
+    // native command, which once handed node an unparseable expression and
+    // made the check fail open into a full install every run.
+    expect(ps).toContain("require('node-pty')");
+    expect(ps).not.toContain('require("node-pty")');
+  });
+
   it('runs npm without routing its stderr through a PowerShell stream', async () => {
     const ps = (await app.inject({ method: 'GET', url: '/join.ps1' })).body;
     // PS 5.1 wraps a native command's stderr in an ErrorRecord, so "npm *> log"

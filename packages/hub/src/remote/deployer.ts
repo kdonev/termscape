@@ -144,10 +144,40 @@ export async function provision(
   await upload(conn, opts.packagePath, `${remoteDir}/${tarball}`);
 
   log('installing on remote');
+  // The dependency tree is the slowest thing to rebuild over there and the
+  // tarball never carries one, so it is moved aside rather than deleted along
+  // with the install it lives in.
   await exec(
     conn,
-    `cd ${remoteDir} && rm -rf hub && mkdir -p hub && tar xzf ${tarball} -C hub --strip-components=1`,
+    `cd ${remoteDir} && rm -rf node_modules.kept` +
+      ` && if [ -d hub/node_modules ]; then mv hub/node_modules node_modules.kept; fi` +
+      ` && rm -rf hub && mkdir -p hub && tar xzf ${tarball} -C hub --strip-components=1` +
+      ` && if [ -d node_modules.kept ]; then mv node_modules.kept hub/node_modules; fi`,
   );
+
+  // What the tree already there has to match to be worth keeping: the
+  // fingerprint the tarball shipped, plus the two things it cannot know - the
+  // Node ABI those modules were built against, and the platform.
+  const stamp =
+    `"$(cat deps.fingerprint 2>/dev/null || echo none)-` +
+    `$(node -p 'process.versions.node.split(".")[0] + "-" + process.platform + "-" + process.arch')"`;
+
+  // The stamp claims the tree still works; the require confirms it does.
+  // Trusting the stamp alone would trade a slow deploy for a remote hub that
+  // cannot load its own modules.
+  const reusable = await exec(
+    conn,
+    `cd ${remoteDir}/hub && [ -d node_modules ]` +
+      ` && [ "$(cat ../deps.stamp 2>/dev/null)" = ${stamp} ]` +
+      ` && node -e 'require("node-pty"); require("better-sqlite3")'`,
+  );
+  if (reusable.code === 0) {
+    log('dependencies unchanged; keeping the modules already there');
+    return;
+  }
+
+  // A half-finished tree must not inherit the last deploy's stamp.
+  await exec(conn, `rm -f ${remoteDir}/deps.stamp`);
 
   // Prebuilt binaries first: node-pty and better-sqlite3 publish them for the
   // mainstream platforms, and downloading one beats compiling it every time.
@@ -169,6 +199,7 @@ export async function provision(
         `${install.stdout}\n${install.stderr}`,
     );
   }
+  await exec(conn, `cd ${remoteDir}/hub && printf '%s' ${stamp} > ../deps.stamp`);
   log('installed');
 }
 

@@ -212,35 +212,79 @@ note "got $(human "$(size_of "$HOME_DIR/hub.tgz")")"
 
 stop_running_hub
 
+# The dependency tree is the slowest thing here to rebuild and the tarball
+# never carries one, so it is moved aside rather than deleted along with the
+# rest of the install. Whether it can be kept is step 3's question.
+KEPT_MODULES="$HOME_DIR/node_modules.kept"
+rm -rf "$KEPT_MODULES"
+if [ -d "$HOME_DIR/hub/node_modules" ]; then
+  mv "$HOME_DIR/hub/node_modules" "$KEPT_MODULES"
+fi
+
 rm -rf "$HOME_DIR/hub"
 mkdir -p "$HOME_DIR/hub"
 tar xzf "$HOME_DIR/hub.tgz" -C "$HOME_DIR/hub" --strip-components=1
+if [ -d "$KEPT_MODULES" ]; then
+  mv "$KEPT_MODULES" "$HOME_DIR/hub/node_modules"
+fi
 note "unpacked into $HOME_DIR/hub"
 
 # --- install ----------------------------------------------------------------
 step 3/4 "dependencies"
-note "this is the slow part - a minute or two on a first run"
 note "full log: $HOME_DIR/install.log"
 cd "$HOME_DIR/hub"
 : >"$HOME_DIR/install.log"
 
-# Prebuilt binaries first: node-pty and better-sqlite3 publish them for the
-# mainstream platforms, and downloading one beats compiling it every time.
-if ! run_ticking "installing" "$NPM_BIN" install --omit=dev --no-audit --no-fund; then
+# What the tree already here would have to match to be worth keeping: the
+# fingerprint the tarball shipped, plus the two things it cannot know - the
+# Node ABI these modules were built against, and the platform.
+STAMP_FILE="$HOME_DIR/deps.stamp"
+FINGERPRINT=$(cat "$HOME_DIR/hub/deps.fingerprint" 2>/dev/null || echo none)
+NODE_ABI=$("$NODE_BIN" -p 'process.versions.node.split(".")[0] + "-" + process.platform + "-" + process.arch')
+WANT_STAMP="$FINGERPRINT-$NODE_ABI"
+
+# The stamp claims this tree still works. Confirming it does costs one Node
+# start, and is the whole difference between an optimisation and a machine
+# that joins with a hub unable to load its own modules.
+deps_reusable() {
+  [ -d "$HOME_DIR/hub/node_modules" ] || return 1
+  [ "$(cat "$STAMP_FILE" 2>/dev/null || true)" = "$WANT_STAMP" ] || return 1
+  "$NODE_BIN" -e "require('node-pty'); require('better-sqlite3')" >>"$HOME_DIR/install.log" 2>&1
+}
+
+install_deps() {
+  note "this is the slow part - a minute or two on a first run"
+  # A half-finished tree must not inherit the last run's stamp.
+  rm -f "$STAMP_FILE"
+
+  # Prebuilt binaries first: node-pty and better-sqlite3 publish them for the
+  # mainstream platforms, and downloading one beats compiling it every time.
+  if run_ticking "installing" "$NPM_BIN" install --omit=dev --no-audit --no-fund; then
+    return 0
+  fi
   note "no prebuilt binaries for this platform; compiling instead"
-  if ! run_ticking "compiling" "$NPM_BIN" install --omit=dev --no-audit --no-fund --build-from-source; then
-    tail -20 "$HOME_DIR/install.log" >&2
-    case "$(uname -s)" in
-      Darwin) TOOLCHAIN="xcode-select --install" ;;
-      *)      TOOLCHAIN="sudo apt install build-essential python3   # or your distro's equivalent" ;;
-    esac
-    fail \\
+  if run_ticking "compiling" "$NPM_BIN" install --omit=dev --no-audit --no-fund --build-from-source; then
+    return 0
+  fi
+
+  tail -20 "$HOME_DIR/install.log" >&2
+  case "$(uname -s)" in
+    Darwin) TOOLCHAIN="xcode-select --install" ;;
+    *)      TOOLCHAIN="sudo apt install build-essential python3   # or your distro's equivalent" ;;
+  esac
+  fail \\
 "Could not install node-pty and better-sqlite3.
 This machine has no prebuilt binaries and no C++ toolchain:
   $TOOLCHAIN
 Full log: $HOME_DIR/install.log
 Then re-run this command."
-  fi
+}
+
+if deps_reusable; then
+  note "unchanged since the last run - keeping the modules already here"
+else
+  install_deps
+  echo "$WANT_STAMP" >"$STAMP_FILE"
 fi
 
 # --- join -------------------------------------------------------------------
@@ -509,7 +553,18 @@ Fetch "$HubUrl/hub.tgz" $tgz $true
 Note "got $(Human (Get-Item $tgz).Length)"
 
 $hubDir = Join-Path $HomeDir 'hub'
+$hubModules = Join-Path $hubDir 'node_modules'
 Stop-RunningHub $hubDir
+
+# The dependency tree is the slowest thing here to rebuild and the tarball
+# never carries one, so it is moved aside rather than deleted along with the
+# rest of the install. Whether it can be kept is step 3's question. It also
+# means far less for the removal below to fail on: a loaded .node is the file
+# Windows refuses to delete.
+$keptModules = Join-Path $HomeDir 'node_modules.kept'
+if (Test-Path $keptModules) { Remove-Item -Recurse -Force $keptModules }
+if (Test-Path $hubModules) { Move-Item $hubModules $keptModules }
+
 if (Test-Path $hubDir) {
   try {
     Remove-Item -Recurse -Force $hubDir
@@ -522,26 +577,67 @@ if (Test-Path $hubDir) {
 New-Item -ItemType Directory -Force -Path $hubDir | Out-Null
 # tar ships with Windows 10 1803 and newer.
 tar xzf $tgz -C $hubDir --strip-components=1
+if (Test-Path $keptModules) { Move-Item $keptModules $hubModules }
 Note "unpacked into $hubDir"
 
 # --- install ----------------------------------------------------------------
 Step '3/4' 'dependencies'
-Note "this is the slow part - a minute or two on a first run"
 $log = Join-Path $HomeDir 'install.log'
 Note "full log: $log"
 Push-Location $hubDir
 
-# Prebuilt binaries first; compiling is the fallback, not the default.
-$npmArgs = '"' + $NpmCli + '" install --omit=dev --no-audit --no-fund'
-$rc = Invoke-Ticking 'installing' $NodeExe $npmArgs $log
-if ($rc -ne 0) {
-  Note "no prebuilt binaries for this platform; compiling instead"
-  $rc = Invoke-Ticking 'compiling' $NodeExe ($npmArgs + ' --build-from-source') $log
+# What the tree already here would have to match to be worth keeping: the
+# fingerprint the tarball shipped, plus the two things it cannot know - the
+# Node ABI these modules were built against, and the platform.
+$stampFile = Join-Path $HomeDir 'deps.stamp'
+$fingerprintFile = Join-Path $hubDir 'deps.fingerprint'
+$fingerprint = 'none'
+if (Test-Path $fingerprintFile) {
+  $fingerprint = ((Get-Content $fingerprintFile -TotalCount 1) + '').Trim()
+}
+# Single quotes inside a double-quoted string, deliberately: PowerShell
+# strips a double quote out of an argument on its way to a native command,
+# and this expression would reach node as unparseable JavaScript.
+$abiJs = "process.versions.node.split('.')[0] + '-' + process.platform + '-' + process.arch"
+$nodeAbi = & $NodeExe -p $abiJs
+$wantStamp = "$fingerprint-$nodeAbi"
+$haveStamp = ''
+if (Test-Path $stampFile) { $haveStamp = ((Get-Content $stampFile -TotalCount 1) + '').Trim() }
+
+$reusable = $false
+if ((Test-Path $hubModules) -and ($haveStamp -eq $wantStamp)) {
+  # The stamp claims this tree still works. Confirming it does costs one Node
+  # start, and is the whole difference between an optimisation and a machine
+  # that joins with a hub unable to load its own modules. The probe catches
+  # its own errors and reports through stdout and an exit code, so nothing
+  # reaches PowerShell's error stream - where 5.1 turns a native command's
+  # stderr into a terminating error.
+  $probe = "try { require('node-pty'); require('better-sqlite3') } catch (e) { console.log('dependency probe failed: ' + e.message); process.exit(1) }"
+  & $NodeExe -e $probe > $log
+  $reusable = ($LASTEXITCODE -eq 0)
+}
+
+if ($reusable) {
+  Note "unchanged since the last run - keeping the modules already here"
+} else {
+  Note "this is the slow part - a minute or two on a first run"
+  # A half-finished tree must not inherit the last run's stamp.
+  if (Test-Path $stampFile) { Remove-Item $stampFile -Force }
+
+  # Prebuilt binaries first; compiling is the fallback, not the default.
+  $npmArgs = '"' + $NpmCli + '" install --omit=dev --no-audit --no-fund'
+  $rc = Invoke-Ticking 'installing' $NodeExe $npmArgs $log
   if ($rc -ne 0) {
-    Get-Content $log -Tail 20 | Write-Host
-    Pop-Location
-    Fail "Could not install node-pty and better-sqlite3.\`nThis machine has no prebuilt binaries and no C++ toolchain. Install the Visual Studio Build Tools with the 'Desktop development with C++' workload:\`n  https://visualstudio.microsoft.com/visual-cpp-build-tools/\`nFull log: $log\`nThen re-run this command."
+    Note "no prebuilt binaries for this platform; compiling instead"
+    $rc = Invoke-Ticking 'compiling' $NodeExe ($npmArgs + ' --build-from-source') $log
+    if ($rc -ne 0) {
+      Get-Content $log -Tail 20 | Write-Host
+      Pop-Location
+      Fail "Could not install node-pty and better-sqlite3.\`nThis machine has no prebuilt binaries and no C++ toolchain. Install the Visual Studio Build Tools with the 'Desktop development with C++' workload:\`n  https://visualstudio.microsoft.com/visual-cpp-build-tools/\`nFull log: $log\`nThen re-run this command."
+    }
   }
+
+  Set-Content -Path $stampFile -Value $wantStamp -Encoding ascii
 }
 Pop-Location
 

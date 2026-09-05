@@ -15,8 +15,13 @@
  * - The tarball must not contain a previous copy of itself. Everything is
  *   assembled in a staging directory rather than packed from the source tree,
  *   which also means the repo's package.json is never rewritten in place.
+ *
+ * It also writes `deps.fingerprint`: what an installer compares to decide
+ * whether the dependency tree it already has is still the right one. See
+ * `depsFingerprint` below for what goes into it and why.
  */
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import {
   cpSync,
   existsSync,
@@ -26,6 +31,7 @@ import {
   readdirSync,
   renameSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -37,7 +43,42 @@ const repoRoot = join(pkgRoot, '..', '..');
 const dist = join(pkgRoot, 'dist');
 const target = join(dist, 'hub.tgz');
 
+const LF = String.fromCharCode(10);
 const VENDORED_PROTOCOL = 'vendor/aicanvas-protocol.tgz';
+
+/**
+ * What an installed dependency tree has to match to still be worth keeping.
+ *
+ * Two things go in. The dependency block, so a version change reinstalls. And
+ * the *contents* of the vendored protocol package, because it is a `file:`
+ * dependency whose version sits still across builds while its code changes
+ * underneath - comparing versions alone would happily reuse a tree holding
+ * last week's protocol.
+ *
+ * Contents rather than the packed tarball's bytes: npm records mtimes, so a
+ * hash of the tarball would differ on every rebuild and match nothing, ever.
+ *
+ * The other half of the answer - the Node ABI those modules were built
+ * against, and the platform - cannot be known here. The installer adds it.
+ */
+function depsFingerprint(dependencies, protocolDir) {
+  const h = createHash('sha256');
+  h.update(JSON.stringify(dependencies));
+  const walk = (dir, prefix) => {
+    for (const entry of readdirSync(dir).sort()) {
+      const full = join(dir, entry);
+      if (statSync(full).isDirectory()) {
+        walk(full, `${prefix}${entry}/`);
+      } else {
+        const bytes = readFileSync(full);
+        h.update(`${prefix}${entry} ${bytes.length} `).update(bytes);
+      }
+    }
+  };
+  walk(join(protocolDir, 'dist'), '');
+  h.update(readFileSync(join(protocolDir, 'package.json')));
+  return h.digest('hex').slice(0, 32);
+}
 
 function pack(cwdOrTarget, destination, workspace) {
   const args = ['pack', '--pack-destination', destination];
@@ -88,6 +129,13 @@ try {
   // Staging holds only what belongs in the tarball, so let npm take all of it.
   delete manifest.files;
   writeFileSync(join(staging, 'package.json'), `${JSON.stringify(manifest, null, 2)}\n`);
+
+  // Read on the far side by an installer deciding whether it can keep the
+  // node_modules it already has rather than spend a minute rebuilding one.
+  writeFileSync(
+    join(staging, 'deps.fingerprint'),
+    depsFingerprint(manifest.dependencies, join(repoRoot, 'packages', 'protocol')) + LF,
+  );
 
   mkdirSync(dist, { recursive: true });
   renameSync(pack(staging, scratch), target);
