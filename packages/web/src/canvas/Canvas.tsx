@@ -353,6 +353,19 @@ export function Canvas() {
     [glideTo, select],
   );
 
+  /**
+   * The tree panel asking for a window. Same path as the maximize button, so
+   * arriving from the list leaves the canvas in exactly the state arriving
+   * from the window's own control would.
+   */
+  const focusRequest = useStore((s) => s.focusRequest);
+  useEffect(() => {
+    if (focusRequest) focusSession(focusRequest.sessionId);
+    // Deliberately keyed on the request alone: focusSession changes identity
+    // with the viewport, and re-running on that would fly the canvas back to
+    // the last-clicked window every time the user panned away from it.
+  }, [focusRequest]);
+
   const toggleMaximize = useCallback(
     (sessionId: string) => {
       const state = maximizedRef.current;

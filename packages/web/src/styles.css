@@ -256,6 +256,9 @@ body {
 .empty-state h1 { font-size: 20px; color: var(--text); margin: 0 0 8px; }
 .empty-state p { margin: 0 0 10px; }
 .empty-state .hint { font-size: 11px; opacity: 0.7; }
+/* The panel is where a canvas with nothing on it gets started, so this one
+   control has to opt back out of the overlay's click-through. */
+.empty-state .btn { pointer-events: auto; }
 
 .errors {
   position: absolute;
@@ -293,52 +296,126 @@ body {
 }
 .error-close:hover { opacity: 1; }
 
-/* -------------------------------------------------------------- hosts */
+/* ------------------------------------------------------- tree panel */
 
-.hosts-wrap { position: relative; }
-
-.hosts-panel {
+/* Overlaid and translated, never sized: animating width would relayout the
+   canvas underneath on every frame of the slide. */
+.panel {
   position: absolute;
-  top: calc(100% + 8px);
-  right: 0;
-  width: 460px;
+  top: 0; right: 0; bottom: 0;
+  width: 420px;
+  max-width: 92vw;
+  display: flex;
+  flex-direction: column;
   background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 8px;
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+  border-left: 1px solid var(--border);
+  box-shadow: -18px 0 40px rgba(0, 0, 0, 0.45);
+  transform: translateX(100%);
+  transition: transform 180ms ease;
   z-index: 40;
 }
+.panel.open { transform: translateX(0); }
+/* Closed it is off screen but still focusable, which would let Tab wander
+   into a panel nobody can see. */
+.panel[aria-hidden='true'] { visibility: hidden; }
+.panel.open[aria-hidden='false'] { visibility: visible; }
 
-.host-row {
+.panel-head {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 7px 8px;
-  border-radius: 7px;
-  background: var(--panel-2);
-  margin-bottom: 6px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
 }
-.host-row .dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; }
-.host-main { flex: 1; min-width: 0; }
-.host-label { font-weight: 600; font-size: 12px; }
-.host-sub { color: var(--muted); font-size: 11px; }
-.host-error { color: var(--danger); font-size: 11px; margin-top: 3px; word-break: break-word; }
+.panel-title { font-weight: 650; }
+.panel-body { flex: 1; overflow-y: auto; padding: 8px; }
 
-.host-log {
-  margin-top: 4px;
+.node {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 7px;
+  border-radius: 6px;
+  min-width: 0;
+}
+.node .dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; }
+.node-label {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 0 1 auto;
+}
+.node-sub {
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+.node.machine { background: var(--panel-2); margin-top: 6px; }
+.node.session { cursor: pointer; }
+.node.session:hover { background: var(--panel-2); }
+.node.session.on { background: #1b2540; box-shadow: inset 0 0 0 1px var(--accent); }
+.node .btn { padding: 2px 7px; font-size: 11px; }
+
+/* One indent per level, drawn as a rule so a deep tree stays readable. */
+.node-children {
+  margin-left: 11px;
+  padding-left: 9px;
+  border-left: 1px solid var(--border);
+}
+.node-empty { color: var(--muted); font-size: 11px; padding: 4px 8px; }
+.node-error { color: var(--danger); font-size: 11px; padding: 2px 8px 4px 26px; word-break: break-word; }
+.node-log {
   color: var(--muted);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 10.5px;
   line-height: 1.35;
+  padding: 2px 8px 4px 26px;
   word-break: break-word;
 }
+.node-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding: 5px 7px 8px;
+}
+.node-form .input { min-width: 90px; flex: 1 1 120px; }
+.node-form .input.wide { min-width: 140px; flex: 3 1 200px; }
+
+.twisty {
+  background: none;
+  border: 0;
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+  padding: 0;
+  width: 14px;
+  flex: 0 0 auto;
+}
+.twisty:hover { color: var(--text); }
+
+.add-machine { margin: 10px 0 0 7px; }
+.add-machine-panel {
+  margin-top: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px;
+}
+
+/* -------------------------------------------------- attaching a machine */
 
 .host-tabs {
   display: flex;
+  align-items: center;
   gap: 4px;
-  padding-top: 8px;
-  border-top: 1px solid var(--border);
+  padding-bottom: 8px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--border);
 }
 .host-tabs .tab {
   flex: 1;

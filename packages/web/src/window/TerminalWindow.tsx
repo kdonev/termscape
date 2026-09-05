@@ -4,6 +4,7 @@ import type { Session, Workspace } from '@aicanvas/protocol';
 import { useStore } from '../state/store.js';
 import { TerminalView } from './Terminal.js';
 import { LIVE_ZOOM_THRESHOLD, snapWorldPx } from '../canvas/viewport.js';
+import { statusColor, statusLabel } from './status.js';
 
 interface Props {
   session: Session;
@@ -21,19 +22,6 @@ interface Props {
 
 const MIN_W = 320;
 const MIN_H = 200;
-
-/** Status chip colour follows the agent's activity, not its process state. */
-function statusColor(s: Session): string {
-  if (s.state === 'running') return s.status === 'busy' ? '#d8b271' : '#88c07a';
-  if (s.state === 'failed') return '#e06c75';
-  if (s.state === 'exited') return '#4a5262';
-  return '#7c8596';
-}
-
-function statusLabel(s: Session): string {
-  if (s.state !== 'running') return s.state;
-  return s.status === 'busy' ? 'working' : s.status === 'idle' ? 'idle' : 'running';
-}
 
 export const TerminalWindow = memo(function TerminalWindow({
   session,

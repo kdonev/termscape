@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { Canvas } from './canvas/Canvas.js';
 import { Toolbar } from './Toolbar.js';
+import { Panel } from './panel/Panel.js';
 import { useStore } from './state/store.js';
 import { HubClient } from './net/client.js';
 
@@ -19,8 +20,17 @@ function resolveToken(): string {
 }
 
 export function App() {
-  const { init, apply, setConnected, errors, dismissError, sessions, connected } =
-    useStore(useShallow((s) => ({
+  const {
+    init,
+    apply,
+    setConnected,
+    errors,
+    dismissError,
+    sessions,
+    connected,
+    setPanelOpen,
+  } = useStore(
+    useShallow((s) => ({
       init: s.init,
       apply: s.apply,
       setConnected: s.setConnected,
@@ -28,7 +38,9 @@ export function App() {
       dismissError: s.dismissError,
       sessions: s.sessions,
       connected: s.connected,
-    })));
+      setPanelOpen: s.setPanelOpen,
+    })),
+  );
 
   useEffect(() => {
     const token = resolveToken();
@@ -48,18 +60,22 @@ export function App() {
     <div className="app">
       <Toolbar />
       <Canvas />
+      <Panel />
 
       {sessions.length === 0 && connected && (
         <div className="empty-state">
           <h1>Nothing running yet</h1>
           <p>
-            Add a workspace by pointing it at a folder, then start an agent in
-            it. Agents in the same workspace can find each other, message each
-            other, and spawn helpers.
+            Open the machines panel, point a workspace at a folder, and start
+            an agent in it. Agents in the same workspace can find each other,
+            message each other, and spawn helpers.
           </p>
           <p className="hint">
             Scroll to pan · Ctrl/⌘ + scroll to zoom · Ctrl/⌘ + 1 to fit
           </p>
+          <button className="btn primary" onClick={() => setPanelOpen(true)}>
+            open the machines panel
+          </button>
         </div>
       )}
 

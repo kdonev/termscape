@@ -2,112 +2,53 @@ import { useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { useStore } from './state/store.js';
 
-const STATE_COLOR: Record<string, string> = {
-  connected: '#88c07a',
-  connecting: '#d8b271',
-  disconnected: '#7c8596',
-  error: '#e06c75',
-};
-
-/** Add and monitor remote machines running their own hub. */
-export function Hosts() {
-  const { hosts, hostLogs, enrollUrl, enrollAltUrl, client } = useStore(
-    useShallow((s) => ({
-      hosts: s.hosts,
-      hostLogs: s.hostLogs,
-      enrollUrl: s.enrollUrl,
-      enrollAltUrl: s.enrollAltUrl,
-      client: s.client,
-    })),
+/**
+ * Attaching a machine, both directions.
+ *
+ * The tree panel lists the machines already attached; this is the last node
+ * under it, and the only place either of these forms appears. The join flow
+ * needs nothing from the user, so it leads.
+ */
+export function AddMachine() {
+  const { enrollUrl, enrollAltUrl } = useStore(
+    useShallow((s) => ({ enrollUrl: s.enrollUrl, enrollAltUrl: s.enrollAltUrl })),
   );
   const [open, setOpen] = useState(false);
-  // The join flow needs nothing from the user, so it leads.
   const [tab, setTab] = useState<'join' | 'ssh'>('join');
 
-  const connected = hosts.filter((h) => h.state === 'connected').length;
+  if (!open) {
+    return (
+      <button className="btn add-machine" onClick={() => setOpen(true)}>
+        + machine
+      </button>
+    );
+  }
 
   return (
-    <div className="hosts-wrap">
-      <button className="btn" onClick={() => setOpen((v) => !v)}>
-        hosts ({connected}/{hosts.length})
-      </button>
+    <div className="add-machine-panel">
+      <div className="host-tabs">
+        <button
+          className={`tab ${tab === 'join' ? 'on' : ''}`}
+          onClick={() => setTab('join')}
+        >
+          join from that machine
+        </button>
+        <button
+          className={`tab ${tab === 'ssh' ? 'on' : ''}`}
+          onClick={() => setTab('ssh')}
+        >
+          deploy over ssh
+        </button>
+        <span className="spacer" />
+        <button className="btn" onClick={() => setOpen(false)}>
+          close
+        </button>
+      </div>
 
-      {open && (
-        <div className="hosts-panel">
-          {hosts.length === 0 && (
-            <div className="msg-empty">
-              No remote hosts. Add one to run agents on another machine.
-            </div>
-          )}
-
-          {hosts.map((h) => {
-            const log = hostLogs[h.id] ?? [];
-            return (
-              <div key={h.id} className="host-row">
-                <span
-                  className="dot"
-                  style={{ background: STATE_COLOR[h.state] ?? '#7c8596' }}
-                />
-                <div className="host-main">
-                  <div className="host-label">{h.label}</div>
-                  <div className="host-sub">
-                    {h.kind === 'enrolled'
-                      ? h.platform ?? 'joined'
-                      : `${h.sshUser}@${h.sshHost}:${h.sshPort}`}
-                    {h.hubVersion ? ` · hub ${h.hubVersion}` : ''}
-                  </div>
-                  {h.error && <div className="host-error">{h.error}</div>}
-                  {h.state === 'connecting' && log.length > 0 && (
-                    <div className="host-log">
-                      {log.map((line, i) => (
-                        <div key={i}>{line}</div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-                {/* An enrolled host reaches us, so there is nothing here to
-                    dial; only a deployed one can be reconnected from here. */}
-                {h.kind === 'ssh' && (
-                  <button
-                    className="btn"
-                    title="Reconnect and redeploy if needed"
-                    onClick={() => client?.send({ t: 'connectHost', hostId: h.id })}
-                  >
-                    {h.state === 'connected' ? 'reconnect' : 'connect'}
-                  </button>
-                )}
-                <button
-                  className="btn danger"
-                  title="Remove this host"
-                  onClick={() => client?.send({ t: 'removeHost', hostId: h.id })}
-                >
-                  ×
-                </button>
-              </div>
-            );
-          })}
-
-          <div className="host-tabs">
-            <button
-              className={`tab ${tab === 'join' ? 'on' : ''}`}
-              onClick={() => setTab('join')}
-            >
-              join from that machine
-            </button>
-            <button
-              className={`tab ${tab === 'ssh' ? 'on' : ''}`}
-              onClick={() => setTab('ssh')}
-            >
-              deploy over ssh
-            </button>
-          </div>
-
-          {tab === 'join' ? (
-            <JoinTab enrollUrl={enrollUrl} enrollAltUrl={enrollAltUrl} />
-          ) : (
-            <SshForm />
-          )}
-        </div>
+      {tab === 'join' ? (
+        <JoinTab enrollUrl={enrollUrl} enrollAltUrl={enrollAltUrl} />
+      ) : (
+        <SshForm />
       )}
     </div>
   );

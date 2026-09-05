@@ -345,7 +345,7 @@ export async function serve(opts: ServeOptions): Promise<ServeResult> {
           return;
 
         case 'removeWorkspace':
-          hub.removeWorkspace(msg.workspaceId);
+          await hub.removeWorkspace(msg.workspaceId);
           return;
 
         case 'startSession':

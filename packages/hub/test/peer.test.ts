@@ -276,6 +276,32 @@ describe('remote window removal', () => {
     );
     expect(hubA.peers.sessions().some((s) => s.address === 'remotews/ghost')).toBe(false);
   });
+
+  it('takes the agents of a remote workspace with it when it goes', async () => {
+    const host = hubA.store.listHosts()[0]!;
+    // The whole path as the canvas walks it: a workspace row here pointed at
+    // a host, and an agent started through it that runs over there.
+    const ws = hubA.createWorkspace('doomedws', process.cwd(), host.id);
+    const agent = await hubA.startSession({ workspaceId: ws.id, profile: 'shell' });
+    await waitFor(
+      () => hubB.sessions.getByAddress(agent.address) !== null,
+      15_000,
+      'the agent to start on the host',
+    );
+
+    await hubA.removeWorkspace(ws.id);
+
+    // Without this the peer keeps running it, and the next resync brings it
+    // back as a window belonging to a workspace that no longer exists.
+    await waitFor(
+      () => hubB.sessions.getByAddress(agent.address) === null,
+      15_000,
+      'the removal to reach the host',
+    );
+    expect(hubA.peers.sessions().some((s) => s.address === agent.address)).toBe(false);
+    // Everything else on that host is left alone.
+    expect(hubB.sessions.getByAddress('remotews/worker')).not.toBeNull();
+  });
 });
 
 describe('peer loss', () => {

@@ -37,6 +37,15 @@ interface AppState {
   viewport: Viewport;
   flashes: MessageFlash[];
   selectedId: string | null;
+  /**
+   * A request from outside the canvas to bring one window into view. The
+   * canvas owns the viewport and the animation, so this is a request rather
+   * than a viewport: the timestamp is what makes asking twice for the same
+   * window a second request rather than a no-op.
+   */
+  focusRequest: { sessionId: string; at: number } | null;
+  /** Whether the tree panel is slid out over the canvas. */
+  panelOpen: boolean;
   /** Snapshots delivered on attach, consumed once by the terminal component. */
   pendingSnapshots: Map<string, string>;
   errors: string[];
@@ -49,6 +58,8 @@ interface AppState {
   setViewport: (v: Viewport) => void;
   moveWindow: (sessionId: string, rect: WindowRect) => void;
   select: (id: string | null) => void;
+  requestFocus: (sessionId: string) => void;
+  setPanelOpen: (open: boolean) => void;
   takeSnapshot: (sessionId: string) => string | null;
   dismissError: (i: number) => void;
 }
@@ -75,6 +86,8 @@ export const useStore = create<AppState>((set, get) => ({
   viewport: { panX: 0, panY: 0, zoom: 1 },
   flashes: [],
   selectedId: null,
+  focusRequest: null,
+  panelOpen: false,
   pendingSnapshots: new Map(),
   errors: [],
   client: null,
@@ -190,6 +203,11 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   select: (selectedId) => set({ selectedId }),
+
+  requestFocus: (sessionId) =>
+    set({ selectedId: sessionId, focusRequest: { sessionId, at: Date.now() } }),
+
+  setPanelOpen: (panelOpen) => set({ panelOpen }),
 
   takeSnapshot: (sessionId) => {
     const s = get().pendingSnapshots.get(sessionId);

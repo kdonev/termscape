@@ -4,6 +4,7 @@ import { existsSync } from 'node:fs';
 import { basename, resolve } from 'node:path';
 import {
   encodeInjection,
+  parseAddress,
   slugify,
   type Message,
   type Host,
@@ -160,10 +161,25 @@ export class Hub extends EventEmitter implements AgentApi {
     return ws;
   }
 
-  removeWorkspace(id: string): void {
+  async removeWorkspace(id: string): Promise<void> {
+    const ws = this.store.getWorkspace(id);
     for (const s of this.sessions.list().filter((s) => s.workspaceId === id)) {
       this.sessions.remove(s.id);
     }
+
+    // A workspace on a host owns no PTY here: its agents run over there, and
+    // the peer has to be told about each one or they come back on the next
+    // resync as windows belonging to a workspace that no longer exists. The
+    // peer's own workspace id means nothing in this database, so they are
+    // found the only way they can be - by the workspace half of the address.
+    if (ws?.hostId) {
+      for (const s of this.peers.sessions()) {
+        if (parseAddress(s.address)?.workspace === ws.name) {
+          await this.peers.removeSession(s.address);
+        }
+      }
+    }
+
     this.store.removeWorkspace(id);
     this.emit('workspaceRemoved', id);
   }
