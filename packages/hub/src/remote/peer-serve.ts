@@ -147,6 +147,16 @@ export function createPeerServer(hub: Hub, clientToken: string): PeerServer {
             return ok({ stopped: req.address });
           }
 
+          case 'removeSession': {
+            const t = hub.sessions.getByAddress(req.address);
+            // Already gone is the outcome that was asked for, not an error:
+            // the canvas retries deferred removals and must not stall on one
+            // that a previous attempt already applied.
+            if (!t) return ok({ removed: req.address });
+            hub.sessions.remove(t.id);
+            return ok({ removed: req.address });
+          }
+
           case 'resumeSession': {
             const t = hub.sessions.getByAddress(req.address);
             if (!t) return err(`no agent at address "${req.address}"`);

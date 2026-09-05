@@ -147,6 +147,25 @@ export const MIGRATIONS: Migration[] = [
       ALTER TABLE host ADD COLUMN platform      TEXT;
     `,
   },
+  {
+    version: 4,
+    name: 'pending_removals',
+    up: `
+      -- A window the user closed while its host was unreachable.
+      --
+      -- The intent outlives the disconnection. Without this the removal is
+      -- lost with the process and the peer reports the session again on its
+      -- next connection, which is what made closed terminals come back after
+      -- a restart. Replayed the moment that host is reachable again.
+      CREATE TABLE pending_removal (
+        address      TEXT PRIMARY KEY,
+        host_id      TEXT NOT NULL REFERENCES host(id) ON DELETE CASCADE,
+        requested_at INTEGER NOT NULL
+      );
+
+      CREATE INDEX idx_pending_removal_host ON pending_removal(host_id);
+    `,
+  },
 ];
 
 export function runMigrations(db: Database): number {

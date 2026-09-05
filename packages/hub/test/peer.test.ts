@@ -29,6 +29,8 @@ let appB: FastifyInstance;
 let originA: string;
 let wsA: string;
 let wsB: string;
+/** B's peer endpoint, so a test can re-dial it after dropping the link. */
+let peerUrlB: string;
 
 const PEER_TOKEN = 'peer-token-for-tests';
 const outputB = new Map<string, string>();
@@ -102,7 +104,8 @@ beforeAll(async () => {
     error: null,
   };
   hubA.store.upsertHost(host);
-  hubA.peers.add(host, `ws://127.0.0.1:${portB}/peer`, PEER_TOKEN);
+  peerUrlB = `ws://127.0.0.1:${portB}/peer`;
+  hubA.peers.add(host, peerUrlB, PEER_TOKEN);
 
   await waitFor(() => hubA.peers.peer(host.id)?.connected === true, 15_000, 'peer link');
 }, 60_000);
@@ -216,6 +219,62 @@ describe('cross-host messaging', () => {
     expect(res.isError).toBe(true);
     expect(res.content[0].text).toMatch(/no agent at address/i);
     await client.close();
+  });
+});
+
+describe('remote window removal', () => {
+  it('removes the session on the hub that owns it', async () => {
+    await hubB.startSession({ workspaceId: wsB, profile: 'shell', name: 'doomed' });
+    await waitFor(
+      () => hubA.peers.sessions().some((s) => s.address === 'remotews/doomed'),
+      15_000,
+      'remote session to appear locally',
+    );
+    hubA.peers.saveLayout('remotews/doomed', {
+      x: 10, y: 20, w: 720, h: 460, z: 0, collapsed: false,
+    });
+
+    expect(await hubA.peers.removeSession('remotews/doomed')).toBe(true);
+
+    // Gone where it actually lives, not merely hidden here.
+    expect(hubB.sessions.getByAddress('remotews/doomed')).toBeNull();
+    expect(hubA.peers.sessions().some((s) => s.address === 'remotews/doomed')).toBe(false);
+    // The saved layout goes too, or a session of the same name inherits it.
+    expect(hubA.store.getRemoteWindows().has('remotews/doomed')).toBe(false);
+    expect(hubA.store.pendingRemovals()).toEqual([]);
+  });
+
+  it('replays a removal requested while the host was unreachable', async () => {
+    const host = hubA.store.listHosts()[0]!;
+    await hubB.startSession({ workspaceId: wsB, profile: 'shell', name: 'ghost' });
+    await waitFor(
+      () => hubA.peers.sessions().some((s) => s.address === 'remotews/ghost'),
+      15_000,
+      'remote session to appear locally',
+    );
+
+    hubA.peers.peer(host.id)!.close();
+    expect(await hubA.peers.removeSession('remotews/ghost')).toBe(true);
+
+    // The window goes now — the user closed it — and the instruction waits.
+    expect(hubA.peers.sessions().some((s) => s.address === 'remotews/ghost')).toBe(false);
+    expect(hubA.store.pendingRemovals().map((p) => p.address)).toEqual(['remotews/ghost']);
+    expect(hubB.sessions.getByAddress('remotews/ghost')).not.toBeNull();
+
+    // Reconnecting is what makes it stick. This is the restart path: the queue
+    // outlived the link, so the session cannot come back with it.
+    hubA.peers.add(host, peerUrlB, PEER_TOKEN);
+    await waitFor(
+      () => hubB.sessions.getByAddress('remotews/ghost') === null,
+      15_000,
+      'deferred removal to reach the host',
+    );
+    await waitFor(
+      () => hubA.store.pendingRemovals().length === 0,
+      10_000,
+      'the queue to drain',
+    );
+    expect(hubA.peers.sessions().some((s) => s.address === 'remotews/ghost')).toBe(false);
   });
 });
 

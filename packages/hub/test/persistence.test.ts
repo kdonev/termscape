@@ -161,6 +161,31 @@ describe('store round-trips', () => {
     db.close();
   });
 
+  it('keeps a deferred removal until it is cleared, and drops it with its host', () => {
+    const { db, store } = seed();
+    store.upsertHost({
+      id: 'h1', label: 'kid', kind: 'enrolled', sshHost: null, sshUser: null,
+      sshPort: 22, platform: null, hubVersion: null, state: 'disconnected',
+      lastSeenAt: null, error: null,
+    });
+
+    store.addPendingRemoval('remote/one', 'h1');
+    store.addPendingRemoval('remote/two', 'h1');
+    expect(store.pendingRemovals('h1').map((p) => p.address)).toEqual([
+      'remote/one',
+      'remote/two',
+    ]);
+
+    store.clearPendingRemoval('remote/one');
+    expect(store.pendingRemovals().map((p) => p.address)).toEqual(['remote/two']);
+
+    // Dropping the host drops any instruction still queued for it: there is
+    // nobody left to tell.
+    store.removeHost('h1');
+    expect(store.pendingRemovals()).toEqual([]);
+    db.close();
+  });
+
   it('records message delivery outcomes, including failures', () => {
     const { db, store } = seed();
     store.insertMessage({

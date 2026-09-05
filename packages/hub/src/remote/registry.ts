@@ -68,6 +68,9 @@ export class PeerRegistry extends EventEmitter {
 
     peer.on('connected', (version: string) => {
       this.updateHost(host.id, { state: 'connected', hubVersion: version, error: null });
+      // A host that was unreachable when the user closed one of its windows
+      // has an instruction waiting for it.
+      void this.flushPendingRemovals(host.id, peer);
     });
 
     peer.on('disconnected', () => {
@@ -82,13 +85,21 @@ export class PeerRegistry extends EventEmitter {
     });
 
     peer.on('sessions', (sessions: Session[]) => {
+      // A removal still queued for this host must not put its window back on
+      // the canvas in the meantime — and withLocalLayout would mint it a fresh
+      // layout row on the way past, undoing the close a second time.
+      const pending = new Set(this.store.pendingRemovals(host.id).map((p) => p.address));
       const map = new Map<string, Session>();
-      for (const s of sessions) map.set(s.address, this.withLocalLayout(host.id, s));
+      for (const s of sessions) {
+        if (pending.has(s.address)) continue;
+        map.set(s.address, this.withLocalLayout(host.id, s));
+      }
       this.remote.set(host.id, map);
       this.emit('peerSessionsChanged', host.id);
     });
 
     peer.on('sessionUpserted', (s: Session) => {
+      if (this.isPendingRemoval(host.id, s.address)) return;
       const map = this.remote.get(host.id) ?? new Map<string, Session>();
       map.set(s.address, this.withLocalLayout(host.id, s));
       this.remote.set(host.id, map);
@@ -96,9 +107,7 @@ export class PeerRegistry extends EventEmitter {
     });
 
     peer.on('sessionRemoved', (address: string) => {
-      this.remote.get(host.id)?.delete(address);
-      this.store.removeRemoteWindow(address);
-      this.emit('peerSessionRemoved', address);
+      this.forget(address);
     });
 
     peer.on('output', (address: string, data: string) => {
@@ -208,6 +217,65 @@ export class PeerRegistry extends EventEmitter {
     }
     return null;
   }
+
+  /* ------------------------------------------------------------ removal */
+
+  /**
+   * Close a remote window for good.
+   *
+   * Returns false for an address this registry does not own, so the caller can
+   * fall through to its local path — the same shape as saveLayout.
+   *
+   * The window goes either way: the user closed it, and making that conditional
+   * on a host being up would be its own kind of broken. What varies is only
+   * when the owning hub hears about it.
+   */
+  async removeSession(address: string): Promise<boolean> {
+    const hostId = this.hostIdFor(address);
+    if (!hostId) return false;
+    const peer = this.peers.get(hostId);
+    this.forget(address);
+    try {
+      if (!peer?.connected) throw new Error(`host ${hostId} is not connected`);
+      await peer.request({ t: 'removeSession', id: randomUUID(), address });
+    } catch {
+      // Unreachable, or it went away mid-request. The instruction waits in the
+      // database rather than dying with this process, which is precisely what
+      // used to let a closed terminal come back after a restart.
+      this.store.addPendingRemoval(address, hostId);
+    }
+    return true;
+  }
+
+  /**
+   * Replay removals queued while a host was unreachable. Each one is
+   * idempotent over there, so a row whose removal already landed costs one
+   * round trip and nothing else.
+   */
+  private async flushPendingRemovals(hostId: string, peer: PeerConnection): Promise<void> {
+    for (const { address } of this.store.pendingRemovals(hostId)) {
+      try {
+        await peer.request({ t: 'removeSession', id: randomUUID(), address });
+        this.forget(address);
+      } catch {
+        // Still out of reach. The row survives for the next connection.
+      }
+    }
+  }
+
+  /** Drop every local trace of a remote session: cache, layout, and queue. */
+  private forget(address: string): void {
+    for (const map of this.remote.values()) map.delete(address);
+    this.store.removeRemoteWindow(address);
+    this.store.clearPendingRemoval(address);
+    this.emit('peerSessionRemoved', address);
+  }
+
+  private isPendingRemoval(hostId: string, address: string): boolean {
+    return this.store.pendingRemovals(hostId).some((p) => p.address === address);
+  }
+
+  /* ------------------------------------------------------------- layout */
 
   saveLayout(address: string, rect: WindowRect): boolean {
     for (const [hostId, map] of this.remote) {

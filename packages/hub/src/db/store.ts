@@ -381,6 +381,36 @@ export class Store {
     this.db.prepare('DELETE FROM remote_window WHERE address = ?').run(address);
   }
 
+  /* ----------------------------------------------- deferred removals */
+
+  /**
+   * Addresses the user closed while their host was unreachable, kept until
+   * that host can be told. Keyed by address for the same reason remote_window
+   * is: the owning hub's session id means nothing in this database.
+   */
+  pendingRemovals(hostId?: string): { address: string; hostId: string }[] {
+    const rows = (
+      hostId
+        ? this.db.prepare('SELECT * FROM pending_removal WHERE host_id = ?').all(hostId)
+        : this.db.prepare('SELECT * FROM pending_removal').all()
+    ) as any[];
+    return rows.map((r) => ({ address: r.address, hostId: r.host_id }));
+  }
+
+  addPendingRemoval(address: string, hostId: string): void {
+    this.db
+      .prepare(
+        `INSERT INTO pending_removal (address, host_id, requested_at)
+         VALUES (@address, @hostId, @requestedAt)
+         ON CONFLICT(address) DO UPDATE SET host_id=@hostId, requested_at=@requestedAt`,
+      )
+      .run({ address, hostId, requestedAt: Date.now() });
+  }
+
+  clearPendingRemoval(address: string): void {
+    this.db.prepare('DELETE FROM pending_removal WHERE address = ?').run(address);
+  }
+
   /* ------------------------------------------------------------ snapshots */
 
   saveSnapshot(sessionId: string, serialized: string, cols: number, rows: number): void {

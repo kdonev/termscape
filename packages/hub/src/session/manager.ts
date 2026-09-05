@@ -32,7 +32,11 @@ export interface StartOptions {
 
 export interface ManagerEvents {
   session: (s: Session) => void;
-  removed: (sessionId: string) => void;
+  /**
+   * The address travels with the id: after the delete there is nothing left
+   * to look it up from, and peers address sessions by name.
+   */
+  removed: (sessionId: string, address: string | null) => void;
   data: (sessionId: string, chunk: string) => void;
   exit: (sessionId: string, code: number) => void;
 }

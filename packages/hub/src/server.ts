@@ -368,6 +368,10 @@ export async function serve(opts: ServeOptions): Promise<ServeResult> {
         }
 
         case 'removeSession':
+          // A remote window's session belongs to its peer. Removing it here
+          // would delete nothing and merely hide the window until that peer
+          // reported it again.
+          if (await hub.peers.removeSession(msg.sessionId)) return;
           hub.sessions.remove(msg.sessionId);
           return;
 

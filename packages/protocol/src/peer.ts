@@ -57,6 +57,11 @@ export const PeerRequest = z.discriminatedUnion('t', [
     spawnedByAddress: z.string().nullable(),
   }),
   z.object({ t: z.literal('stopSession'), id: z.string(), address: z.string() }),
+  // Closing a window has to reach the hub that owns the PTY. Handled locally
+  // it would only hide the session until that peer's next resync, which is
+  // exactly what a restart triggers. Idempotent on purpose: a removal deferred
+  // while the host was down may replay one that already went through.
+  z.object({ t: z.literal('removeSession'), id: z.string(), address: z.string() }),
   // Sent when the canvas drops this host: the hub over there is a daemon we
   // asked someone to start, so removing it here has to stop it there too,
   // otherwise it lingers holding its files open and its next install fails.
@@ -121,4 +126,4 @@ export type PeerResponse = z.infer<typeof PeerResponse>;
  * Bumped whenever the peer protocol or the DB schema changes shape. Hubs
  * refuse to connect across a mismatch rather than corrupting each other.
  */
-export const PEER_SCHEMA_VERSION = 3;
+export const PEER_SCHEMA_VERSION = 4;
