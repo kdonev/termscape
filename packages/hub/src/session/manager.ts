@@ -16,6 +16,12 @@ import { PtySession } from './pty.js';
 
 /** Debounce for persisting the serialized screen of an active session. */
 const SNAPSHOT_DEBOUNCE_MS = 5_000;
+/**
+ * How long titles are pooled before one write and one broadcast. An agent
+ * rewrites its terminal title as it works, and every change would otherwise be
+ * a row update and a frame to every browser.
+ */
+const TITLE_COALESCE_MS = 250;
 /** Debounce for persisting window geometry while a window is being dragged. */
 export const LAYOUT_DEBOUNCE_MS = 250;
 
@@ -52,6 +58,9 @@ export class SessionManager extends EventEmitter {
   private readonly live = new Map<string, PtySession>();
   private readonly snapshotTimers = new Map<string, NodeJS.Timeout>();
   private readonly layoutTimers = new Map<string, NodeJS.Timeout>();
+  /** Latest title per session, waiting for the coalescing window to close. */
+  private readonly pendingTitles = new Map<string, string>();
+  private titleTimer: NodeJS.Timeout | null = null;
 
   constructor(
     private readonly store: Store,
@@ -249,6 +258,7 @@ export class SessionManager extends EventEmitter {
       this.scheduleSnapshot(session.id);
     });
     p.on('status', () => this.emitSession(session.id));
+    p.on('title', (title: string) => this.noteTitle(session.id, title));
     p.on('exit', ({ exitCode }: { exitCode: number }) => {
       this.persistSnapshot(session.id);
       this.tokens.revoke(session.id);
@@ -307,6 +317,28 @@ export class SessionManager extends EventEmitter {
   setStatusText(sessionId: string, text: string): void {
     this.store.updateSession(sessionId, { statusText: text });
     this.emitSession(sessionId);
+  }
+
+  /**
+   * A title the program in the PTY set for itself.
+   *
+   * An agent rewrites this as it works, several times a second, so the write
+   * and the broadcast are held to the last value in a window rather than one
+   * apiece. Unrefed: a pending title is never a reason to keep the process up.
+   */
+  private noteTitle(sessionId: string, title: string): void {
+    this.pendingTitles.set(sessionId, title);
+    if (this.titleTimer) return;
+    this.titleTimer = setTimeout(() => {
+      this.titleTimer = null;
+      const batch = [...this.pendingTitles];
+      this.pendingTitles.clear();
+      for (const [id, t] of batch) {
+        this.store.updateSession(id, { title: t });
+        this.emitSession(id);
+      }
+    }, TITLE_COALESCE_MS);
+    this.titleTimer.unref?.();
   }
 
   /** Called by the hooks endpoint: exact turn boundaries from the agent CLI. */

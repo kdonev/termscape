@@ -1,5 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { createRequire } from 'node:module';
+import { basename } from 'node:path';
 import { platform } from 'node:process';
 import type { AgentStatus } from '@aicanvas/protocol';
 import { buildAgentEnv } from '../agents/env.js';
@@ -76,6 +77,10 @@ export class PtySession extends EventEmitter {
    * run at all, and the dot has to come from somewhere.
    */
   private hooksSeen = false;
+  /** Last title this program set, to keep repeats off the wire. */
+  private lastTitle: string | null = null;
+  /** argv[0], to recognise the one title the program did not choose. */
+  private launchedFile = '';
   private disposed = false;
 
   constructor(
@@ -94,6 +99,32 @@ export class PtySession extends EventEmitter {
     });
     this.serializer = new SerializeAddon();
     this.term.loadAddon(this.serializer);
+
+    // OSC 0 and OSC 2, read off the mirror terminal rather than with a regex
+    // over the stream. The parser already handles a sequence split across two
+    // reads and either terminator, and nothing has to be stripped: the
+    // browser's own terminal is entitled to the same bytes.
+    this.term.onTitleChange((title) => {
+      const next = title.trim();
+      if (next === this.lastTitle || this.isLaunchNoise(next)) return;
+      this.lastTitle = next;
+      this.emit('title', next);
+    });
+  }
+
+  /**
+   * ConPTY announces the child's image path as the terminal title the moment
+   * it starts, before the program has said anything at all. That is Windows
+   * talking, not the agent, and `C:...node.exe` in a window header is worse
+   * than the canvas address it would replace.
+   */
+  private isLaunchNoise(title: string): boolean {
+    if (!this.launchedFile) return false;
+    const same = (a: string, b: string) =>
+      platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b;
+    return (
+      same(title, this.launchedFile) || same(title, basename(this.launchedFile))
+    );
   }
 
   get status(): AgentStatus {
@@ -113,6 +144,7 @@ export class PtySession extends EventEmitter {
     const [file, ...args] = opts.argv;
     if (!file) throw new Error('empty argv');
 
+    this.launchedFile = file;
     this.cols = opts.cols;
     this.rows = opts.rows;
     this.term.resize(opts.cols, opts.rows);

@@ -143,3 +143,72 @@ describe('the hooks an agent is wired with', () => {
     expect(settingsFor('heuristic')).toEqual({});
   });
 });
+
+describe('the title a program sets for itself', () => {
+  it('picks up an OSC 0 title from the stream', async () => {
+    const p = new PtySession('title-1', 80, 24, null, 'heuristic');
+    live.push(p);
+    const seen: string[] = [];
+    p.on('title', (t: string) => seen.push(t));
+    p.start({
+      argv: [
+        process.execPath,
+        '-e',
+        `process.stdout.write('\u001b]0;building the thing\u0007'); setTimeout(() => {}, 30000)`,
+      ],
+      env: {},
+      cwd: process.cwd(),
+      cols: 80,
+      rows: 24,
+    });
+
+    const deadline = Date.now() + 5000;
+    while (Date.now() < deadline && !seen.includes('building the thing')) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    expect(seen).toContain('building the thing');
+  });
+
+  // ConPTY sets the terminal title to the child's image path the moment it
+  // spawns. Reported as the agent's own title it would put C:...node.exe in
+  // the header of every window on Windows.
+  it('ignores the image path the platform announces at launch', async () => {
+    const p = new PtySession('title-3', 80, 24, null, 'heuristic');
+    live.push(p);
+    const seen: string[] = [];
+    p.on('title', (t: string) => seen.push(t));
+    p.start({
+      argv: [process.execPath, '-e', QUIET_PROGRAM],
+      env: {},
+      cwd: process.cwd(),
+      cols: 80,
+      rows: 24,
+    });
+
+    await new Promise((r) => setTimeout(r, 1500));
+    for (const t of seen) {
+      expect(t.toLowerCase()).not.toBe(process.execPath.toLowerCase());
+    }
+  });
+
+  it('reports a title once, however often the program repeats it', async () => {
+    const p = new PtySession('title-2', 80, 24, null, 'heuristic');
+    live.push(p);
+    const seen: string[] = [];
+    p.on('title', (t: string) => seen.push(t));
+    p.start({
+      argv: [
+        process.execPath,
+        '-e',
+        `for (let i = 0; i < 5; i++) process.stdout.write('\u001b]2;same title\u0007'); setTimeout(() => {}, 30000)`,
+      ],
+      env: {},
+      cwd: process.cwd(),
+      cols: 80,
+      rows: 24,
+    });
+
+    await new Promise((r) => setTimeout(r, 2000));
+    expect(seen.filter((t) => t === 'same title')).toHaveLength(1);
+  });
+});

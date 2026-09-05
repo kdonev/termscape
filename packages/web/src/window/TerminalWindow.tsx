@@ -118,7 +118,12 @@ export const TerminalWindow = memo(function TerminalWindow({
     >
       <header className="window-bar" onPointerDown={onPointerDown('move')}>
         <span className="dot" style={{ background: statusColor(session) }} />
-        <span className="addr">{session.address}</span>
+        {/* The program's own title when it set one - it says what the agent
+            is doing, which the canvas address never can. The address stays a
+            hover away, because it is how you message this window. */}
+        <span className="addr" title={session.address}>
+          {session.title || session.address}
+        </span>
         <span className="meta">
           {session.statusText ?? statusLabel(session)}
         </span>
