@@ -289,14 +289,31 @@ body {
   max-width: 460px;
 }
 .error {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
   background: #2a1a1e;
   border: 1px solid var(--danger);
   color: #f0b6bb;
   padding: 7px 10px;
   border-radius: 7px;
-  cursor: pointer;
   font-size: 12px;
 }
+.error-body { flex: 1; min-width: 0; word-break: break-word; }
+/* Top-aligned and out of the flow of the text, so it stays put as a long
+   message wraps. */
+.error-close {
+  flex: 0 0 auto;
+  background: none;
+  border: 0;
+  color: inherit;
+  opacity: 0.7;
+  font: inherit;
+  line-height: 1;
+  padding: 0 2px;
+  cursor: pointer;
+}
+.error-close:hover { opacity: 1; }
 
 /* -------------------------------------------------------------- hosts */
 

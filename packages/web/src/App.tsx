@@ -66,8 +66,18 @@ export function App() {
       {errors.length > 0 && (
         <div className="errors">
           {errors.map((e, i) => (
-            <div key={i} className="error" onClick={() => dismissError(i)}>
-              {e}
+            <div key={i} className="error">
+              {/* The message is not a dismiss button: selecting an error to
+                  copy it is the usual reason for wanting it to stay. */}
+              <span className="error-body">{e}</span>
+              <button
+                className="error-close"
+                title="Dismiss"
+                aria-label="Dismiss this error"
+                onClick={() => dismissError(i)}
+              >
+                ×
+              </button>
             </div>
           ))}
         </div>

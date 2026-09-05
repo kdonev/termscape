@@ -79,36 +79,7 @@ system without a place in the tree.
 
 ---
 
-## 2. Error toasts need a close button
-
-**What it is.** The red toasts in the bottom-left corner get an `×` on the
-right, the same affordance the host rows already use to remove a host.
-
-**How it behaves.**
-
-- The `×` dismisses that one toast. Nothing else in the toast is a click
-  target, so the message can be selected and copied — which is the usual reason
-  you want to keep an error on screen. Today the whole toast is the dismiss
-  button, so any attempt to select the text makes it disappear.
-- The `×` sits on its own at the right edge, top-aligned, so it does not move
-  as a long message wraps.
-- The store already caps the list at five and drops the oldest; that stays.
-  This is about getting rid of one you have read, not about a timeout.
-
-**Where it lives.**
-
-- `packages/web/src/App.tsx:66` — the `.errors` block. The `onClick` moves off
-  the container and onto a new button.
-- `packages/web/src/state/store.ts:198` — `dismissError(i)` already does the
-  work and needs no change. It indexes by position, which is fine while errors
-  are plain strings appended to one array.
-- `packages/web/src/styles.css:291` — `.error` loses `cursor: pointer` and
-  becomes a flex row with the message and the button. `.host-row`'s `×`
-  (`.btn.danger`) is the pattern to match.
-
----
-
-## 3. Drop the zoom bar in the bottom-right corner
+## 2. Drop the zoom bar in the bottom-right corner
 
 **What it is.** Remove the floating zoom control — `−`, the percentage, `+`,
 `fit` — from the bottom-right of the canvas. Scroll and pinch already zoom, and
@@ -141,7 +112,7 @@ after it goes:
 
 ---
 
-## 4. The join script should not reinstall dependencies every time
+## 3. The join script should not reinstall dependencies every time
 
 **What it is.** Re-running the join command on a machine that has already
 joined spends a minute or two on `npm install`, every time, even when nothing
