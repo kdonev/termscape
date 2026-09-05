@@ -6,37 +6,7 @@ keeps the record.
 
 ---
 
-## 1. The status dot does not follow what the agent is doing
-
-**What you see.** The dot in a terminal's title bar stays on one colour. An
-agent that is mid-turn still shows green (idle), and one sitting at its prompt
-can stay amber (working). The dot is only reliable at the moment a session
-starts.
-
-**What should happen.** Amber the whole time the agent is working, green as
-soon as it is waiting for input, for every profile — Claude Code via hooks and
-plain shells via the heuristic.
-
-**Where it lives.**
-- `packages/web/src/window/TerminalWindow.tsx:26` — `statusColor` maps
-  `session.status` to the dot colour, so the dot is only as good as that field.
-- `packages/hub/src/agents/wiring.ts:66` — the generated hook settings.
-  `UserPromptSubmit`/`PreToolUse` post `?event=busy` and `Stop` posts
-  `?event=idle` to `/hook/<token>`. Worth checking the hooks actually fire and
-  reach the hub on Windows (the PowerShell `Invoke-WebRequest` branch), and
-  that no turn ends without a `Stop`.
-- `packages/hub/src/session/manager.ts:309` — `setStatusFromHook`, the other
-  end of that request.
-- `packages/hub/src/session/pty.ts:134` — the heuristic path: quiet for a beat,
-  then match `readyHint` against the last non-empty line. Claude Code's
-  animated spinner and a repainting TUI both defeat a "quiet for a beat" test.
-- Whether the resulting change is pushed to the browser at all: a status change
-  with no session-update frame on the WebSocket looks identical to a status
-  that never changed.
-
----
-
-## 2. The window title never picks up the agent's own title
+## 1. The window title never picks up the agent's own title
 
 **What you see.** A terminal's header shows its canvas address
 (`workspace/name`) forever. Claude Code sets a terminal title describing what it

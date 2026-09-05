@@ -1,0 +1,145 @@
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { PtySession } from '../src/session/pty.js';
+import { writeWiring } from '../src/agents/wiring.js';
+import type { AgentProfile } from '../src/agents/profiles.js';
+
+/**
+ * What the status dot is showing. These spawn real PTYs running a program that
+ * prints once and then sits there, which is the shape of every agent CLI
+ * waiting at its prompt - the case the dot used to get wrong.
+ */
+
+const QUIET_PROGRAM = "process.stdout.write('$ '); setTimeout(() => {}, 30000)";
+
+const live: PtySession[] = [];
+
+function startQuiet(mode: 'hooks' | 'heuristic', readyHint: RegExp | null): PtySession {
+  const p = new PtySession(`status-${live.length}`, 80, 24, readyHint, mode);
+  live.push(p);
+  p.start({
+    argv: [process.execPath, '-e', QUIET_PROGRAM],
+    env: {},
+    cwd: process.cwd(),
+    cols: 80,
+    rows: 24,
+  });
+  return p;
+}
+
+async function waitForStatus(p: PtySession, want: string, ms: number): Promise<string> {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    if (p.status === want) return p.status;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  return p.status;
+}
+
+afterEach(() => {
+  while (live.length > 0) live.pop()!.dispose();
+});
+
+describe('the status a window reports', () => {
+  it('starts busy, because a process that just launched is doing something', () => {
+    expect(startQuiet('heuristic', /[$#>%] ?$/).status).toBe('busy');
+  });
+
+  // The prompt of a CLI that has just started is at the top of the screen,
+  // with twenty-three blank rows under it. Testing the bottom row against the
+  // prompt pattern matched nothing, ever, so this never went green.
+  it('goes idle once a heuristic profile is sitting at its prompt', async () => {
+    const p = startQuiet('heuristic', /[$#>%] ?$/);
+    expect(await waitForStatus(p, 'idle', 5000)).toBe('idle');
+  });
+
+  // The bug this file exists for: a hooks profile changed status only when a
+  // hook arrived, so a machine where the hook command cannot run - the wrong
+  // shell, a blocked PowerShell - left every window amber for its whole life.
+  it('goes idle for a hooks profile whose hooks never arrive', async () => {
+    const p = startQuiet('hooks', null);
+    expect(p.status).toBe('busy');
+    expect(await waitForStatus(p, 'idle', 8000)).toBe('idle');
+  });
+
+  it('waits longer than the heuristic before assuming that', async () => {
+    // Silence is all this path has to go on, and an agent mid-turn animating
+    // a spinner must not fall through it.
+    const p = startQuiet('hooks', null);
+    await new Promise((r) => setTimeout(r, 1000));
+    expect(p.status).toBe('busy');
+  });
+
+  it('leaves a session to its hooks once one has arrived', async () => {
+    const p = startQuiet('hooks', null);
+    p.noteHook('busy');
+    // The output fallback would have called this idle by now. A hook said
+    // otherwise, and a hook is the agent speaking for itself.
+    await new Promise((r) => setTimeout(r, 3000));
+    expect(p.status).toBe('busy');
+
+    p.noteHook('idle');
+    expect(p.status).toBe('idle');
+  });
+
+  it('reports a status change to whoever is listening', async () => {
+    const p = startQuiet('heuristic', /[$#>%] ?$/);
+    const seen: string[] = [];
+    p.on('status', (s: string) => seen.push(s));
+    await waitForStatus(p, 'idle', 5000);
+    expect(seen).toContain('idle');
+  });
+});
+
+describe('the hooks an agent is wired with', () => {
+  let home: string;
+
+  beforeAll(() => {
+    home = mkdtempSync(join(tmpdir(), 'aicanvas-wiring-'));
+    process.env.AICANVAS_HOME = home;
+  });
+
+  afterAll(() => {
+    delete process.env.AICANVAS_HOME;
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  const profile = (status: 'hooks' | 'heuristic'): AgentProfile =>
+    ({ id: 'test', command: 'noop', args: [], status, inject: 'bracketed' }) as AgentProfile;
+
+  function settingsFor(status: 'hooks' | 'heuristic'): Record<string, any> {
+    const out = writeWiring({
+      sessionId: `wiring-${status}`,
+      address: 'ws/agent-1',
+      workspace: 'ws',
+      cwd: process.cwd(),
+      profile: profile(status),
+      token: 'tok',
+      hubOrigin: 'http://127.0.0.1:7777',
+      peers: [],
+    });
+    return JSON.parse(readFileSync(out.settingsPath, 'utf8'));
+  }
+
+  it('covers both edges of a turn, not only the start of one', () => {
+    const hooks = settingsFor('hooks').hooks;
+    // Work that began without a prompt of its own - a resumed turn, a message
+    // typed in by a peer - still reaches a tool call, which is what keeps a
+    // busy window from reading as idle.
+    expect(Object.keys(hooks).sort()).toEqual(
+      ['Notification', 'PreToolUse', 'Stop', 'UserPromptSubmit'].sort(),
+    );
+    const command = (event: string) => JSON.stringify(hooks[event]);
+    expect(command('UserPromptSubmit')).toContain('event=busy');
+    expect(command('PreToolUse')).toContain('event=busy');
+    expect(command('Stop')).toContain('event=idle');
+    // Waiting on a permission prompt is waiting on the human.
+    expect(command('Notification')).toContain('event=idle');
+  });
+
+  it('writes no hooks for a profile that does not have them', () => {
+    expect(settingsFor('heuristic')).toEqual({});
+  });
+});

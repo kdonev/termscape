@@ -75,8 +75,21 @@ export function writeWiring(input: WiringInput): WiringOutput {
       input.profile.status === 'hooks'
         ? {
             hooks: {
+              // Both edges of a turn, and both from the agent rather than
+              // from reading its output. PreToolUse is the one that saves a
+              // window stuck on idle: work that began without a prompt of its
+              // own - a resumed turn, a message typed in by a peer - still
+              // reaches a tool call.
               UserPromptSubmit: [
                 { hooks: [{ type: 'command', command: hookCmd('busy') }] },
+              ],
+              PreToolUse: [
+                { matcher: '*', hooks: [{ type: 'command', command: hookCmd('busy') }] },
+              ],
+              // Waiting on a permission prompt is waiting on the human, which
+              // is the same thing to whoever is looking at the dot.
+              Notification: [
+                { hooks: [{ type: 'command', command: hookCmd('idle') }] },
               ],
               Stop: [{ hooks: [{ type: 'command', command: hookCmd('idle') }] }],
             },

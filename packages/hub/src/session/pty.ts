@@ -41,6 +41,20 @@ const SCROLLBACK_LINES = 2000;
 const ATTACH_SCROLLBACK = 1000;
 
 /**
+ * How long a `heuristic` profile must be quiet before its last line is worth
+ * testing against the prompt pattern.
+ */
+const HEURISTIC_QUIET_MS = 400;
+
+/**
+ * How long a `hooks` profile whose hooks have never arrived must be quiet
+ * before it is called idle. Longer, because this path has no prompt pattern to
+ * check and only silence to go on - and an agent mid-turn is animating a
+ * spinner, which is not silence.
+ */
+const HOOK_FALLBACK_QUIET_MS = 2000;
+
+/**
  * One PTY plus a headless xterm that mirrors it.
  *
  * The headless terminal earns its keep twice: it produces the serialized
@@ -56,6 +70,12 @@ export class PtySession extends EventEmitter {
   private lastOutputAt = 0;
   private idleTimer: NodeJS.Timeout | null = null;
   private _status: AgentStatus = 'unknown';
+  /**
+   * Whether this session has ever reported a turn boundary itself. Until it
+   * has, a `hooks` profile is indistinguishable from one whose hooks cannot
+   * run at all, and the dot has to come from somewhere.
+   */
+  private hooksSeen = false;
   private disposed = false;
 
   constructor(
@@ -127,23 +147,38 @@ export class PtySession extends EventEmitter {
     this.lastOutputAt = Date.now();
     this.term.write(data);
     this.emit('data', data);
-    if (this.statusMode === 'heuristic') this.scheduleIdleCheck();
+    // A hooked session that has reported a boundary is left to its hooks.
+    // One that never has is watched like any other, or it would sit on
+    // whatever status it started with for the life of the process.
+    if (this.statusMode === 'heuristic' || !this.hooksSeen) this.scheduleIdleCheck();
   }
 
   /**
-   * Heuristic idle detection: quiet for a beat, and the last non-empty line
-   * looks like a prompt. Drives the status chip only — never gates delivery,
-   * because delivery is immediate by design.
+   * Idle detection from output alone. Drives the status chip only — never
+   * gates delivery, because delivery is immediate by design.
+   *
+   * Two callers, with different standards of proof. A `heuristic` profile has
+   * a prompt pattern, so a short quiet spell plus a matching last line is
+   * enough. A `hooks` profile only reaches here while its hooks have never
+   * arrived, and has nothing to match against, so it waits out a longer
+   * silence and takes that as the answer.
    */
   private scheduleIdleCheck(): void {
     this.markBusy();
     this.clearIdleTimer();
+    const fallback = this.statusMode === 'hooks';
+    const quiet = fallback ? HOOK_FALLBACK_QUIET_MS : HEURISTIC_QUIET_MS;
     this.idleTimer = setTimeout(() => {
-      if (Date.now() - this.lastOutputAt < 400) return;
-      const tail = this.tailLines(1).trim();
+      if (Date.now() - this.lastOutputAt < quiet) return;
+      if (fallback) {
+        // A hook that arrived while this was pending outranks it.
+        if (!this.hooksSeen) this.setStatus('idle');
+        return;
+      }
+      const tail = this.lastNonEmptyLine();
       const looksIdle = this.readyHint ? this.readyHint.test(tail) : true;
       this.setStatus(looksIdle ? 'idle' : 'busy');
-    }, 500);
+    }, quiet + 100);
   }
 
   private clearIdleTimer(): void {
@@ -155,6 +190,17 @@ export class PtySession extends EventEmitter {
 
   markBusy(): void {
     this.setStatus('busy');
+  }
+
+  /**
+   * A turn boundary the agent reported itself. Exact, where reading the output
+   * is a guess — so the first one to arrive retires the fallback for good and
+   * this session's status is whatever its hooks say from then on.
+   */
+  noteHook(s: AgentStatus): void {
+    this.hooksSeen = true;
+    this.clearIdleTimer();
+    this.setStatus(s);
   }
 
   setStatus(s: AgentStatus): void {
@@ -188,6 +234,20 @@ export class PtySession extends EventEmitter {
    */
   serializeForPersist(): string {
     return this.serializer.serialize({ scrollback: 0 });
+  }
+
+  /**
+   * The last line the program actually drew, wherever it is on the screen.
+   *
+   * Not the bottom row: a CLI sitting at its prompt after printing one banner
+   * has its prompt at the top and twenty-three blank rows under it, and
+   * testing the bottom row against a prompt pattern matched nothing, ever.
+   * That is what kept a freshly started window amber for the life of the
+   * process.
+   */
+  private lastNonEmptyLine(): string {
+    const drawn = this.tailLines(this.rows);
+    return drawn.slice(drawn.lastIndexOf('\n') + 1).trim();
   }
 
   /** Trailing rendered lines, for the read_screen MCP tool. */
