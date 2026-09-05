@@ -7,9 +7,6 @@ import websocket from '@fastify/websocket';
 import fastifyStatic from '@fastify/static';
 import {
   ClientMsg,
-  PeerRequest,
-  PEER_SCHEMA_VERSION,
-  type PeerResponse,
   type Session,
   BinaryFrameKind,
   decodeBinaryFrame,
@@ -18,12 +15,28 @@ import {
   type ServerMsg,
 } from '@aicanvas/protocol';
 import { Hub, HUB_VERSION } from './hub.js';
+import { createPeerServer, type PeerServer } from './remote/peer-serve.js';
+import { registerEnrollment, type Enrollment } from './remote/enroll.js';
+import {
+  advertisedHost,
+  coversLoopback,
+  preferredHostname,
+  urlHost,
+} from './remote/lan.js';
 import { buildMcpServer, buildMcpTransport } from './mcp/server.js';
 
 export interface ServeOptions {
   hub: Hub;
+  /**
+   * Bind address. Defaults to loopback; anything else is a deliberate choice
+   * by the operator to let other machines reach the join page.
+   */
   host?: string;
-  port?: number;
+  /**
+   * A port to bind exactly (0 lets the OS pick), or a list of candidates to
+   * try in order until one is free.
+   */
+  port?: number | number[];
   clientToken: string;
   /** Remote hubs serve no UI. */
   headless?: boolean;
@@ -31,9 +44,37 @@ export interface ServeOptions {
 
 export interface ServeResult {
   app: FastifyInstance;
+  /**
+   * How to reach this hub *from this machine*. Agents get it in their
+   * generated MCP config, so it stays 127.0.0.1 whenever the bind answers
+   * there — an agent's tool endpoint has no business being advertised on the
+   * network. It only becomes a real address if the operator bound one
+   * specific non-loopback interface, where loopback genuinely will not answer.
+   */
   origin: string;
+  /** Where another machine can reach the join page, or null when loopback-bound. */
+  enrollOrigin: string | null;
+  /** The same origin by IP, when `enrollOrigin` uses this machine's name. */
+  enrollAltOrigin: string | null;
   port: number;
+  /** So a joining hub can answer the canvas hub over a socket it dialled. */
+  peerServer: PeerServer;
+  /** Mints the single-use tokens the join installers carry. */
+  enrollment: Enrollment;
 }
+
+/**
+ * Ports to try before falling back to whatever the OS hands out.
+ *
+ * The join page is the one URL someone has to type by hand, on a different
+ * machine, from memory — it carries no token precisely so it can be typed. A
+ * five-digit ephemeral port makes that miserable, so prefer something a person
+ * can hold in their head.
+ *
+ * Ordered by memorability, skipping ports that common dev tooling squats on:
+ * 3000/8000/8080 (everything), 5555 (adb), 8888 (Jupyter), 2222 (alt ssh).
+ */
+export const MEMORABLE_PORTS = [7777, 4242, 7333, 3333, 9999, 7070, 4040, 1212];
 
 /** Locate the built web assets relative to this file, if they exist. */
 function webRoot(): string | null {
@@ -107,157 +148,25 @@ export async function serve(opts: ServeOptions): Promise<ServeResult> {
   /* --------------------------------------------------------- peer (hub↔hub) */
 
   /**
-   * The server half of the hub-to-hub link. A remote hub serves this; the
-   * local hub connects to it through an SSH tunnel, so this endpoint is only
-   * ever reachable over loopback on the remote machine.
+   * The answering half of the hub-to-hub link. A hub deployed over SSH serves
+   * this and the canvas-owning hub dials it through the tunnel, so on that
+   * path the endpoint is only ever reachable over loopback on the remote
+   * machine. The logic lives in peer-serve.ts because a hub that enrolled
+   * itself runs the identical thing over a socket it dialled out instead.
    */
-  const peerSockets = new Set<import('ws').WebSocket>();
-  const peerAttached = new Map<import('ws').WebSocket, Set<string>>();
-
-  const peerSend = (ws: import('ws').WebSocket, msg: PeerResponse): void => {
-    if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(msg));
-  };
-
-  hub.on('session', (s: Session) => {
-    for (const ws of peerSockets) peerSend(ws, { t: 'sessionUpserted', session: s });
-  });
-  hub.on('removed', (_id: string, address: string | null) => {
-    // Peers address sessions by name, not by this hub's internal id, which is
-    // why the address travels with the event rather than being looked up
-    // after the row is already gone.
-    if (!address) return;
-    for (const ws of peerSockets) peerSend(ws, { t: 'sessionRemoved', address });
-  });
-  hub.on('data', (sessionId: string, chunk: string) => {
-    if (peerSockets.size === 0) return;
-    const s = hub.sessions.get(sessionId);
-    if (!s) return;
-    for (const ws of peerSockets) {
-      if (peerAttached.get(ws)?.has(s.address)) {
-        peerSend(ws, { t: 'output', address: s.address, data: chunk });
-      }
-    }
-  });
+  const peerServer = createPeerServer(hub, clientToken);
 
   app.get('/peer', { websocket: true }, (socket) => {
-    let authed = false;
-
-    socket.on('message', async (raw: Buffer) => {
-      let parsed;
-      try {
-        parsed = PeerRequest.safeParse(JSON.parse(raw.toString('utf8')));
-      } catch {
-        return;
-      }
-      if (!parsed.success) return;
-      const req = parsed.data;
-
-      if (!authed) {
-        if (req.t !== 'hello' || req.token !== clientToken) {
-          socket.close();
-          return;
-        }
-        authed = true;
-        peerSockets.add(socket);
-        peerAttached.set(socket, new Set());
-        peerSend(socket, {
-          t: 'welcome',
-          hubVersion: HUB_VERSION,
-          schemaVersion: PEER_SCHEMA_VERSION,
-        });
-        return;
-      }
-      if (req.t === 'hello') return;
-
-      const ok = (result: unknown) => peerSend(socket, { t: 'ok', id: req.id, result });
-      const err = (message: string) => peerSend(socket, { t: 'err', id: req.id, message });
-
-      try {
-        switch (req.t) {
-          case 'listSessions':
-            return ok(hub.sessions.list());
-
-          case 'deliver': {
-            // The originating hub already authenticated the sender, so its
-            // reported `from` is trusted. Attribution is still applied here,
-            // so the receiving agent sees the true origin address.
-            const r = hub.router.send(req.from, req.to, req.body);
-            return r.delivered ? ok({ delivered: true }) : err(r.error ?? 'delivery failed');
-          }
-
-          case 'readScreen': {
-            const target = hub.sessions.getByAddress(req.address);
-            if (!target) return err(`no agent at address "${req.address}"`);
-            const pty = hub.sessions.pty(target.id);
-            return ok({
-              address: req.address,
-              running: pty?.running ?? false,
-              screen: pty ? pty.tailLines(req.lines ?? 40) : '(not running)',
-            });
-          }
-
-          case 'startSession': {
-            let ws = hub.store.getWorkspaceByName(req.workspaceName);
-            if (!ws) ws = hub.createWorkspace(req.workspaceName, req.rootPath, null);
-            const s = await hub.startSession({
-              workspaceId: ws.id,
-              profile: req.profile,
-              name: req.name,
-            });
-            return ok(s);
-          }
-
-          case 'stopSession': {
-            const t = hub.sessions.getByAddress(req.address);
-            if (!t) return err(`no agent at address "${req.address}"`);
-            hub.sessions.stop(t.id);
-            return ok({ stopped: req.address });
-          }
-
-          case 'resumeSession': {
-            const t = hub.sessions.getByAddress(req.address);
-            if (!t) return err(`no agent at address "${req.address}"`);
-            return ok(await hub.sessions.resume(t.id));
-          }
-
-          case 'attach': {
-            peerAttached.get(socket)?.add(req.address);
-            const t = hub.sessions.getByAddress(req.address);
-            if (t) {
-              const snap = hub.sessions.snapshotForAttach(t.id);
-              if (snap) peerSend(socket, { t: 'output', address: req.address, data: snap.serialized });
-            }
-            return ok({ attached: req.address });
-          }
-
-          case 'detach':
-            peerAttached.get(socket)?.delete(req.address);
-            return ok({ detached: req.address });
-
-          case 'input': {
-            const t = hub.sessions.getByAddress(req.address);
-            if (!t) return err(`no agent at address "${req.address}"`);
-            hub.sessions.write(t.id, req.data);
-            return ok({ ok: true });
-          }
-
-          case 'resize': {
-            const t = hub.sessions.getByAddress(req.address);
-            if (!t) return err(`no agent at address "${req.address}"`);
-            hub.sessions.resize(t.id, req.cols, req.rows);
-            return ok({ ok: true });
-          }
-        }
-      } catch (e) {
-        err((e as Error).message);
-      }
-    });
-
-    socket.on('close', () => {
-      peerSockets.delete(socket);
-      peerAttached.delete(socket);
-    });
+    peerServer.serve(socket);
   });
+
+  /* --------------------------------------------------------------- join */
+
+  // The bind address is not known until listen() resolves, so the enroll
+  // routes read it through a closure rather than a captured value.
+  let enrollOrigin: string | null = null;
+  let enrollAltOrigin: string | null = null;
+  const enrollment = registerEnrollment(app, { hub, enrollOrigin: () => enrollOrigin });
 
   /* ---------------------------------------------------------- WebSocket */
 
@@ -272,6 +181,8 @@ export async function serve(opts: ServeOptions): Promise<ServeResult> {
 
   const snapshotState = (): HubState => ({
     hubVersion: HUB_VERSION,
+    enrollUrl: enrollOrigin ? `${enrollOrigin}/join` : null,
+    enrollAltUrl: enrollAltOrigin ? `${enrollAltOrigin}/join` : null,
     hosts: hub.store.listHosts(),
     workspaces: hub.store.listWorkspaces(),
     sessions: hub.allSessions(),
@@ -292,6 +203,9 @@ export async function serve(opts: ServeOptions): Promise<ServeResult> {
   hub.on('message', (m) => broadcast({ t: 'messageSent', message: m }));
   hub.on('host', (h) => broadcast({ t: 'hostUpserted', host: h }));
   hub.on('hostRemoved', (id) => broadcast({ t: 'hostRemoved', hostId: id }));
+  // Deploy progress. Installing on a remote can take minutes; the panel shows
+  // these lines so it is not a frozen button.
+  hub.on('hostLog', (hostId, line) => broadcast({ t: 'hostLog', hostId, line }));
   // A peer connecting, dropping, or resyncing changes many sessions at
   // once, so push the whole list rather than diffing it here.
   hub.on('peersChanged', () => {
@@ -326,9 +240,15 @@ export async function serve(opts: ServeOptions): Promise<ServeResult> {
             const data = Buffer.from(f.payload).toString('utf8');
             const remote = hub.peers.find(f.sessionId);
             if (remote) {
-              void remote.peer.request({
-                t: 'input', id: randomUUID(), address: f.sessionId, data,
-              });
+              // Typing into a remote terminal whose PTY has since exited is
+              // ordinary, and the peer says so by rejecting. Unhandled, that
+              // rejection reaches the process and takes the whole canvas with
+              // it — so it is reported to this browser and goes no further.
+              void remote.peer
+                .request({ t: 'input', id: randomUUID(), address: f.sessionId, data })
+                .catch((e: Error) =>
+                  send(socket, { t: 'error', message: e.message, sessionId: f.sessionId }),
+                );
             } else {
               hub.sessions.write(f.sessionId, data);
             }
@@ -487,7 +407,7 @@ export async function serve(opts: ServeOptions): Promise<ServeResult> {
         }
 
         case 'removeHost':
-          hub.removeHost(msg.hostId);
+          await hub.removeHost(msg.hostId);
           return;
 
         case 'connectHost':
@@ -554,29 +474,61 @@ export async function serve(opts: ServeOptions): Promise<ServeResult> {
         // Already gone.
       }
     }
-    for (const ws of peerSockets) {
-      try {
-        ws.terminate();
-      } catch {
-        // Already gone.
-      }
-    }
+    peerServer.closeAll();
     clients.clear();
-    peerSockets.clear();
     attached.clear();
-    peerAttached.clear();
   });
 
   /* --------------------------------------------------------------- bind */
 
-  // Loopback only, always. The remote hub is reached through an SSH tunnel,
-  // never by listening on a public interface.
+  // Loopback unless the operator asked otherwise. An SSH-deployed hub is
+  // always reached through its tunnel and never binds wider; `--listen` exists
+  // so a machine can fetch the join page and enroll itself.
   const host = opts.host ?? '127.0.0.1';
-  const address = await app.listen({ host, port: opts.port ?? 0 });
+  const address = await listenOnFirstFree(app, host, opts.port ?? 0);
   const port = (app.server.address() as { port: number }).port;
-  const origin = `http://127.0.0.1:${port}`;
+
+  // Agents' MCP endpoint stays on loopback whenever the bind answers there,
+  // which for `--listen lan` it does: that binds the wildcard precisely so
+  // this stays true.
+  const origin = `http://${coversLoopback(host) ? '127.0.0.1' : urlHost(host)}:${port}`;
   hub.setOrigin(origin);
 
+  const advertised = advertisedHost(host);
+  if (advertised) {
+    // Prefer this machine's name: it is the URL someone has to carry to
+    // another machine and type in. The IP stays available underneath.
+    const name = await preferredHostname(advertised);
+    enrollOrigin = `http://${name ?? advertised}:${port}`;
+    enrollAltOrigin = name ? `http://${advertised}:${port}` : null;
+  }
+
   void address;
-  return { app, origin, port };
+  return { app, origin, enrollOrigin, enrollAltOrigin, port, peerServer, enrollment };
+}
+
+/**
+ * Bind the first candidate that is free.
+ *
+ * A probe-then-bind would race, so this just tries to bind for real and moves
+ * on when the port is taken. The last resort is `0` — an unmemorable port
+ * still beats refusing to start.
+ */
+async function listenOnFirstFree(
+  app: FastifyInstance,
+  host: string,
+  port: number | number[],
+): Promise<string> {
+  const candidates = Array.isArray(port) ? [...port, 0] : [port];
+
+  for (let i = 0; i < candidates.length; i++) {
+    try {
+      return await app.listen({ host, port: candidates[i]! });
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      const inUse = code === 'EADDRINUSE' || code === 'EACCES';
+      if (!inUse || i === candidates.length - 1) throw err;
+    }
+  }
+  throw new Error('no port available');
 }

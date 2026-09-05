@@ -143,15 +143,30 @@ export async function provision(
   await exec(conn, `mkdir -p ${remoteDir}`);
   await upload(conn, opts.packagePath, `${remoteDir}/${tarball}`);
 
-  log('installing on remote (this rebuilds native modules)');
-  const install = await exec(
+  log('installing on remote');
+  await exec(
     conn,
-    `cd ${remoteDir} && rm -rf hub && mkdir -p hub && tar xzf ${tarball} -C hub --strip-components=1 && cd hub && npm install --omit=dev --build-from-source 2>&1 | tail -20`,
+    `cd ${remoteDir} && rm -rf hub && mkdir -p hub && tar xzf ${tarball} -C hub --strip-components=1`,
+  );
+
+  // Prebuilt binaries first: node-pty and better-sqlite3 publish them for the
+  // mainstream platforms, and downloading one beats compiling it every time.
+  let install = await exec(
+    conn,
+    `cd ${remoteDir}/hub && npm install --omit=dev --no-audit --no-fund 2>&1 | tail -20`,
   );
   if (install.code !== 0) {
+    log('no prebuilt binaries for this platform; compiling instead');
+    install = await exec(
+      conn,
+      `cd ${remoteDir}/hub && npm install --omit=dev --no-audit --no-fund --build-from-source 2>&1 | tail -20`,
+    );
+  }
+  if (install.code !== 0) {
     throw new Error(
-      `remote install failed (exit ${install.code}). ` +
-        `The host likely lacks a build toolchain for native modules.\n${install.stdout}\n${install.stderr}`,
+      `remote install failed (exit ${install.code}). This host has no prebuilt ` +
+        `binaries and no C++ toolchain for node-pty and better-sqlite3.\n` +
+        `${install.stdout}\n${install.stderr}`,
     );
   }
   log('installed');

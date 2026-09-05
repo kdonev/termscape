@@ -128,6 +128,25 @@ export const MIGRATIONS: Migration[] = [
       CREATE INDEX idx_remote_window_host ON remote_window(host_id);
     `,
   },
+  {
+    version: 3,
+    name: 'enrolled_hosts',
+    up: `
+      -- A host that ran the join installer dialled us; we hold no SSH
+      -- credentials for it and cannot reach it on our own.
+      --
+      -- ssh_host and ssh_user are NOT NULL from migration 1 and enrolled rows
+      -- have neither. They are written as '' and mapped back to null in the
+      -- store. Rebuilding the table to relax the constraint would mean
+      -- dropping it while workspace.host_id and remote_window.host_id hold
+      -- cascading references to it, which is far more risk than a sentinel.
+      ALTER TABLE host ADD COLUMN kind          TEXT NOT NULL DEFAULT 'ssh';
+      -- The durable credential an enrolled host presents on every reconnect.
+      -- Server-side only, like key_ref: it is never sent to the browser.
+      ALTER TABLE host ADD COLUMN host_token    TEXT;
+      ALTER TABLE host ADD COLUMN platform      TEXT;
+    `,
+  },
 ];
 
 export function runMigrations(db: Database): number {

@@ -23,7 +23,13 @@ export interface MessageFlash {
 interface AppState {
   connected: boolean;
   hubVersion: string;
+  /** The join page's URL, or null when the hub is bound to loopback. */
+  enrollUrl: string | null;
+  /** The same page by IP, for a network that cannot resolve the name. */
+  enrollAltUrl: string | null;
   hosts: Host[];
+  /** Deploy output per host, newest last. Cleared when a host is removed. */
+  hostLogs: Record<string, string[]>;
   workspaces: Workspace[];
   sessions: Session[];
   messages: Message[];
@@ -58,7 +64,10 @@ const upsert = <T extends { id: string }>(list: T[], item: T): T[] => {
 export const useStore = create<AppState>((set, get) => ({
   connected: false,
   hubVersion: '',
+  enrollUrl: null,
+  enrollAltUrl: null,
   hosts: [],
+  hostLogs: {},
   workspaces: [],
   sessions: [],
   messages: [],
@@ -78,6 +87,8 @@ export const useStore = create<AppState>((set, get) => ({
       case 'ready':
         set({
           hubVersion: m.state.hubVersion,
+          enrollUrl: m.state.enrollUrl,
+          enrollAltUrl: m.state.enrollAltUrl,
           hosts: m.state.hosts,
           workspaces: m.state.workspaces,
           sessions: m.state.sessions,
@@ -111,7 +122,21 @@ export const useStore = create<AppState>((set, get) => ({
         return;
 
       case 'hostRemoved':
-        set((s) => ({ hosts: s.hosts.filter((x) => x.id !== m.hostId) }));
+        set((s) => {
+          const { [m.hostId]: _gone, ...hostLogs } = s.hostLogs;
+          return { hosts: s.hosts.filter((x) => x.id !== m.hostId), hostLogs };
+        });
+        return;
+
+      case 'hostLog':
+        set((s) => ({
+          hostLogs: {
+            ...s.hostLogs,
+            // Bounded: a deploy is chatty and nobody scrolls back past the
+            // last few lines while waiting for it.
+            [m.hostId]: [...(s.hostLogs[m.hostId] ?? []), m.line].slice(-8),
+          },
+        }));
         return;
 
       case 'messageSent':

@@ -9,7 +9,8 @@ helpers into their workspace, and check on each other's terminals. A message
 from one agent is delivered by typing it into the other's terminal, immediately.
 
 Local-first: the hub runs on your machine, binds loopback only, and the UI is a
-browser tab. Remote machines run the same hub as a daemon reached over SSH.
+browser tab. Other machines run the same hub as a daemon and appear on the same
+canvas.
 
 ## Requirements
 
@@ -41,7 +42,7 @@ Hub (Node)
    │  node-pty ── agent CLI processes
    │  MCP over HTTP ── the tools agents call
    │  SQLite ── workspaces, layout, sessions, screens
-   │  SSH tunnel
+   │  hub↔hub WebSocket, either direction
 Remote hub (same binary, --headless)
 ```
 
@@ -49,6 +50,83 @@ Agents never talk to each other directly. They call `send_message` on their own
 hub; the hub does the delivery, locally or by forwarding to a peer. That is why
 an agent addresses a peer on another machine exactly as it addresses one in the
 next window.
+
+## Adding another machine
+
+Start the hub so the other machine can see it, then let that machine come to
+you:
+
+```bash
+npm run dev -- --listen lan
+```
+
+(Or `npm run dev -w @aicanvas/hub -- --listen lan` if you are calling the
+workspace directly — npm needs the `--` to hand flags to the hub rather than
+reading them itself.)
+
+The hub prints an `enroll:` URL alongside the usual one. Open it **on the
+machine you want to add** and run the command it shows:
+
+```bash
+curl -fsSL http://studio:7777/join.sh | sh    # macOS, Linux
+irm http://studio:7777/join.ps1 | iex         # Windows
+```
+
+Both halves of that URL are chosen to be typeable, because the join page is the
+one address you have to carry to another machine and enter by hand:
+
+- **The host** is this machine's own name when that name actually resolves to
+  the address the hub bound — checked, not assumed. Windows resolves bare names
+  over LLMNR/NetBIOS and macOS/Linux over mDNS, and neither is guaranteed, so
+  the hub prints the numeric URL underneath as a fallback and the hosts panel
+  offers it too. The canvas itself is reachable by name as well, token and all,
+  which is how you open it on a second screen or a phone.
+- **The port** is the first free one from `7777, 4242, 7333, 3333, ...`.
+  `--port <n>` overrides it; `--port 0` takes whatever the OS hands out.
+
+That installs the hub into `~/.aicanvas` there and connects it back. The machine
+shows up in the **hosts** panel, and picking it when you create a workspace runs
+that workspace's agents on it — same addresses, same `send_message`, same
+canvas.
+
+The installer works out what is missing before it changes anything:
+
+- **Node 22.** If the machine has none, or an older one, it fetches a private
+  copy into `~/.aicanvas/node` — checksum-verified against nodejs.org's own
+  `SHASUMS256.txt`, since it is a binary about to be executed. Private rather
+  than system-wide, so it needs no administrator rights, no package manager,
+  and no fresh shell to pick up a PATH change; uninstalling is deleting the
+  directory. A copy already there is reused.
+- **Native modules.** It prefers prebuilt binaries for `node-pty` and
+  `better-sqlite3`, falls back to compiling, and if neither works tells you
+  exactly which toolchain to install.
+
+If the machine does not appear, the installer says why rather than reporting
+success: a spent or expired key, a version gap, or a hub that exited. It waits
+for the canvas to actually accept the machine, not merely for the hub to start
+listening. `~/.aicanvas/hub.log` on that machine has the detail.
+
+Re-running the join command on a machine that already joined is the supported
+way to update or repair it: it stops the hub running there, replaces the
+install, and rejoins with the token it already holds — or, if you had removed
+that host from the canvas, with the fresh key the command carries. Removing a host from the
+**hosts** panel stops its hub too, so the machine is not left running a daemon
+that belongs to nobody.
+
+Two things worth knowing:
+
+- `--listen` is opt-in and off by default. With it, your hub is reachable on
+  that network, and anyone who can load the join page can attach a machine to
+  your canvas. Every other route still requires the token.
+- Each download carries a single-use key that expires in 15 minutes. Once a
+  machine has joined it keeps a durable token in `~/.aicanvas/host-token` and
+  rejoins by itself after a reboot or a dropped link — its agents keep running
+  in the meantime.
+
+**If you can't stand at the other machine**, the hosts panel's *deploy over ssh*
+tab does the reverse: it connects with your SSH agent or a key, installs the hub
+over SFTP, starts it bound to that machine's loopback, and reaches it through a
+tunnel. Same protocol, opposite direction.
 
 ## Tools agents get
 

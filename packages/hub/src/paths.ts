@@ -18,4 +18,15 @@ export const paths = {
   sessionDir: (sessionId: string) => join(hubHome(), 'run', sessionId),
   profiles: () => join(hubHome(), 'agents.toml'),
   tokenFile: () => join(hubHome(), 'token'),
+  /**
+   * Durable credential an enrolled host presents when it dials its canvas hub
+   * again. Written 0600; its presence is what makes a reboot rejoin silently.
+   */
+  hostTokenFile: () => join(hubHome(), 'host-token'),
+  /**
+   * PID of the running hub. The join installer reads it to stop a previous
+   * hub before replacing its files — on Windows an open .node cannot be
+   * deleted, so re-joining fails outright without this.
+   */
+  pidFile: () => join(hubHome(), 'hub.pid'),
 };

@@ -21,6 +21,7 @@ import { SessionManager } from './session/manager.js';
 import type { AgentApi } from './mcp/server.js';
 import { PeerRegistry } from './remote/registry.js';
 import { deploy, type DeployResult } from './remote/deployer.js';
+import { hubTarballPath } from './remote/tarball.js';
 import { paths } from './paths.js';
 
 export const HUB_VERSION = '0.1.0';
@@ -98,6 +99,23 @@ export class Hub extends EventEmitter implements AgentApi {
 
     // Anything the DB still calls running died with the previous hub.
     this.sessions.reconcileOnBoot();
+    this.reconcileHostsOnBoot();
+  }
+
+  /**
+   * A persisted `connected` is a lie the moment this process starts: the
+   * tunnels and sockets died with the last one. Mark every host down, then
+   * redial the ones we know how to reach. Enrolled hosts are left alone —
+   * they dial us, and arrive on their own.
+   */
+  private reconcileHostsOnBoot(): void {
+    for (const host of this.store.listHosts()) {
+      this.store.upsertHost({ ...host, state: 'disconnected', error: null });
+      if (host.kind !== 'ssh') continue;
+      void this.connectHost(host.id).catch((err) => {
+        this.emit('hostLog', host.id, `reconnect failed: ${(err as Error).message}`);
+      });
+    }
   }
 
   /** Local sessions plus every session reported by a connected peer. */
@@ -162,9 +180,11 @@ export class Hub extends EventEmitter implements AgentApi {
     const host: Host = {
       id: randomUUID(),
       label: input.label || `${input.sshUser}@${input.sshHost}`,
+      kind: 'ssh',
       sshHost: input.sshHost,
       sshUser: input.sshUser,
       sshPort: input.sshPort,
+      platform: null,
       hubVersion: null,
       state: 'disconnected',
       lastSeenAt: null,
@@ -175,7 +195,16 @@ export class Hub extends EventEmitter implements AgentApi {
     return host;
   }
 
-  removeHost(hostId: string): void {
+  /**
+   * Drop a host from the canvas, and stop the hub running on it.
+   *
+   * Stopping it matters more than it looks: that hub is a daemon on someone
+   * else's machine, and if it keeps running it holds its own install open —
+   * on Windows an in-use .node cannot be deleted, so re-joining that machine
+   * fails on a permission error rather than replacing the files.
+   */
+  async removeHost(hostId: string): Promise<void> {
+    await this.peers.requestShutdown(hostId).catch(() => false);
     this.peers.remove(hostId);
     void this.tunnels.get(hostId)?.dispose().catch(() => {});
     this.tunnels.delete(hostId);
@@ -191,6 +220,12 @@ export class Hub extends EventEmitter implements AgentApi {
   async connectHost(hostId: string): Promise<void> {
     const host = this.store.listHosts().find((h) => h.id === hostId);
     if (!host) throw new Error(`unknown host ${hostId}`);
+    if (host.kind !== 'ssh' || !host.sshHost || !host.sshUser) {
+      throw new Error(
+        `"${host.label}" enrolled itself and dials this hub; there is nothing here to connect to. ` +
+          'Re-run the join command on that machine if it has not come back.',
+      );
+    }
 
     const token = randomBytes(24).toString('base64url');
     this.store.upsertHost({ ...host, state: 'connecting', error: null });
@@ -204,7 +239,7 @@ export class Hub extends EventEmitter implements AgentApi {
         privateKeyPath: this.store.hostKeyRef(hostId) ?? undefined,
         token,
         expectedVersion: HUB_VERSION,
-        packagePath: process.env.AICANVAS_HUB_TARBALL,
+        packagePath: hubTarballPath() ?? undefined,
         log: (line) => this.emit('hostLog', hostId, line),
       });
       this.tunnels.set(hostId, result);
@@ -226,6 +261,22 @@ export class Hub extends EventEmitter implements AgentApi {
     cwd?: string;
     spawnedBy?: string | null;
   }): Promise<Session> {
+    const ws = this.store.getWorkspace(opts.workspaceId);
+    if (!ws) throw new Error(`unknown workspace ${opts.workspaceId}`);
+
+    // A workspace that belongs to a host runs its agents there. The peer owns
+    // the PTY; what comes back is a session we show on our own canvas.
+    if (ws.hostId) {
+      const spawner = opts.spawnedBy ? this.sessions.get(opts.spawnedBy) : null;
+      return this.peers.startSession(ws.hostId, {
+        workspaceName: ws.name,
+        rootPath: ws.rootPath,
+        profile: opts.profile,
+        name: opts.name,
+        spawnedByAddress: spawner?.address ?? null,
+      });
+    }
+
     const count = this.sessions.list().filter((s) => s.workspaceId === opts.workspaceId).length;
     if (count >= this.spawnCap) {
       throw new Error(
@@ -382,7 +433,18 @@ export class Hub extends EventEmitter implements AgentApi {
     if (opts.prompt) {
       // The child's CLI is not listening yet; wait for it to come up before
       // typing, otherwise the first instruction is written into the void.
-      void this.deliverInitialPrompt(child.id, me.address, opts.prompt);
+      if (ws.hostId) {
+        // The child's PTY is on the peer, so the readiness wait belongs there
+        // too; a plain delivery is the only thing this side can do.
+        void this.peers
+          .deliver(me.address, child.address, opts.prompt)
+          .catch(() => {
+            // Recorded by the message log on the owning hub; a spawn that
+            // succeeded should not fail because the greeting did not land.
+          });
+      } else {
+        void this.deliverInitialPrompt(child.id, me.address, opts.prompt);
+      }
     }
 
     return {
@@ -460,8 +522,17 @@ export class Hub extends EventEmitter implements AgentApi {
 
   async stopAgent(sessionId: string, address: string) {
     const me = this.requireSession(sessionId);
+
     const target = this.sessions.getByAddress(address);
-    if (!target) throw new Error(`no agent at address "${address}"`);
+    if (!target) {
+      // Spawn lineage lives on the hub that owns the session, so the
+      // spawned-by rule below is enforced over there, by that hub.
+      if (this.locate(address) === 'remote') {
+        await this.peers.stopSession(address);
+        return { stopped: address };
+      }
+      throw new Error(`no agent at address "${address}"`);
+    }
     if (target.id === me.id) throw new Error('use your own exit command to stop yourself');
     // An agent may only stop what it created. Otherwise a single confused
     // agent could take down the whole canvas.

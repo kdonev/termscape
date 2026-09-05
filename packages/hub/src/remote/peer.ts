@@ -10,9 +10,12 @@ import {
 
 export interface PeerOptions {
   hostId: string;
-  /** Loopback URL of the tunnelled remote hub, e.g. ws://127.0.0.1:51234/peer */
-  url: string;
-  token: string;
+  /**
+   * Loopback URL of the tunnelled remote hub, e.g. ws://127.0.0.1:51234/peer.
+   * Absent for an enrolled host: it dialled us, and we have no way to dial it.
+   */
+  url?: string;
+  token?: string;
   hubVersion: string;
 }
 
@@ -25,12 +28,18 @@ interface Pending {
 const REQUEST_TIMEOUT_MS = 20_000;
 
 /**
- * Client half of the hub-to-hub link.
+ * Requesting half of the hub-to-hub link — the side that owns the canvas.
  *
- * Reconnects with backoff, because the whole point of running a daemon on the
- * remote host rather than an ssh subprocess is that the sessions survive the
- * link dropping. On reconnect it re-subscribes and re-fetches the peer's
- * session list, so the canvas repopulates on its own.
+ * It gets its socket one of two ways. `connect()` dials an SSH-deployed hub
+ * through its tunnel and reconnects with backoff, because the whole point of a
+ * daemon rather than an ssh subprocess is that sessions survive the link
+ * dropping. `adopt()` takes a socket an enrolled host opened towards us; there
+ * is nothing to dial on a drop, so we wait for it to come back and adopt the
+ * new socket instead.
+ *
+ * Either way, once the socket is live this class behaves identically: it
+ * re-subscribes and re-fetches the peer's session list, so the canvas
+ * repopulates on its own.
  */
 export class PeerConnection extends EventEmitter {
   private ws: WebSocket | null = null;
@@ -57,8 +66,16 @@ export class PeerConnection extends EventEmitter {
     return this.opts.hostId;
   }
 
+  /** True when this peer dialled us and we cannot dial it back. */
+  get inbound(): boolean {
+    return !this.opts.url;
+  }
+
   connect(): void {
     if (this.closed) return;
+    if (!this.opts.url) {
+      throw new Error(`host ${this.opts.hostId} enrolled itself; it dials us`);
+    }
     const ws = new WebSocket(this.opts.url);
     this.ws = ws;
 
@@ -66,7 +83,7 @@ export class PeerConnection extends EventEmitter {
       ws.send(
         JSON.stringify({
           t: 'hello',
-          token: this.opts.token,
+          token: this.opts.token ?? '',
           hubVersion: this.opts.hubVersion,
           schemaVersion: PEER_SCHEMA_VERSION,
         } satisfies PeerRequest),
@@ -90,6 +107,57 @@ export class PeerConnection extends EventEmitter {
       this.emit('error', err);
       ws.close();
     });
+  }
+
+  /**
+   * Take over a socket an enrolling host opened towards us. Its hello was
+   * already validated by the join endpoint, and we already answered `welcome`,
+   * so there is no handshake left to run here — go straight to the connected
+   * state the welcome path would have reached.
+   */
+  adopt(socket: WebSocket, remoteVersion: string): void {
+    if (this.closed) {
+      socket.close();
+      return;
+    }
+    this.ws = socket;
+
+    socket.on('message', (raw: Buffer) => this.onMessage(raw));
+
+    socket.on('close', () => {
+      // Ignore a socket we already replaced with a newer one. A null `ws`
+      // means close() ran, which is ours to finish, not to skip.
+      if (this.ws && this.ws !== socket) return;
+      this.ws = null;
+      const wasConnected = this._connected;
+      this._connected = false;
+      this.failAllPending('peer connection closed');
+      if (wasConnected) this.emit('disconnected');
+      // No redial: the host reaches us, not the other way round. It will come
+      // back on its own backoff and be adopted again.
+    });
+
+    socket.on('error', (err: Error) => {
+      this.emit('error', err);
+      socket.close();
+    });
+
+    this._connected = true;
+    this._remoteVersion = remoteVersion;
+    this.emit('connected', remoteVersion);
+    this.onLive();
+  }
+
+  /** Everything that must happen once a socket is usable, either way in. */
+  private onLive(): void {
+    for (const address of this.attached) {
+      // A session that vanished while the link was down cannot be re-attached,
+      // and that is not a reason to fail anything: drop it and carry on.
+      void this.request({ t: 'attach', id: randomUUID(), address }).catch(() => {
+        this.attached.delete(address);
+      });
+    }
+    void this.refresh();
   }
 
   private onMessage(raw: Buffer): void {
@@ -121,10 +189,7 @@ export class PeerConnection extends EventEmitter {
         this.backoff = 500;
         this.emit('connected', msg.hubVersion);
         // Re-establish attachments that predate this connection.
-        for (const address of this.attached) {
-          void this.request({ t: 'attach', id: randomUUID(), address });
-        }
-        void this.refresh();
+        this.onLive();
         return;
       }
 
@@ -208,8 +273,13 @@ export class PeerConnection extends EventEmitter {
   close(): void {
     this.closed = true;
     this.failAllPending('peer closed');
+    const wasConnected = this._connected;
+    this._connected = false;
     this.ws?.close();
     this.ws = null;
-    this._connected = false;
+    // Closing a peer is a disconnection like any other. Without this the
+    // socket's own close handler sees _connected already false and stays
+    // quiet, leaving the host row claiming to be connected.
+    if (wasConnected) this.emit('disconnected');
   }
 }

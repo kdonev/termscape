@@ -17,12 +17,25 @@ export type AgentStatus = z.infer<typeof AgentStatus>;
 export const WorkspaceKind = z.enum(['local', 'remote']);
 export type WorkspaceKind = z.infer<typeof WorkspaceKind>;
 
+/**
+ * How the link to a host was established. `ssh` hosts are deployed and dialled
+ * by this hub; `enrolled` hosts ran the join installer and dialled in to us.
+ * The peer protocol is identical either way — only who opens the socket differs.
+ */
+export const HostKind = z.enum(['ssh', 'enrolled']);
+export type HostKind = z.infer<typeof HostKind>;
+
 export const Host = z.object({
   id: z.string(),
   label: z.string(),
-  sshHost: z.string(),
-  sshUser: z.string(),
+  kind: HostKind.default('ssh'),
+  // Null for enrolled hosts: they reached us, so we hold no credentials
+  // for reaching them.
+  sshHost: z.string().nullable(),
+  sshUser: z.string().nullable(),
   sshPort: z.number().int().positive().default(22),
+  /** `linux-x64`, `darwin-arm64`, ... as reported by an enrolling host. */
+  platform: z.string().nullable(),
   hubVersion: z.string().nullable(),
   state: z.enum(['disconnected', 'connecting', 'connected', 'error']),
   lastSeenAt: z.number().nullable(),

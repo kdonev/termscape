@@ -8,9 +8,10 @@
   },
   "main": "./dist/index.js",
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node scripts/pack-hub.mjs",
     "dev": "tsx watch src/cli.ts",
-    "start": "node dist/cli.js"
+    "start": "node dist/cli.js",
+    "pack": "node scripts/pack-hub.mjs"
   },
   "dependencies": {
     "@aicanvas/protocol": "*",
@@ -30,5 +31,10 @@
     "@types/better-sqlite3": "^7.6.12",
     "@types/ssh2": "^1.15.1",
     "@types/ws": "^8.5.13"
-  }
+  },
+  "files": [
+    "dist",
+    "!dist/hub.tgz",
+    "package.json"
+  ]
 }

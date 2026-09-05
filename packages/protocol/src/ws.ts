@@ -106,6 +106,17 @@ export type ClientMsg = z.infer<typeof ClientMsg>;
 
 export const HubState = z.object({
   hubVersion: z.string(),
+  /**
+   * Where another machine can reach this hub's join page, or null when the
+   * hub is bound to loopback and nothing else can see it.
+   */
+  enrollUrl: z.string().nullable(),
+  /**
+   * The same page by IP, when the primary uses this machine's name. A name
+   * only resolves if the other machine's network can resolve it, so the
+   * numeric form is always offered rather than assumed unnecessary.
+   */
+  enrollAltUrl: z.string().nullable(),
   hosts: z.array(Host),
   workspaces: z.array(Workspace),
   sessions: z.array(Session),
@@ -123,6 +134,9 @@ export const ServerMsg = z.discriminatedUnion('t', [
   z.object({ t: z.literal('workspaceRemoved'), workspaceId: z.string() }),
   z.object({ t: z.literal('hostUpserted'), host: Host }),
   z.object({ t: z.literal('hostRemoved'), hostId: z.string() }),
+  // Deploy progress. A remote install rebuilds native modules and takes
+  // minutes; without this the panel is a frozen button.
+  z.object({ t: z.literal('hostLog'), hostId: z.string(), line: z.string() }),
   z.object({ t: z.literal('messageSent'), message: Message }),
   // sent on attach: serialized screen, replayed before the live stream
   z.object({

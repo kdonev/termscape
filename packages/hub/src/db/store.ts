@@ -61,12 +61,16 @@ export class Store {
 
   listHosts(): Host[] {
     const rows = this.db.prepare('SELECT * FROM host ORDER BY label').all() as any[];
+    // ssh_host/ssh_user are NOT NULL in the schema and enrolled hosts have
+    // neither, so '' is the stored sentinel. See migration 3.
     return rows.map((r) => ({
       id: r.id,
       label: r.label,
-      sshHost: r.ssh_host,
-      sshUser: r.ssh_user,
+      kind: r.kind ?? 'ssh',
+      sshHost: r.ssh_host || null,
+      sshUser: r.ssh_user || null,
       sshPort: r.ssh_port,
+      platform: r.platform ?? null,
       hubVersion: r.hub_version,
       state: r.state,
       lastSeenAt: r.last_seen_at,
@@ -74,19 +78,32 @@ export class Store {
     }));
   }
 
-  upsertHost(h: Host & { keyRef?: string | null }): void {
+  getHost(id: string): Host | null {
+    return this.listHosts().find((h) => h.id === id) ?? null;
+  }
+
+  upsertHost(h: Host & { keyRef?: string | null; hostToken?: string | null }): void {
     this.db
       .prepare(
-        `INSERT INTO host (id, label, ssh_host, ssh_user, ssh_port, key_ref,
-                           hub_version, state, last_seen_at, error)
-         VALUES (@id, @label, @sshHost, @sshUser, @sshPort, @keyRef,
-                 @hubVersion, @state, @lastSeenAt, @error)
+        `INSERT INTO host (id, label, kind, ssh_host, ssh_user, ssh_port, key_ref,
+                           host_token, platform, hub_version, state, last_seen_at, error)
+         VALUES (@id, @label, @kind, @sshHost, @sshUser, @sshPort, @keyRef,
+                 @hostToken, @platform, @hubVersion, @state, @lastSeenAt, @error)
          ON CONFLICT(id) DO UPDATE SET
-           label=@label, ssh_host=@sshHost, ssh_user=@sshUser, ssh_port=@sshPort,
-           key_ref=COALESCE(@keyRef, key_ref), hub_version=@hubVersion,
-           state=@state, last_seen_at=@lastSeenAt, error=@error`,
+           label=@label, kind=@kind, ssh_host=@sshHost, ssh_user=@sshUser,
+           ssh_port=@sshPort, key_ref=COALESCE(@keyRef, key_ref),
+           host_token=COALESCE(@hostToken, host_token), platform=@platform,
+           hub_version=@hubVersion, state=@state, last_seen_at=@lastSeenAt,
+           error=@error`,
       )
-      .run({ ...h, keyRef: h.keyRef ?? null });
+      .run({
+        ...h,
+        sshHost: h.sshHost ?? '',
+        sshUser: h.sshUser ?? '',
+        platform: h.platform ?? null,
+        keyRef: h.keyRef ?? null,
+        hostToken: h.hostToken ?? null,
+      });
   }
 
   removeHost(id: string): void {
@@ -98,6 +115,17 @@ export class Store {
       | { key_ref: string | null }
       | undefined;
     return r?.key_ref ?? null;
+  }
+
+  /**
+   * Match an enrolled host by the durable token it presents on reconnect.
+   * Server-side only — like key_ref, this never travels to the browser.
+   */
+  hostByToken(token: string): Host | null {
+    const r = this.db.prepare('SELECT id FROM host WHERE host_token = ?').get(token) as
+      | { id: string }
+      | undefined;
+    return r ? this.getHost(r.id) : null;
   }
 
   /* ----------------------------------------------------------- workspaces */

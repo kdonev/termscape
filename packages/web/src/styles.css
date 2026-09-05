@@ -330,12 +330,68 @@ body {
 .host-sub { color: var(--muted); font-size: 11px; }
 .host-error { color: var(--danger); font-size: 11px; margin-top: 3px; word-break: break-word; }
 
+.host-log {
+  margin-top: 4px;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 10.5px;
+  line-height: 1.35;
+  word-break: break-word;
+}
+
+.host-tabs {
+  display: flex;
+  gap: 4px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+.host-tabs .tab {
+  flex: 1;
+  padding: 5px 8px;
+  font: inherit;
+  font-size: 11px;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.host-tabs .tab:hover { color: var(--text); }
+.host-tabs .tab.on {
+  color: var(--text);
+  background: var(--panel-2);
+  border-color: var(--border);
+}
+
+.join-url {
+  flex: 1 0 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 8px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+}
+.join-url code {
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11.5px;
+  color: var(--accent);
+}
+.host-note code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: var(--text);
+}
+
 .host-form {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
   padding-top: 8px;
-  border-top: 1px solid var(--border);
 }
 .host-form .input { min-width: 90px; flex: 1; }
 .host-form .input.tiny { min-width: 56px; max-width: 64px; flex: 0 0 auto; }

@@ -7,6 +7,7 @@ import { Hosts } from './Hosts.js';
 export function Toolbar() {
   const {
     workspaces,
+    hosts,
     sessions,
     profiles,
     messages,
@@ -15,6 +16,7 @@ export function Toolbar() {
     hubVersion,
   } = useStore(useShallow((s) => ({
     workspaces: s.workspaces,
+    hosts: s.hosts,
     sessions: s.sessions,
     profiles: s.profiles,
     messages: s.messages,
@@ -25,10 +27,13 @@ export function Toolbar() {
 
   const [path, setPath] = useState('');
   const [name, setName] = useState('');
+  // '' is this machine. A workspace on a host runs its agents over there.
+  const [hostId, setHostId] = useState('');
   const [wsId, setWsId] = useState('');
   const [profile, setProfile] = useState('claude');
   const [showLog, setShowLog] = useState(false);
 
+  const connectedHosts = hosts.filter((h) => h.state === 'connected');
   const activeWs = wsId || workspaces[0]?.id || '';
   const stoppedInWs = sessions.filter(
     (s) => s.workspaceId === activeWs && s.state !== 'running',
@@ -46,7 +51,11 @@ export function Toolbar() {
       <div className="group">
         <input
           className="input wide"
-          placeholder="folder path for a new workspace"
+          placeholder={
+            hostId
+              ? `folder path on ${hosts.find((h) => h.id === hostId)?.label ?? 'that host'}`
+              : 'folder path for a new workspace'
+          }
           value={path}
           onChange={(e) => setPath(e.target.value)}
         />
@@ -56,6 +65,23 @@ export function Toolbar() {
           value={name}
           onChange={(e) => setName(e.target.value)}
         />
+        {/* Only connected hosts: a workspace on an unreachable one could not
+            start anything, and offering it would only fail later. */}
+        {connectedHosts.length > 0 && (
+          <select
+            className="input"
+            title="Which machine this workspace's folder is on"
+            value={hostId}
+            onChange={(e) => setHostId(e.target.value)}
+          >
+            <option value="">this machine</option>
+            {connectedHosts.map((h) => (
+              <option key={h.id} value={h.id}>
+                {h.label}
+              </option>
+            ))}
+          </select>
+        )}
         <button
           className="btn primary"
           disabled={!path.trim()}
@@ -64,9 +90,11 @@ export function Toolbar() {
               t: 'createWorkspace',
               name: name.trim() || path.trim(),
               rootPath: path.trim(),
+              hostId: hostId || null,
             });
             setPath('');
             setName('');
+            setHostId('');
           }}
         >
           add workspace

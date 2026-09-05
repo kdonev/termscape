@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import type { Host, Session, WindowRect } from '@aicanvas/protocol';
 import type { Store } from '../db/store.js';
 import { DEFAULT_WINDOW } from '../db/store.js';
+import type { WebSocket as WsSocket } from 'ws';
 import { PeerConnection } from './peer.js';
 
 /**
@@ -28,12 +29,40 @@ export class PeerRegistry extends EventEmitter {
   /* ---------------------------------------------------------- connection */
 
   add(host: Host, url: string, token: string): PeerConnection {
+    const peer = this.create(host, { url, token });
+    peer.connect();
+    return peer;
+  }
+
+  /**
+   * Adopt a socket an enrolled host opened towards us. Same peer, same events,
+   * same routing — only the direction of the dial differs, and nothing
+   * downstream of here can tell.
+   */
+  addInbound(host: Host, socket: WsSocket, remoteVersion: string): PeerConnection {
+    const peer = this.create(host, {});
+    peer.adopt(socket, remoteVersion);
+    return peer;
+  }
+
+  private create(host: Host, opts: { url?: string; token?: string }): PeerConnection {
+    const existing = this.peers.get(host.id);
+    if (existing?.connected) {
+      // Two live processes are claiming one host - a duplicate left behind by
+      // an interrupted install, say. Taking the newcomer and merely dropping
+      // the old one is not enough: it reconnects, displaces the newcomer, and
+      // the two evict each other forever. Tell it to stop instead.
+      void existing
+        .request({ t: 'shutdown', id: randomUUID() })
+        .catch(() => {
+          // It may go away before answering, which is the point.
+        });
+    }
     this.remove(host.id);
 
     const peer = new PeerConnection({
       hostId: host.id,
-      url,
-      token,
+      ...opts,
       hubVersion: this.hubVersion,
     });
 
@@ -79,7 +108,6 @@ export class PeerRegistry extends EventEmitter {
     this.peers.set(host.id, peer);
     this.remote.set(host.id, new Map());
     this.updateHost(host.id, { state: 'connecting' });
-    peer.connect();
     return peer;
   }
 
@@ -202,6 +230,50 @@ export class PeerRegistry extends EventEmitter {
       throw new Error(`host for "${to}" is not connected`);
     }
     await found.peer.request({ t: 'deliver', id: randomUUID(), from, to, body });
+  }
+
+  /**
+   * Start an agent on a peer. The receiving hub creates the workspace if it
+   * does not have one by that name, so a host needs no setup before its first
+   * session — which is what makes picking a host at workspace-creation time
+   * enough on its own.
+   */
+  async startSession(
+    hostId: string,
+    req: {
+      workspaceName: string;
+      rootPath: string;
+      profile: string;
+      name?: string;
+      spawnedByAddress: string | null;
+    },
+  ): Promise<Session> {
+    const peer = this.peers.get(hostId);
+    if (!peer) throw new Error(`host ${hostId} is not connected`);
+    if (!peer.connected) throw new Error(`host ${hostId} is not connected`);
+    return peer.request<Session>({ t: 'startSession', id: randomUUID(), ...req });
+  }
+
+  /**
+   * Ask a peer to stop its whole hub. Best effort by nature: it may already be
+   * gone, and it stops answering the moment it obeys.
+   */
+  async requestShutdown(hostId: string): Promise<boolean> {
+    const peer = this.peers.get(hostId);
+    if (!peer?.connected) return false;
+    try {
+      await peer.request({ t: 'shutdown', id: randomUUID() });
+      return true;
+    } catch {
+      // It went away before replying, which is the outcome we wanted.
+      return false;
+    }
+  }
+
+  async stopSession(address: string): Promise<void> {
+    const found = this.find(address);
+    if (!found) throw new Error(`no agent at address "${address}"`);
+    await found.peer.request({ t: 'stopSession', id: randomUUID(), address });
   }
 
   async readScreen(address: string, lines?: number): Promise<unknown> {

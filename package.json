@@ -12,8 +12,8 @@
   },
   "scripts": {
     "build": "npm run build -w @aicanvas/protocol && npm run build -w @aicanvas/web && npm run build -w @aicanvas/hub",
-    "dev": "npm run dev -w @aicanvas/hub",
-    "dev:web": "npm run dev -w @aicanvas/web",
+    "dev": "npm run dev -w @aicanvas/hub --",
+    "dev:web": "npm run dev -w @aicanvas/web --",
     "test": "vitest run",
     "typecheck": "tsc -b --pretty"
   },

@@ -91,9 +91,11 @@ beforeAll(async () => {
   const host: Host = {
     id: randomUUID(),
     label: 'test-remote',
+    kind: 'ssh',
     sshHost: '127.0.0.1',
     sshUser: 'test',
     sshPort: 22,
+    platform: null,
     hubVersion: null,
     state: 'disconnected',
     lastSeenAt: null,
