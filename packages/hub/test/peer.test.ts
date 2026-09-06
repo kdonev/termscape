@@ -377,7 +377,15 @@ describe('an agent on an attached machine', () => {
     const there = hubB.sessions.getByAddress('remotews/there')!;
     // list_agents advertises these addresses now, so every tool that takes an
     // address has to reach them - not just the one that sends messages.
-    const screen = await hubB.readScreen(there.id, 'localws/here');
+    // Delivery types the message into the other terminal, so the screen
+    // catches up a beat after the send resolves - and on the slower ConPTY
+    // of a Windows runner the first read can still be only the shell banner.
+    let screen = await hubB.readScreen(there.id, 'localws/here');
+    const deadline = Date.now() + 10_000;
+    while (!screen.screen.includes('other side') && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 100));
+      screen = await hubB.readScreen(there.id, 'localws/here');
+    }
     expect(screen.address).toBe('localws/here');
     expect(screen.running).toBe(true);
     expect(screen.screen).toContain('other side');

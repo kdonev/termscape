@@ -140,6 +140,15 @@ describe('advertising this machine by name', () => {
   });
 
   it('falls back to the mDNS name when the bare one does not resolve', async () => {
+    // A machine whose own hostname already carries the suffix - macOS
+    // usually, and the CI runners always - has no second shape to try, and
+    // appending another .local would be wrong. There the bare name is the
+    // mDNS name, which is what this asserts instead.
+    if (me.endsWith('.local')) {
+      const only = await preferredHostname(IP, async (n) => (n === me ? [IP] : []));
+      expect(only).toBe(me);
+      return;
+    }
     const name = await preferredHostname(IP, async (n) =>
       n === `${me}.local` ? [IP] : [],
     );
