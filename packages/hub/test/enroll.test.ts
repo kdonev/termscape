@@ -653,7 +653,16 @@ describe('re-joining a machine the canvas has forgotten', () => {
       'machine to enrol again',
     );
     await waitFor(
-      () => readFileSync(tokenFile, 'utf8').trim() !== staleToken,
+      () => {
+        try {
+          return readFileSync(tokenFile, 'utf8').trim() !== staleToken;
+        } catch {
+          // The re-join replaces this file rather than editing it, so there
+          // is a moment with nothing on disk. That is "not yet", not a
+          // failure - reading it straight through made the test flaky.
+          return false;
+        }
+      },
       10_000,
       'a new host token',
     );
