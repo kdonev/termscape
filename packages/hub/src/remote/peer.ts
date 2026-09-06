@@ -216,6 +216,14 @@ export class PeerConnection extends EventEmitter {
       case 'output':
         this.emit('output', msg.address, msg.data);
         return;
+
+      // This peer asking us to act on an address it cannot resolve itself.
+      // Answered with a `relayResult` request rather than an `ok`, because the
+      // request channel runs the other way: it is not replying to us here, it
+      // is asking, and we answer.
+      case 'relay':
+        this.emit('relay', msg.relayId, msg.ask);
+        return;
     }
   }
 

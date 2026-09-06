@@ -34,6 +34,7 @@ let peerUrlB: string;
 
 const PEER_TOKEN = 'peer-token-for-tests';
 const outputB = new Map<string, string>();
+const outputA = new Map<string, string>();
 
 function waitFor(fn: () => boolean, ms = 15_000, label = 'condition'): Promise<void> {
   return new Promise((res, rej) => {
@@ -45,6 +46,20 @@ function waitFor(fn: () => boolean, ms = 15_000, label = 'condition'): Promise<v
     };
     tick();
   });
+}
+
+/** Same as waitFor, for a condition that has to be awaited to be asked. */
+async function waitForAsync(
+  fn: () => Promise<boolean>,
+  ms = 15_000,
+  label = 'condition',
+): Promise<void> {
+  const t0 = Date.now();
+  for (;;) {
+    if (await fn()) return;
+    if (Date.now() - t0 > ms) throw new Error(`timed out waiting for ${label}`);
+    await new Promise((r) => setTimeout(r, 50));
+  }
 }
 
 async function mcpAs(hub: Hub, origin: string, sessionId: string): Promise<Client> {
@@ -78,6 +93,9 @@ beforeAll(async () => {
   const portB = (appB.server.address() as { port: number }).port;
 
   hubA = new Hub({ dbPath: join(homeA, 'state.db') });
+  hubA.on('data', (id: string, chunk: string) =>
+    outputA.set(id, (outputA.get(id) ?? '') + chunk),
+  );
   ({ app: appA, origin: originA } = await serve({
     hub: hubA,
     port: 0,
@@ -301,6 +319,75 @@ describe('remote window removal', () => {
     expect(hubA.peers.sessions().some((s) => s.address === agent.address)).toBe(false);
     // Everything else on that host is left alone.
     expect(hubB.sessions.getByAddress('remotews/worker')).not.toBeNull();
+  });
+});
+
+/**
+ * The link carries knowledge in one direction on its own: the canvas asks a
+ * host for its sessions. These are the frames that carry it back, without
+ * which an agent on an attached machine can neither see nor reach anything
+ * beyond that machine.
+ */
+describe('an agent on an attached machine', () => {
+  it('sees the agents on the machine that owns the canvas', async () => {
+    const here = await hubA.startSession({ workspaceId: wsA, profile: 'shell', name: 'here' });
+    const there = await hubB.startSession({ workspaceId: wsB, profile: 'shell', name: 'there' });
+
+    await waitForAsync(
+      async () => (await hubB.listAgents(there.id)).some((a) => a.address === here.address),
+      15_000,
+      'the canvas to announce itself',
+    );
+
+    const agents = await hubB.listAgents(there.id);
+    const seen = agents.find((a) => a.address === here.address)!;
+    // Named by the machine it is on, so an agent can tell where a peer lives.
+    expect(seen.host).toBe('canvas');
+    expect(seen.workspace).toBe('localws');
+
+    // Its own agents come from its own session list. Announcing them back
+    // would have every one of them listed twice.
+    expect(agents.filter((a) => a.address === there.address)).toHaveLength(1);
+    expect(agents.find((a) => a.address === there.address)!.isYou).toBe(true);
+  });
+
+  it('messages one of them, and it lands in the real terminal', async () => {
+    const here = hubA.sessions.getByAddress('localws/here')!;
+    const there = hubB.sessions.getByAddress('remotews/there')!;
+
+    // Only the canvas knows where an address lives, so this goes up the link
+    // and comes back with a verdict rather than being routed here.
+    const r = await hubB.sendMessage(there.id, here.address, 'ping from the other side');
+    expect(r.delivered).toBe(true);
+
+    await waitFor(
+      () => (outputA.get(here.id) ?? '').includes('ping from the other side'),
+      15_000,
+      'the message to reach the terminal on the canvas machine',
+    );
+    // Attribution survives the extra hop, and is the sender's real address.
+    expect(outputA.get(here.id)).toContain(`[from ${there.address}]`);
+
+    // Recorded on the machine that sent it, so its own log is complete.
+    const logged = hubB.store.listMessages().find((m) => m.body.includes('other side'));
+    expect(logged?.deliveryState).toBe('delivered');
+  });
+
+  it('reads the screen of one of them', async () => {
+    const there = hubB.sessions.getByAddress('remotews/there')!;
+    // list_agents advertises these addresses now, so every tool that takes an
+    // address has to reach them - not just the one that sends messages.
+    const screen = await hubB.readScreen(there.id, 'localws/here');
+    expect(screen.address).toBe('localws/here');
+    expect(screen.running).toBe(true);
+    expect(screen.screen).toContain('other side');
+  });
+
+  it('reports a failure rather than swallowing it', async () => {
+    const there = hubB.sessions.getByAddress('remotews/there')!;
+    await expect(
+      hubB.sendMessage(there.id, 'localws/nobody', 'into the void'),
+    ).rejects.toThrow(/no agent/);
   });
 });
 

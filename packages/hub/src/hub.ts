@@ -8,6 +8,8 @@ import {
   slugify,
   type Message,
   type Host,
+  type PeerAgent,
+  type PeerRelayAsk,
   type Session,
   type Viewport,
   type WindowRect,
@@ -21,11 +23,19 @@ import { MessageRouter } from './agents/router.js';
 import { SessionManager } from './session/manager.js';
 import type { AgentApi } from './mcp/server.js';
 import { PeerRegistry } from './remote/registry.js';
+import type { Uplink } from './remote/peer-serve.js';
 import { deploy, type DeployResult } from './remote/deployer.js';
 import { hubTarballPath } from './remote/tarball.js';
 import { paths } from './paths.js';
 
 export const HUB_VERSION = '0.1.0';
+
+/**
+ * How long changes are pooled before every attached machine is told the
+ * canvas has moved on. A status change is a session change, and agents change
+ * status several times a turn.
+ */
+const ANNOUNCE_COALESCE_MS = 300;
 
 /** Colours cycled through when a workspace is created, for canvas grouping. */
 const WORKSPACE_COLORS = [
@@ -57,6 +67,13 @@ export class Hub extends EventEmitter implements AgentApi {
   readonly sessions: SessionManager;
   readonly router: MessageRouter;
   readonly peers: PeerRegistry;
+  /**
+   * The link back to the canvas this hub was attached to, if it was. Null on a
+   * hub that owns a canvas — which is what makes the difference between the
+   * two roles a null check rather than a flag.
+   */
+  private uplink: Uplink | null = null;
+  private announceTimer: NodeJS.Timeout | null = null;
   /** Live SSH tunnels, keyed by host id. Not persisted: they die with the hub. */
   private readonly tunnels = new Map<string, DeployResult>();
   private readonly spawnCap: number;
@@ -98,6 +115,34 @@ export class Hub extends EventEmitter implements AgentApi {
       this.emit('data', address, data);
     });
 
+    // A host asking us to act on an address it cannot resolve itself. We are
+    // the only hub that knows where every address on this canvas lives, and
+    // the answer travels back the way the question came.
+    this.peers.on(
+      'relay',
+      (
+        ask: PeerRelayAsk,
+        reply: (ok: boolean, result: unknown, error: string | null) => void,
+      ) => {
+        const done = (p: Promise<unknown>) =>
+          p.then(
+            (result) => reply(true, result, null),
+            (err: Error) => reply(false, null, err.message),
+          );
+
+        if (ask.t === 'deliver') return void done(this.deliverFrom(ask.from, ask.to, ask.body));
+        return void done(this.readScreenAt(ask.address, ask.lines));
+      },
+    );
+
+    // Every attached machine's view of the canvas is whatever we last told it,
+    // so anything that changes who is running has to be followed by telling
+    // them again.
+    this.peers.on('directoryStale', () => this.scheduleAnnounce());
+    this.on('session', () => this.scheduleAnnounce());
+    this.on('removed', () => this.scheduleAnnounce());
+    this.on('peersChanged', () => this.scheduleAnnounce());
+
     // Anything the DB still calls running died with the previous hub.
     this.sessions.reconcileOnBoot();
     this.reconcileHostsOnBoot();
@@ -124,10 +169,27 @@ export class Hub extends EventEmitter implements AgentApi {
     return [...this.sessions.list(), ...this.peers.sessions()];
   }
 
-  /** Resolve an address to a local session, a remote one, or nothing. */
-  private locate(address: string): 'local' | 'remote' | null {
+  /**
+   * Resolve an address to a local session, one on a peer we hold, one the
+   * canvas told us about, or nothing.
+   *
+   * The three are exclusive by construction: a hub either owns the canvas and
+   * has peers, or is attached to one and has an uplink. Never both.
+   */
+  private locate(address: string): 'local' | 'remote' | 'uplink' | null {
     if (this.sessions.getByAddress(address)) return 'local';
-    return this.peers.find(address) ? 'remote' : null;
+    if (this.peers.find(address)) return 'remote';
+    return this.uplink?.agents().some((a) => a.address === address) ? 'uplink' : null;
+  }
+
+  /**
+   * Attach this hub to the canvas reachable over `uplink`.
+   *
+   * Called by whatever owns the socket, once, at wiring time. A hub that owns
+   * its own canvas never calls it.
+   */
+  setUplink(uplink: Uplink | null): void {
+    this.uplink = uplink;
   }
 
   setOrigin(origin: string): void {
@@ -388,30 +450,107 @@ export class Hub extends EventEmitter implements AgentApi {
       };
     });
 
-    return [...local, ...remote].filter((a) => !workspace || a.workspace === workspace);
+    // What the canvas told us about, on a hub attached to one. Its own view
+    // is the only complete one, so this is where an agent on an attached
+    // machine learns that anything exists beyond this machine.
+    const fromCanvas = (this.uplink?.agents() ?? []).map((a) => ({ ...a, isYou: false }));
+
+    return [...local, ...remote, ...fromCanvas].filter(
+      (a) => !workspace || a.workspace === workspace,
+    );
   }
 
   async sendMessage(sessionId: string, to: string, text: string) {
     const me = this.requireSession(sessionId);
     if (me.address === to) throw new Error('cannot send a message to yourself');
+    return this.deliverFrom(me.address, to, text);
+  }
+
+  /**
+   * Tell every attached machine who is on the canvas.
+   *
+   * Coalesced, because a status change is a session change and agents change
+   * status several times a turn; the directory only needs to be right once the
+   * dust settles. Unrefed so a pending announcement never holds the hub up.
+   */
+  private scheduleAnnounce(): void {
+    // Most hubs have nobody to tell: one that owns a canvas with no machines
+    // attached, and every hub that is itself an attached machine.
+    if (this.announceTimer || !this.peers.any) return;
+    this.announceTimer = setTimeout(() => {
+      this.announceTimer = null;
+      this.peers.announce((hostId) => this.directoryFor(hostId));
+    }, ANNOUNCE_COALESCE_MS);
+    this.announceTimer.unref?.();
+  }
+
+  /**
+   * The canvas as one machine on it should see it: everything, minus that
+   * machine's own agents. It has those already, and sending them back would
+   * have every agent over there listed twice.
+   */
+  private directoryFor(hostId: string): PeerAgent[] {
+    const wsById = new Map(this.store.listWorkspaces().map((w) => [w.id, w]));
+    const hostLabels = new Map(this.store.listHosts().map((h) => [h.id, h.label]));
+
+    const here = this.sessions.list().map((s) => ({
+      address: s.address,
+      workspace: wsById.get(s.workspaceId)?.name ?? null,
+      profile: s.profile,
+      state: s.state,
+      status: s.status,
+      statusText: s.statusText,
+      // What the machine that owns the canvas is called, from anywhere else.
+      host: 'canvas',
+    }));
+
+    const elsewhere = this.peers
+      .sessions()
+      .filter((s) => this.peers.hostIdFor(s.address) !== hostId)
+      .map((s) => ({
+        address: s.address,
+        workspace: s.address.split('/')[0] ?? null,
+        profile: s.profile,
+        state: s.state,
+        status: s.status,
+        statusText: s.statusText,
+        host: hostLabels.get(this.peers.hostIdFor(s.address) ?? '') ?? 'remote',
+      }));
+
+    return [...here, ...elsewhere];
+  }
+
+  /**
+   * Deliver on behalf of an address this hub has already established.
+   *
+   * Three ways out, and which one is taken is the only difference between an
+   * agent in the next window, one on a machine this hub holds, and one only
+   * the canvas can reach. No caller sees which.
+   */
+  async deliverFrom(fromAddr: string, to: string, text: string) {
+    const where = this.locate(to);
 
     // An unknown address goes down the local path deliberately: the router
     // records the failed attempt with its reason, which is what keeps the
     // promise that no message is ever dropped silently.
-    if (this.locate(to) !== 'remote') {
-      const r = this.router.send(me.address, to, text);
+    if (where === 'local' || where === null) {
+      const r = this.router.send(fromAddr, to, text);
       if (!r.delivered) throw new Error(r.error ?? 'delivery failed');
       return { delivered: true, to, deliveredAt: r.deliveredAt };
     }
 
-    // Cross-host: the peer performs the actual injection. We still record the
-    // attempt locally so the message log and the canvas edge are complete.
+    // Off this machine: whoever owns the PTY performs the injection. We still
+    // record the attempt locally so the message log and the canvas edge are
+    // complete on this side too.
     const id = randomUUID();
     const sentAt = Date.now();
     try {
-      await this.peers.deliver(me.address, to, text);
+      if (where === 'remote') await this.peers.deliver(fromAddr, to, text);
+      // Only the canvas knows where every address lives, so an attached hub
+      // hands the message up rather than trying to route it itself.
+      else await this.uplink!.ask({ t: 'deliver', from: fromAddr, to, body: text });
       const m: Message = {
-        id, fromAddr: me.address, toAddr: to, body: text,
+        id, fromAddr, toAddr: to, body: text,
         sentAt, deliveredAt: Date.now(), deliveryState: 'delivered', error: null,
       };
       this.store.insertMessage(m);
@@ -419,7 +558,7 @@ export class Hub extends EventEmitter implements AgentApi {
       return { delivered: true, to, deliveredAt: m.deliveredAt };
     } catch (err) {
       const m: Message = {
-        id, fromAddr: me.address, toAddr: to, body: text,
+        id, fromAddr, toAddr: to, body: text,
         sentAt, deliveredAt: null, deliveryState: 'failed',
         error: (err as Error).message,
       };
@@ -516,8 +655,23 @@ export class Hub extends EventEmitter implements AgentApi {
 
   async readScreen(sessionId: string, address: string, lines?: number) {
     this.requireSession(sessionId);
-    if (this.locate(address) === 'remote') {
-      return this.peers.readScreen(address, lines);
+    return this.readScreenAt(address, lines);
+  }
+
+  /**
+   * read_screen for a caller this hub has already established — either an
+   * agent of its own, or a peer that authenticated one and is asking on its
+   * behalf. Resolves the address the same three ways a delivery does.
+   */
+  private async readScreenAt(address: string, lines?: number) {
+    const where = this.locate(address);
+    if (where === 'remote') return this.peers.readScreen(address, lines);
+    if (where === 'uplink') {
+      return this.uplink!.ask<{ address: string; running: boolean; screen: string }>({
+        t: 'readScreen',
+        address,
+        lines,
+      });
     }
     const target = this.sessions.getByAddress(address);
     if (!target) throw new Error(`no agent at address "${address}"`);

@@ -1,6 +1,12 @@
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
-import type { Host, Session, WindowRect } from '@aicanvas/protocol';
+import type {
+  Host,
+  PeerAgent,
+  PeerRelayAsk,
+  Session,
+  WindowRect,
+} from '@aicanvas/protocol';
 import type { Store } from '../db/store.js';
 import { DEFAULT_WINDOW } from '../db/store.js';
 import type { WebSocket as WsSocket } from 'ws';
@@ -71,6 +77,9 @@ export class PeerRegistry extends EventEmitter {
       // A host that was unreachable when the user closed one of its windows
       // has an instruction waiting for it.
       void this.flushPendingRemovals(host.id, peer);
+      // It knows nothing about the rest of the canvas until it is told, and
+      // its agents are running the moment it reconnects.
+      this.emit('directoryStale');
     });
 
     peer.on('disconnected', () => {
@@ -112,6 +121,21 @@ export class PeerRegistry extends EventEmitter {
 
     peer.on('output', (address: string, data: string) => {
       this.emit('output', address, data);
+    });
+
+    // An agent over there acting on an address its own hub cannot resolve.
+    // We do it — we are the only hub that knows where every address on this
+    // canvas lives — and the answer goes back over the same link.
+    peer.on('relay', (relayId: string, ask: PeerRelayAsk) => {
+      this.emit('relay', ask, (ok: boolean, result: unknown, error: string | null) => {
+        void peer
+          .request({ t: 'relayResult', id: randomUUID(), relayId, ok, result, error })
+          .catch(() => {
+            // The host went away between asking and being answered. Its own
+            // relay timeout is what tells its agent, and there is nothing
+            // useful to do about it here.
+          });
+      });
     });
 
     this.peers.set(host.id, peer);
@@ -181,6 +205,29 @@ export class PeerRegistry extends EventEmitter {
 
   peer(hostId: string): PeerConnection | null {
     return this.peers.get(hostId) ?? null;
+  }
+
+  /** Whether there is any attached machine to tell things to. */
+  get any(): boolean {
+    return this.peers.size > 0;
+  }
+
+  /**
+   * Tell every attached host who is on the canvas.
+   *
+   * `forHost` receives the whole directory minus that host's own agents: it
+   * already has those, and listing them twice is worse than not sending them.
+   */
+  announce(forHost: (hostId: string) => PeerAgent[]): void {
+    for (const [hostId, peer] of this.peers) {
+      if (!peer.connected) continue;
+      void peer
+        .request({ t: 'directory', id: randomUUID(), agents: forHost(hostId) })
+        .catch(() => {
+          // A host that dropped mid-announce gets the current directory when
+          // it reconnects, which is the same thing a moment later.
+        });
+    }
   }
 
   /** Every remote session across every peer. */

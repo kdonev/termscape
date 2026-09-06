@@ -1,6 +1,9 @@
+import { randomUUID } from 'node:crypto';
 import {
   PeerRequest,
   PEER_SCHEMA_VERSION,
+  type PeerAgent,
+  type PeerRelayAsk,
   type PeerResponse,
   type Session,
 } from '@aicanvas/protocol';
@@ -17,9 +20,32 @@ import { HUB_VERSION } from '../hub.js';
  * installer dials out and runs the very same thing over the socket it opened.
  * That split is the whole reason enrollment can invert the direction of the
  * connection without the canvas-owning hub noticing.
+ *
+ * It is also this hub's *uplink*: the one link back to the canvas it was
+ * attached to. Answering is most of what it does, but not all — it holds the
+ * directory the canvas sends of who else is out there, and it can ask the
+ * canvas to deliver a message to any of them. Without those an agent here can
+ * neither see nor reach anything beyond this machine.
  */
 
-export interface PeerServer {
+/** How long a relayed ask waits for the canvas to report what happened. */
+const RELAY_TIMEOUT_MS = 15_000;
+
+/**
+ * The link back to the canvas, as the rest of this hub needs it. Separated
+ * from the serving machinery because a hub that owns a canvas has no uplink at
+ * all, and the difference should be a null check rather than a special case.
+ */
+export interface Uplink {
+  /** True while a canvas is attached to this hub. */
+  readonly attached: boolean;
+  /** Agents the canvas has told us about. Never this hub's own. */
+  agents(): PeerAgent[];
+  /** Ask the canvas to act on an address we cannot resolve ourselves. */
+  ask<T>(ask: PeerRelayAsk): Promise<T>;
+}
+
+export interface PeerServer extends Uplink {
   /** Wire one accepted or dialled socket into this hub. */
   serve(socket: WebSocket, opts?: { preAuthed?: boolean }): void;
   /** Number of peers currently attached. */
@@ -31,6 +57,17 @@ export function createPeerServer(hub: Hub, clientToken: string): PeerServer {
   const sockets = new Set<WebSocket>();
   /** Which addresses each peer asked to stream output for. */
   const attached = new Map<WebSocket, Set<string>>();
+  /**
+   * Who else is on the canvas, as the canvas last described it. Replaced
+   * wholesale on every `directory`, so an agent that went away over there
+   * cannot linger here.
+   */
+  let directory: PeerAgent[] = [];
+  /** Asks sent to the canvas and still waiting for their answer. */
+  const relays = new Map<
+    string,
+    { resolve: (v: unknown) => void; reject: (e: Error) => void; timer: NodeJS.Timeout }
+  >();
 
   const send = (ws: WebSocket, msg: PeerResponse): void => {
     if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(msg));
@@ -100,6 +137,22 @@ export function createPeerServer(hub: Hub, clientToken: string): PeerServer {
         switch (req.t) {
           case 'listSessions':
             return ok(hub.sessions.list());
+
+          case 'directory':
+            // Replaced wholesale: this is the canvas's whole view, minus our
+            // own agents, and a merge would keep agents it has dropped.
+            directory = req.agents;
+            return ok({ agents: req.agents.length });
+
+          case 'relayResult': {
+            const p = relays.get(req.relayId);
+            if (!p) return ok({ unknown: req.relayId });
+            relays.delete(req.relayId);
+            clearTimeout(p.timer);
+            if (req.ok) p.resolve(req.result);
+            else p.reject(new Error(req.error ?? 'the canvas could not do that'));
+            return ok({ ok: true });
+          }
 
           case 'deliver': {
             // The originating hub already authenticated the sender, so its
@@ -199,6 +252,16 @@ export function createPeerServer(hub: Hub, clientToken: string): PeerServer {
     socket.on('close', () => {
       sockets.delete(socket);
       attached.delete(socket);
+      // Nothing left to answer a relay, and a caller waiting on one would
+      // otherwise sit there until the timeout for no reason.
+      if (sockets.size === 0) {
+        directory = [];
+        for (const [, p] of relays) {
+          clearTimeout(p.timer);
+          p.reject(new Error('the link to the canvas closed'));
+        }
+        relays.clear();
+      }
     });
   }
 
@@ -207,6 +270,33 @@ export function createPeerServer(hub: Hub, clientToken: string): PeerServer {
     get size() {
       return sockets.size;
     },
+    get attached() {
+      return sockets.size > 0;
+    },
+    agents(): PeerAgent[] {
+      return sockets.size > 0 ? directory : [];
+    },
+
+    /**
+     * Hand something to the canvas to do. Only the canvas knows where every
+     * address on it lives, so this is the only way an agent here reaches one
+     * anywhere else — including on the machine the canvas itself runs on.
+     */
+    ask<T>(ask: PeerRelayAsk): Promise<T> {
+      const socket = [...sockets].find((ws) => ws.readyState === ws.OPEN);
+      if (!socket) return Promise.reject(new Error('not attached to a canvas'));
+
+      const relayId = randomUUID();
+      return new Promise<T>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          relays.delete(relayId);
+          reject(new Error('the canvas did not answer'));
+        }, RELAY_TIMEOUT_MS);
+        relays.set(relayId, { resolve: (v) => resolve(v as T), reject, timer });
+        send(socket, { t: 'relay', relayId, ask });
+      });
+    },
+
     closeAll(): void {
       for (const ws of sockets) {
         try {

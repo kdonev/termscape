@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { Session } from './domain.js';
+import { AgentStatus, Session, SessionState } from './domain.js';
 
 /**
  * Hub-to-hub RPC.
@@ -13,7 +13,27 @@ import { Session } from './domain.js';
  * canvas always issues requests. It dials an SSH-deployed host through the
  * tunnel, and is dialled by a host that ran the join installer. The frames
  * below are the same in both cases.
+ *
+ * Knowledge, though, has to travel both ways, or an agent on an attached
+ * machine cannot see or reach the agents on the canvas machine. Two frames
+ * carry it without disturbing who asks whom: `directory` is the canvas telling
+ * a host who else is on the canvas, and `relay` is a host asking the canvas to
+ * act on an address it cannot resolve itself — because only the canvas knows
+ * where every address on it lives.
  */
+
+/** One agent as another hub needs to see it: enough to list and address it. */
+export const PeerAgent = z.object({
+  address: z.string(),
+  workspace: z.string().nullable(),
+  profile: z.string(),
+  state: SessionState,
+  status: AgentStatus,
+  statusText: z.string().nullable(),
+  /** Label of the machine it runs on, as the canvas knows that machine. */
+  host: z.string(),
+});
+export type PeerAgent = z.infer<typeof PeerAgent>;
 
 /**
  * Opens the link, in either direction.
@@ -24,6 +44,30 @@ import { Session } from './domain.js';
  * dials us, and introduces itself here — we have never seen it before, so this
  * frame is the only place its identity can come from.
  */
+/**
+ * What an attached hub asks its canvas to do for it.
+ *
+ * Everything here is something it could do unaided for its own agents and
+ * cannot do for anyone else's: the address belongs to a machine it has no link
+ * to. The canvas resolves the address and performs it, wherever that lands.
+ */
+export const PeerRelayAsk = z.discriminatedUnion('t', [
+  // `from` was authenticated by the asking hub from the sender's own bearer
+  // token, exactly as `deliver` is trusted in the other direction.
+  z.object({
+    t: z.literal('deliver'),
+    from: z.string(),
+    to: z.string(),
+    body: z.string(),
+  }),
+  z.object({
+    t: z.literal('readScreen'),
+    address: z.string(),
+    lines: z.number().int().positive().optional(),
+  }),
+]);
+export type PeerRelayAsk = z.infer<typeof PeerRelayAsk>;
+
 export const PeerHello = z.object({
   t: z.literal('hello'),
   /**
@@ -67,6 +111,22 @@ export const PeerRequest = z.discriminatedUnion('t', [
   // otherwise it lingers holding its files open and its next install fails.
   z.object({ t: z.literal('shutdown'), id: z.string() }),
   z.object({ t: z.literal('resumeSession'), id: z.string(), address: z.string() }),
+  // The canvas telling a host who else is on it. Sent whenever that set
+  // changes, and it is the whole set minus the receiving host's own agents,
+  // which it already knows about and would otherwise list twice.
+  z.object({ t: z.literal('directory'), id: z.string(), agents: z.array(PeerAgent) }),
+  // The answer to a `relay`, matched by the id the host chose for it. A
+  // separate frame rather than an `ok`, because the two ends do not share a
+  // request channel: the canvas asks, the host answers, and this is the canvas
+  // answering something the host asked.
+  z.object({
+    t: z.literal('relayResult'),
+    id: z.string(),
+    relayId: z.string(),
+    ok: z.boolean(),
+    result: z.unknown(),
+    error: z.string().nullable(),
+  }),
   // The forwarded delivery: `from` is the *originating agent's* address, which
   // the sending hub already authenticated. A peer is trusted to report it.
   z.object({
@@ -119,6 +179,10 @@ export const PeerResponse = z.discriminatedUnion('t', [
   z.object({ t: z.literal('sessionUpserted'), session: Session }),
   z.object({ t: z.literal('sessionRemoved'), address: z.string() }),
   z.object({ t: z.literal('output'), address: z.string(), data: z.string() }),
+  // A host asking the canvas to act on an address it cannot resolve itself.
+  // Its own agents it handles directly; anything else it can only reach
+  // through the hub that knows where addresses live.
+  z.object({ t: z.literal('relay'), relayId: z.string(), ask: PeerRelayAsk }),
 ]);
 export type PeerResponse = z.infer<typeof PeerResponse>;
 
@@ -126,4 +190,4 @@ export type PeerResponse = z.infer<typeof PeerResponse>;
  * Bumped whenever the peer protocol or the DB schema changes shape. Hubs
  * refuse to connect across a mismatch rather than corrupting each other.
  */
-export const PEER_SCHEMA_VERSION = 4;
+export const PEER_SCHEMA_VERSION = 5;

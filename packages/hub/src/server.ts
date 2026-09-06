@@ -155,6 +155,10 @@ export async function serve(opts: ServeOptions): Promise<ServeResult> {
    * itself runs the identical thing over a socket it dialled out instead.
    */
   const peerServer = createPeerServer(hub, clientToken);
+  // It is also this hub's link back to whatever canvas it was attached to.
+  // On a hub that owns its own canvas nothing ever attaches, and the uplink
+  // reports itself as detached forever.
+  hub.setUplink(peerServer);
 
   app.get('/peer', { websocket: true }, (socket) => {
     peerServer.serve(socket);
