@@ -209,3 +209,58 @@ that *were* installed both differed from what the previous entry assumed.
   detected set has to travel, the way sessions already do.
 - `packages/web/src/panel/Panel.tsx:328` — the picker, which becomes per
   machine rather than one global list.
+
+---
+
+## 4. Add and edit in a dialog, not in the tree
+
+**What it is.** Adding a workspace, starting an agent and attaching a machine
+all open a small form *inside* the tree, in a 420px panel. The fields wrap, the
+tree jumps as the form appears, and everything below the node you clicked
+slides down the page. A dialog over the canvas is the right shape for this: it
+has room, it does not disturb what is behind it, and it is where editing can
+live at all.
+
+**How it behaves.**
+
+- **One dialog component, three uses to start**: add a workspace, start an
+  agent, attach a machine. Each opens over the canvas with the panel still
+  visible behind it, so you can see the node you acted on.
+- **Editing becomes possible.** There is nowhere to rename a workspace or fix a
+  host's ssh details today, because there is nowhere to put the form. Once the
+  dialog exists, an *edit* on a node is the same dialog opened with values in
+  it, and that is most of the work of adding editing at all.
+- **This is what makes entry 2 fit.** A template is an agent, a model, an
+  effort and an opening instruction — four fields, one of them multi-line.
+  There is no version of that which belongs inline in a 420px column, so the
+  dialog is a prerequisite rather than a polish item.
+- **Standard dialog behaviour, all of it**: focus moves into the first field on
+  open and is trapped while it is there; Escape closes; clicking the backdrop
+  closes; Enter submits from any single-line field; focus returns to the
+  control that opened it. Anything less and it is a div, not a dialog.
+- **Validation belongs in the dialog**, next to the field, rather than arriving
+  later as a red toast in the corner from the hub. A folder path that does not
+  exist is the common case and the hub already reports it.
+- **Removals should match.** They use `window.confirm` today — a native dialog
+  that looks like nothing else in the app and cannot say what it is about to
+  take with it in any useful way. Worth moving to the same component, so
+  destructive confirmations and edits look like one system.
+
+**Where it lives.**
+
+- `packages/web/src/panel/Panel.tsx:280` — `AddWorkspace`, and `:328`
+  `StartAgent`. Both are `.node-form` blocks rendered as children of the node
+  they belong to; both become a dialog opened from that node.
+- `packages/web/src/AddMachine.tsx:12` — the attach-a-machine panel, the
+  biggest of the three: two tabs, five fields in the ssh form, and a paragraph
+  of explanation, all inside the same narrow column.
+- `packages/web/src/panel/Panel.tsx:115`, `:193`, `:264` — the three
+  `window.confirm` calls, if destructive confirmations move too.
+- `packages/web/src/styles.css:381` — `.node-form`, which goes away, and where
+  the dialog and backdrop rules would sit.
+- `packages/web/src/state/store.ts` — the panel already keeps its open state in
+  the store rather than in the component. A dialog that can be opened from a
+  node, from the canvas or from a keyboard shortcut wants the same treatment.
+- Use the native `<dialog>` element rather than a div with a high z-index: it
+  gives the backdrop, the focus trap and Escape without writing any of them,
+  and `showModal()` is supported everywhere this app runs.
