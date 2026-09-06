@@ -17,7 +17,19 @@ jobs:
           node-version: 22
           cache: npm
 
-      - run: npm ci
+      # `npm ci` ignores better-sqlite3's `gypfile: false` and injects a
+      # `node-gyp rebuild` for it, because the lockfile does not carry that
+      # flag and binding.gyp is in the package. It then needs a C++ toolchain
+      # for a module that ships working prebuilds - which is why this fails on
+      # the Windows runner, whose Visual Studio 18 node-gyp cannot even parse.
+      # Users never hit it: npx and a plain `npm install` have no lockfile and
+      # honour the flag.
+      - run: npm ci --ignore-scripts
+
+      # --ignore-scripts also skips the one native build that is real. node-pty
+      # publishes prebuilds for macOS and Windows only, so this is a no-op there
+      # and a genuine compile on Linux.
+      - run: npm rebuild node-pty
       - run: npm run typecheck
       - run: npm test
 

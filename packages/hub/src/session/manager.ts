@@ -490,5 +490,13 @@ export class SessionManager extends EventEmitter {
     for (const t of this.layoutTimers.values()) clearTimeout(t);
     this.snapshotTimers.clear();
     this.layoutTimers.clear();
+    // The title timer is a single shared timeout rather than one per session,
+    // which is exactly why it was missed here: it holds a write that would
+    // land after the caller closes the database, and better-sqlite3 throws
+    // rather than ignoring it. Unref keeps it from holding the process open;
+    // it does not stop it firing while the process is still coming down.
+    if (this.titleTimer) clearTimeout(this.titleTimer);
+    this.titleTimer = null;
+    this.pendingTitles.clear();
   }
 }

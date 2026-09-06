@@ -21,10 +21,41 @@ jobs:
           node-version: 22
           cache: npm
 
-      # node-pty ships no Linux prebuild, so `npm ci` compiles it here.
-      # ubuntu-latest already has python3 and a C++ toolchain; this is only a
-      # problem for users, and the README says so.
-      - run: npm ci
+      # `npm ci` ignores better-sqlite3's `gypfile: false` and injects a
+      # `node-gyp rebuild` for it, because the lockfile does not carry that
+      # flag and binding.gyp is in the package. It then needs a C++ toolchain
+      # for a module that ships working prebuilds - which is why this fails on
+      # the Windows runner, whose Visual Studio 18 node-gyp cannot even parse.
+      # Users never hit it: npx and a plain `npm install` have no lockfile and
+      # honour the flag.
+      - run: npm ci --ignore-scripts
+
+      # --ignore-scripts also skips the one native build that is real. node-pty
+      # publishes prebuilds for macOS and Windows only, so this is a no-op there
+      # and a genuine compile on Linux.
+      - run: npm rebuild node-pty
+
+      - name: "diagnostic: node-pty on macOS"
+        if: runner.os == 'macOS'
+        continue-on-error: true
+        shell: bash
+        run: |
+          echo "--- arch ---"; uname -m; node -p "process.arch"
+          echo "--- prebuilds tree ---"
+          ls -l node_modules/node-pty/prebuilds/ || true
+          ls -l node_modules/node-pty/prebuilds/darwin-*/ || true
+          echo "--- build/Release ---"
+          ls -l node_modules/node-pty/build/Release/ 2>/dev/null || echo "(none)"
+          echo "--- minimal spawn ---"
+          node -e '
+            const pty = require("node-pty");
+            try {
+              const p = pty.spawn(process.execPath, ["-e", "process.stdout.write(String(1+1))"], {cols:80, rows:24});
+              let out = ""; p.onData(d => out += d);
+              p.onExit(() => { console.log("SPAWN OK, output:", JSON.stringify(out)); process.exit(0); });
+              setTimeout(() => { console.log("TIMEOUT, output:", JSON.stringify(out)); process.exit(0); }, 8000);
+            } catch (e) { console.log("SPAWN THREW:", e.message); process.exit(0); }
+          '
 
       - run: npm run typecheck
       - run: npm run build

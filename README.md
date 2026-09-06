@@ -240,6 +240,19 @@ npm run build
 npm run dev           # hub with the built UI
 ```
 
+If `npm install` or `npm ci` tries to compile `better-sqlite3` and fails for
+want of a C++ toolchain, install this way instead:
+
+```bash
+npm ci --ignore-scripts && npm rebuild node-pty
+```
+
+Any install that reads `package-lock.json` misses better-sqlite3's
+`gypfile: false` and runs `node-gyp` on a module that already ships working
+prebuilds. Skipping install scripts avoids that; the rebuild puts back the one
+native build that is real, which is a no-op except on Linux. This is what CI
+does. It does not affect anyone installing the published package.
+
 ```bash
 npm test              # unit + integration, no LLM required
 npm run typecheck
