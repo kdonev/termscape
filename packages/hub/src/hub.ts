@@ -223,6 +223,66 @@ export class Hub extends EventEmitter implements AgentApi {
     return ws;
   }
 
+  /**
+   * Rename a workspace, or point it at a different folder.
+   *
+   * The rename is the fussy half. A workspace's name is the first segment of
+   * every agent address in it (`workspace/agent`), and those addresses are
+   * stored on the session rows, written into each agent's brief, and held by
+   * peers on other machines. Rewriting all of that under running agents would
+   * change what they had already been told they were called, so a rename is
+   * refused while anything is running here. Stopping an agent is a cheap thing
+   * to ask and an honest one; silently breaking message delivery is not.
+   *
+   * Repointing the folder is not fussy at all: a session records its own cwd
+   * at launch and resume rebuilds from that, so only agents started afterwards
+   * see the new path.
+   */
+  updateWorkspace(
+    id: string,
+    patch: { name?: string; rootPath?: string },
+  ): Workspace {
+    const ws = this.store.getWorkspace(id);
+    if (!ws) throw new Error(`unknown workspace ${id}`);
+
+    const next: { name?: string; rootPath?: string } = {};
+
+    if (patch.rootPath !== undefined) {
+      const abs = resolve(patch.rootPath);
+      // Only a local folder can be checked from here; a remote one is the
+      // other machine's to know about, exactly as it is on create.
+      if (!ws.hostId && !existsSync(abs)) {
+        throw new Error(`folder does not exist: ${abs}`);
+      }
+      if (abs !== ws.rootPath) next.rootPath = abs;
+    }
+
+    if (patch.name !== undefined) {
+      const wanted = slugify(patch.name);
+      if (!wanted) throw new Error('a workspace needs a name');
+      if (wanted !== ws.name) {
+        const running = this.sessions.list().filter((s) => s.workspaceId === id);
+        if (running.length > 0) {
+          throw new Error(
+            `cannot rename while ${running.length} agent${running.length === 1 ? '' : 's'} ` +
+              'here still exist: the name is part of their addresses. Remove them first.',
+          );
+        }
+        if (this.store.getWorkspaceByName(wanted)) {
+          throw new Error(`a workspace called "${wanted}" already exists`);
+        }
+        next.name = wanted;
+      }
+    }
+
+    if (next.name === undefined && next.rootPath === undefined) return ws;
+
+    this.store.updateWorkspace(id, next);
+    const updated = this.store.getWorkspace(id)!;
+    this.emit('workspace', updated);
+    return updated;
+  }
+
   async removeWorkspace(id: string): Promise<void> {
     const ws = this.store.getWorkspace(id);
     for (const s of this.sessions.list().filter((s) => s.workspaceId === id)) {
@@ -271,6 +331,56 @@ export class Hub extends EventEmitter implements AgentApi {
     this.store.upsertHost({ ...host, keyRef: input.privateKeyPath ?? null });
     this.emit('host', host);
     return host;
+  }
+
+  /**
+   * Correct a host's details after the fact.
+   *
+   * Nothing here reconnects: an ssh detail that was wrong is usually being
+   * fixed while the host sits in `error`, and the reconnect is the next thing
+   * the operator does on purpose. Saving and dialling in one step would also
+   * mean a typo in the label re-runs a deploy.
+   */
+  updateHost(
+    hostId: string,
+    patch: {
+      label?: string;
+      sshHost?: string;
+      sshUser?: string;
+      sshPort?: number;
+      privateKeyPath?: string;
+    },
+  ): Host {
+    const host = this.store.getHost(hostId);
+    if (!host) throw new Error(`unknown host ${hostId}`);
+
+    const ssh = ['sshHost', 'sshUser', 'sshPort', 'privateKeyPath'] as const;
+    if (host.kind !== 'ssh' && ssh.some((k) => patch[k] !== undefined)) {
+      // An enrolled host dialled us and is reached over the socket it opened.
+      // Storing ssh details for it would be storing something nothing reads.
+      throw new Error(`${host.label} joined by itself; it has no ssh details to edit`);
+    }
+
+    const label = patch.label?.trim();
+    const next: Host = {
+      ...host,
+      label: label || host.label,
+      sshHost: patch.sshHost?.trim() ?? host.sshHost,
+      sshUser: patch.sshUser?.trim() ?? host.sshUser,
+      sshPort: patch.sshPort ?? host.sshPort,
+    };
+    if (next.kind === 'ssh' && (!next.sshHost || !next.sshUser)) {
+      throw new Error('an ssh host needs a user and a host');
+    }
+
+    this.store.upsertHost({
+      ...next,
+      // upsertHost COALESCEs key_ref, so undefined keeps whatever is stored
+      // and an empty string is the only way to say "back to the ssh agent".
+      keyRef: patch.privateKeyPath === undefined ? null : patch.privateKeyPath.trim(),
+    });
+    this.emit('host', next);
+    return next;
   }
 
   /**

@@ -35,7 +35,10 @@ npx @kdonev/termscape --listen loopback
 
 Slide out the **machines** panel: every machine, the workspaces on it, and
 the agents in each. Point a workspace at a folder there, and start an agent
-in it.
+in it. Adding, editing and removing all open a dialog over the canvas, so the
+node you acted on stays where it was and a refusal — a folder that is not
+there, a rename the addresses will not allow — arrives in the dialog next to
+the field, with what you typed still in it.
 
 - **Scroll** to pan, **Ctrl/⌘ + scroll** to zoom, **Ctrl/⌘ + 1** to fit,
   **Ctrl/⌘ + 2** to zoom to one terminal

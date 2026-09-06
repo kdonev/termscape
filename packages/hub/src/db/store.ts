@@ -163,6 +163,23 @@ export class Store {
       .run(w);
   }
 
+  /**
+   * Change a workspace's name or folder in place.
+   *
+   * Deliberately narrow: id, kind, host and colour identify the row and the
+   * node drawn for it, and nothing in the UI has any business editing them.
+   */
+  updateWorkspace(id: string, patch: { name?: string; rootPath?: string }): void {
+    this.db
+      .prepare(
+        `UPDATE workspace
+            SET name = COALESCE(@name, name),
+                root_path = COALESCE(@rootPath, root_path)
+          WHERE id = @id`,
+      )
+      .run({ id, name: patch.name ?? null, rootPath: patch.rootPath ?? null });
+  }
+
   removeWorkspace(id: string): void {
     this.db.prepare('DELETE FROM workspace WHERE id = ?').run(id);
   }

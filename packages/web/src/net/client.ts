@@ -4,9 +4,16 @@ import {
   decodeBinaryFrame,
   encodeBinaryFrame,
   ServerMsg,
+  type AckableMsg,
 } from '@termscape/protocol';
 
 type PtyListener = (chunk: string) => void;
+
+/** A mutation that has been sent and is waiting for its ack. */
+interface Pending {
+  resolve: () => void;
+  reject: (err: Error) => void;
+}
 
 /**
  * WebSocket client for the hub.
@@ -22,6 +29,8 @@ export class HubClient {
   private reconnectDelay = 500;
   private closed = false;
   private queue: ClientMsg[] = [];
+  private readonly pending = new Map<string, Pending>();
+  private nextRequest = 0;
 
   constructor(
     private readonly url: string,
@@ -53,6 +62,17 @@ export class HubClient {
       const parsed = ServerMsg.safeParse(JSON.parse(ev.data as string));
       if (!parsed.success) return;
 
+      if (parsed.data.t === 'ack') {
+        const { requestId, ok, message } = parsed.data;
+        const waiting = this.pending.get(requestId);
+        this.pending.delete(requestId);
+        if (ok) waiting?.resolve();
+        else waiting?.reject(new Error(message || 'the hub refused that'));
+        // Nothing downstream has any use for an ack; the promise is the whole
+        // interface. Passing it on would only make every reducer skip it.
+        return;
+      }
+
       if (parsed.data.t === 'ready') {
         this.onConnectionChange(true);
         // Re-establish attachments and drain anything queued while offline.
@@ -67,6 +87,10 @@ export class HubClient {
     ws.onclose = () => {
       this.onConnectionChange(false);
       this.ws = null;
+      // A dialog waiting on an ack would otherwise sit with its spinner up
+      // forever. The mutation may well have landed, so say what is actually
+      // known rather than that it failed.
+      this.failPending('lost the connection to the hub before it answered');
       if (this.closed) return;
       setTimeout(() => this.connect(), this.reconnectDelay);
       this.reconnectDelay = Math.min(this.reconnectDelay * 2, 10_000);
@@ -84,6 +108,32 @@ export class HubClient {
   send(msg: ClientMsg): void {
     if (this.ws?.readyState === WebSocket.OPEN) this.rawSend(msg);
     else this.queue.push(msg);
+  }
+
+  /**
+   * Send a mutation and wait for the hub's answer.
+   *
+   * This is what lets a dialog stay open until it knows, and put a refusal
+   * beside the field that caused it instead of in a toast in the corner. It
+   * deliberately does not queue while offline the way send() does: a dialog
+   * that sat waiting for a reconnect would report neither success nor
+   * failure, and the honest answer is available immediately.
+   */
+  request(msg: AckableMsg): Promise<void> {
+    if (this.ws?.readyState !== WebSocket.OPEN) {
+      return Promise.reject(new Error('not connected to the hub'));
+    }
+    const requestId = `r${++this.nextRequest}`;
+    return new Promise<void>((resolve, reject) => {
+      this.pending.set(requestId, { resolve, reject });
+      this.rawSend({ ...msg, requestId });
+    });
+  }
+
+  private failPending(reason: string): void {
+    const waiting = [...this.pending.values()];
+    this.pending.clear();
+    for (const p of waiting) p.reject(new Error(reason));
   }
 
   /** Terminal input takes the binary path to avoid JSON-encoding keystrokes. */
@@ -128,6 +178,7 @@ export class HubClient {
 
   close(): void {
     this.closed = true;
+    this.failPending('the connection was closed');
     this.ws?.close();
   }
 }

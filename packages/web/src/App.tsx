@@ -3,6 +3,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { Canvas } from './canvas/Canvas.js';
 import { Toolbar } from './Toolbar.js';
 import { Panel } from './panel/Panel.js';
+import { Dialogs } from './dialog/Dialogs.js';
 import { useStore } from './state/store.js';
 import { HubClient } from './net/client.js';
 
@@ -61,6 +62,7 @@ export function App() {
       <Toolbar />
       <Canvas />
       <Panel />
+      <Dialogs />
 
       {sessions.length === 0 && connected && (
         <div className="empty-state">

@@ -61,6 +61,17 @@ export function decodeBinaryFrame(buf: Uint8Array): DecodedBinaryFrame {
  * Control messages
  * ------------------------------------------------------------------ */
 
+/**
+ * Correlates one mutation with its answer.
+ *
+ * A form that fires and forgets can only report failure as a toast in the
+ * corner, arriving after it has closed and next to nothing that explains it.
+ * A dialog carries a requestId, and the hub answers that id with an `ack`
+ * whether it worked or not — so the dialog can stay open, put the message
+ * beside the field that caused it, and close only on success.
+ */
+const requestId = z.string().optional();
+
 export const ClientMsg = z.discriminatedUnion('t', [
   z.object({ t: z.literal('hello'), token: z.string() }),
 
@@ -70,19 +81,32 @@ export const ClientMsg = z.discriminatedUnion('t', [
   z.object({ t: z.literal('resize'), sessionId: z.string(), cols: z.number().int().positive(), rows: z.number().int().positive() }),
 
   // workspaces
-  z.object({ t: z.literal('createWorkspace'), name: z.string().min(1), rootPath: z.string().min(1), hostId: z.string().nullable().optional() }),
-  z.object({ t: z.literal('removeWorkspace'), workspaceId: z.string() }),
+  z.object({ t: z.literal('createWorkspace'), requestId, name: z.string().min(1), rootPath: z.string().min(1), hostId: z.string().nullable().optional() }),
+  /**
+   * Rename a workspace or repoint it at another folder. Both are optional and
+   * only what is given changes, so the dialog sends the whole form and the hub
+   * decides what actually moved.
+   */
+  z.object({
+    t: z.literal('updateWorkspace'),
+    requestId,
+    workspaceId: z.string(),
+    name: z.string().min(1).optional(),
+    rootPath: z.string().min(1).optional(),
+  }),
+  z.object({ t: z.literal('removeWorkspace'), requestId, workspaceId: z.string() }),
 
   // sessions
   z.object({
     t: z.literal('startSession'),
+    requestId,
     workspaceId: z.string(),
     profile: z.string(),
     name: z.string().optional(),
     cwd: z.string().optional(),
   }),
   z.object({ t: z.literal('stopSession'), sessionId: z.string() }),
-  z.object({ t: z.literal('removeSession'), sessionId: z.string() }),
+  z.object({ t: z.literal('removeSession'), requestId, sessionId: z.string() }),
   z.object({ t: z.literal('resumeSession'), sessionId: z.string() }),
   z.object({ t: z.literal('resumeWorkspace'), workspaceId: z.string() }),
 
@@ -93,16 +117,55 @@ export const ClientMsg = z.discriminatedUnion('t', [
   // hosts
   z.object({
     t: z.literal('addHost'),
+    requestId,
     label: z.string(),
     sshHost: z.string(),
     sshUser: z.string(),
     sshPort: z.number().int().positive().default(22),
     privateKeyPath: z.string().optional(),
   }),
-  z.object({ t: z.literal('removeHost'), hostId: z.string() }),
+  /**
+   * Fix a host's details after the fact. An enrolled host has no ssh fields to
+   * correct - it dialled us - so for one of those only the label applies, and
+   * the hub refuses the rest rather than storing details nothing will read.
+   */
+  z.object({
+    t: z.literal('updateHost'),
+    requestId,
+    hostId: z.string(),
+    label: z.string().optional(),
+    sshHost: z.string().optional(),
+    sshUser: z.string().optional(),
+    sshPort: z.number().int().positive().optional(),
+    /** Empty string clears it back to using the ssh agent. */
+    privateKeyPath: z.string().optional(),
+  }),
+  z.object({ t: z.literal('removeHost'), requestId, hostId: z.string() }),
   z.object({ t: z.literal('connectHost'), hostId: z.string() }),
 ]);
 export type ClientMsg = z.infer<typeof ClientMsg>;
+
+/**
+ * The mutations a dialog drives, and so the ones that can be awaited.
+ *
+ * Listed by name rather than derived from the presence of `requestId`,
+ * because every message is structurally assignable to "might have a
+ * requestId" and the derived version would quietly include all of them.
+ */
+export type AckableMsg = Extract<
+  ClientMsg,
+  {
+    t:
+      | 'createWorkspace'
+      | 'updateWorkspace'
+      | 'removeWorkspace'
+      | 'startSession'
+      | 'removeSession'
+      | 'addHost'
+      | 'updateHost'
+      | 'removeHost';
+  }
+>;
 
 export const HubState = z.object({
   hubVersion: z.string(),
@@ -147,5 +210,16 @@ export const ServerMsg = z.discriminatedUnion('t', [
     rows: z.number(),
   }),
   z.object({ t: z.literal('error'), message: z.string(), sessionId: z.string().optional() }),
+  /**
+   * The answer to a mutation that carried a requestId. A failure arrives here
+   * and *not* as an `error`, so it lands in the dialog that asked rather than
+   * in the corner of the screen.
+   */
+  z.object({
+    t: z.literal('ack'),
+    requestId: z.string(),
+    ok: z.boolean(),
+    message: z.string().optional(),
+  }),
 ]);
 export type ServerMsg = z.infer<typeof ServerMsg>;

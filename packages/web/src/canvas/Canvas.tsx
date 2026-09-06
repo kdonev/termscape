@@ -581,6 +581,10 @@ export function Canvas() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // A modal dialog owns the keyboard while it is up, Escape included -
+      // the native element closes itself on it, and the canvas must not also
+      // unwind a level behind it.
+      if (useStore.getState().dialog) return;
       // Never steal keys from a focused terminal.
       const inTerminal = (e.target as HTMLElement)?.closest?.('.term-host');
       if (inTerminal) return;

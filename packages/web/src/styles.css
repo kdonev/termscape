@@ -378,15 +378,6 @@ body {
   padding: 2px 8px 4px 26px;
   word-break: break-word;
 }
-.node-form {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
-  padding: 5px 7px 8px;
-}
-.node-form .input { min-width: 90px; flex: 1 1 120px; }
-.node-form .input.wide { min-width: 140px; flex: 3 1 200px; }
-
 .twisty {
   background: none;
   border: 0;
@@ -400,24 +391,17 @@ body {
 .twisty:hover { color: var(--text); }
 
 .add-machine { margin: 10px 0 0 7px; }
-.add-machine-panel {
-  margin-top: 10px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 8px;
-}
 
 /* -------------------------------------------------- attaching a machine */
 
-.host-tabs {
+.dialog-tabs {
   display: flex;
   align-items: center;
   gap: 4px;
-  padding-bottom: 8px;
-  margin-bottom: 4px;
+  padding: 0 16px;
   border-bottom: 1px solid var(--border);
 }
-.host-tabs .tab {
+.dialog-tabs .tab {
   flex: 1;
   padding: 5px 8px;
   font: inherit;
@@ -428,15 +412,14 @@ body {
   border-radius: 6px;
   cursor: pointer;
 }
-.host-tabs .tab:hover { color: var(--text); }
-.host-tabs .tab.on {
+.dialog-tabs .tab:hover { color: var(--text); }
+.dialog-tabs .tab.on {
   color: var(--text);
   background: var(--panel-2);
   border-color: var(--border);
 }
 
 .join-url {
-  flex: 1 0 100%;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -454,24 +437,109 @@ body {
   font-size: 11.5px;
   color: var(--accent);
 }
-.host-note code {
+
+/* ------------------------------------------------------------ dialogs */
+
+/* A native <dialog>, so the backdrop, the focus trap and Escape come from the
+   element rather than from us. It is sized by its card and centred by the
+   browser; `padding: 0` is what makes a click on the element itself mean the
+   backdrop and nothing else. */
+.dialog {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  max-width: min(560px, 94vw);
+  width: 100%;
+  max-height: 88vh;
+}
+.dialog::backdrop {
+  background: rgba(5, 7, 11, 0.62);
+  backdrop-filter: blur(1.5px);
+}
+
+.dialog-card {
+  display: flex;
+  flex-direction: column;
+  max-height: 88vh;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55);
+  overflow: hidden;
+}
+
+.dialog-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 12px 12px 16px;
+  border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
+}
+.dialog-title { margin: 0; font-size: 14px; font-weight: 650; }
+
+/* Scrolls, rather than the card growing past the viewport: the ssh form and
+   the join instructions are both taller than a short window. */
+.dialog-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px;
+  overflow-y: auto;
+}
+
+.dialog-field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.dialog-label { color: var(--muted); font-size: 11px; }
+.dialog-field .input { width: 100%; min-width: 0; }
+.dialog-field .input.tiny { max-width: 72px; }
+.dialog-hint {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+.dialog-field .input:disabled { opacity: 0.5; }
+
+/* Fields that belong on one line - user, host, port - with the port kept
+   narrow rather than sharing the width equally. */
+.dialog-row { display: flex; gap: 10px; align-items: flex-start; }
+.dialog-row .dialog-field { flex: 1; }
+.dialog-row .dialog-field:last-child { flex: 0 0 auto; }
+
+.dialog-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+.dialog-note code {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   color: var(--text);
 }
 
-.host-form {
+/* Where a refusal from the hub lands: in the dialog that asked, above the
+   button that asked it, with what was typed still on screen. */
+.dialog-error {
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--danger);
+  border-radius: 7px;
+  background: rgba(224, 108, 117, 0.09);
+  color: var(--danger);
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
+.dialog-actions {
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  padding-top: 8px;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 2px;
 }
-.host-form .input { min-width: 90px; flex: 1; }
-.host-form .input.tiny { min-width: 56px; max-width: 64px; flex: 0 0 auto; }
-.host-form .input.wide { flex: 1 0 100%; }
-.host-note {
-  flex: 1 0 100%;
-  margin: 2px 0 0;
-  color: var(--muted);
-  font-size: 11px;
-  line-height: 1.4;
+.btn.danger-solid {
+  background: rgba(224, 108, 117, 0.14);
+  border-color: var(--danger);
+  color: var(--danger);
 }
+.btn.danger-solid:hover:not(:disabled) { background: rgba(224, 108, 117, 0.22); }

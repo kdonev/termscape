@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type {
+  AckableMsg,
   AgentProfileInfo,
   Host,
   Message,
@@ -19,6 +20,35 @@ export interface MessageFlash {
   at: number;
   failed: boolean;
 }
+
+/**
+ * Which dialog is up, and what it is about.
+ *
+ * In the store rather than in a component because a dialog is not owned by
+ * the node that opened it: the same edit is reachable from a tree row, from a
+ * keyboard shortcut and eventually from the canvas, and only one may be up at
+ * a time. Each variant carries an id rather than the object, so a dialog left
+ * open while the hub sends an update redraws from current state instead of
+ * from whatever was true when it opened.
+ */
+export type DialogSpec =
+  | { kind: 'addWorkspace'; hostId: string | null }
+  | { kind: 'editWorkspace'; workspaceId: string }
+  | { kind: 'startAgent'; workspaceId: string }
+  | { kind: 'addMachine' }
+  | { kind: 'editMachine'; hostId: string }
+  /**
+   * Destructive confirmation. The message to send is carried rather than a
+   * callback, so the dialog needs to know nothing about what it is confirming
+   * and every removal in the app reads the same way.
+   */
+  | {
+      kind: 'confirm';
+      title: string;
+      body: string;
+      confirmLabel: string;
+      send: AckableMsg;
+    };
 
 interface AppState {
   connected: boolean;
@@ -46,6 +76,8 @@ interface AppState {
   focusRequest: { sessionId: string; at: number } | null;
   /** Whether the tree panel is slid out over the canvas. */
   panelOpen: boolean;
+  /** The one dialog that is up, or null. */
+  dialog: DialogSpec | null;
   /** Snapshots delivered on attach, consumed once by the terminal component. */
   pendingSnapshots: Map<string, string>;
   errors: string[];
@@ -60,6 +92,8 @@ interface AppState {
   select: (id: string | null) => void;
   requestFocus: (sessionId: string) => void;
   setPanelOpen: (open: boolean) => void;
+  openDialog: (spec: DialogSpec) => void;
+  closeDialog: () => void;
   takeSnapshot: (sessionId: string) => string | null;
   dismissError: (i: number) => void;
 }
@@ -88,6 +122,7 @@ export const useStore = create<AppState>((set, get) => ({
   selectedId: null,
   focusRequest: null,
   panelOpen: false,
+  dialog: null,
   pendingSnapshots: new Map(),
   errors: [],
   client: null,
@@ -186,6 +221,12 @@ export const useStore = create<AppState>((set, get) => ({
       case 'error':
         set((s) => ({ errors: [...s.errors, m.message].slice(-5) }));
         return;
+
+      case 'ack':
+        // HubClient settles the promise and returns before this; the case
+        // exists so the switch stays exhaustive and adding a message type
+        // keeps being a compile error rather than a silent no-op.
+        return;
     }
   },
 
@@ -206,6 +247,9 @@ export const useStore = create<AppState>((set, get) => ({
 
   requestFocus: (sessionId) =>
     set({ selectedId: sessionId, focusRequest: { sessionId, at: Date.now() } }),
+
+  openDialog: (dialog) => set({ dialog }),
+  closeDialog: () => set((s) => (s.dialog === null ? s : { dialog: null })),
 
   // Guarded rather than a plain write: clicking the canvas closes the panel,
   // and most canvas clicks happen with it already shut. Returning the state

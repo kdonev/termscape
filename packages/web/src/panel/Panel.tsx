@@ -1,11 +1,9 @@
 import { useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
-import type { Session, Workspace } from '@termscape/protocol';
+import type { Session } from '@termscape/protocol';
 import { useStore } from '../state/store.js';
-import { pickValid } from '../state/selection.js';
 import { buildTree, type TreeMachine, type TreeWorkspace } from '../state/tree.js';
 import { statusColor, statusLabel } from '../window/status.js';
-import { AddMachine } from '../AddMachine.js';
 
 /**
  * The index to the canvas: every machine, the workspaces on it, and the agents
@@ -24,13 +22,14 @@ const HOST_STATE_COLOR: Record<string, string> = {
 };
 
 export function Panel() {
-  const { hosts, workspaces, sessions, open, setOpen } = useStore(
+  const { hosts, workspaces, sessions, open, setOpen, openDialog } = useStore(
     useShallow((s) => ({
       hosts: s.hosts,
       workspaces: s.workspaces,
       sessions: s.sessions,
       open: s.panelOpen,
       setOpen: s.setPanelOpen,
+      openDialog: s.openDialog,
     })),
   );
 
@@ -50,18 +49,26 @@ export function Panel() {
         {tree.map((machine) => (
           <MachineNode key={machine.id || 'local'} machine={machine} />
         ))}
-        <AddMachine />
+        <button
+          className="btn add-machine"
+          onClick={() => openDialog({ kind: 'addMachine' })}
+        >
+          + machine
+        </button>
       </div>
     </aside>
   );
 }
 
 function MachineNode({ machine }: { machine: TreeMachine }) {
-  const { client, hostLogs } = useStore(
-    useShallow((s) => ({ client: s.client, hostLogs: s.hostLogs })),
+  const { client, hostLogs, openDialog } = useStore(
+    useShallow((s) => ({
+      client: s.client,
+      hostLogs: s.hostLogs,
+      openDialog: s.openDialog,
+    })),
   );
   const [collapsed, setCollapsed] = useState(false);
-  const [adding, setAdding] = useState(false);
 
   const host = machine.host;
   const log = host ? (hostLogs[host.id] ?? []) : [];
@@ -83,11 +90,20 @@ function MachineNode({ machine }: { machine: TreeMachine }) {
           title={`Add a workspace on ${machine.label}`}
           onClick={() => {
             setCollapsed(false);
-            setAdding((v) => !v);
+            openDialog({ kind: 'addWorkspace', hostId: machine.id || null });
           }}
         >
           + workspace
         </button>
+        {host && (
+          <button
+            className="btn"
+            title={`Rename ${machine.label} or fix how it is reached`}
+            onClick={() => openDialog({ kind: 'editMachine', hostId: host.id })}
+          >
+            edit
+          </button>
+        )}
         {/* An enrolled host reaches us, so there is nothing here to dial;
             only a deployed one can be reconnected from this side. */}
         {host?.kind === 'ssh' && (
@@ -111,13 +127,13 @@ function MachineNode({ machine }: { machine: TreeMachine }) {
               ].filter(Boolean);
               const detail =
                 carries.length > 0 ? ` Its ${carries.join(' and ')} go with it.` : '';
-              if (
-                window.confirm(
-                  `Remove ${machine.label} from the canvas?${detail} The hub running there is stopped too.`,
-                )
-              ) {
-                client?.send({ t: 'removeHost', hostId: host.id });
-              }
+              openDialog({
+                kind: 'confirm',
+                title: `Remove ${machine.label}?`,
+                body: `It leaves the canvas and the hub running there is stopped too.${detail}`,
+                confirmLabel: 'remove machine',
+                send: { t: 'removeHost', hostId: host.id },
+              });
             }}
           >
             ×
@@ -139,10 +155,9 @@ function MachineNode({ machine }: { machine: TreeMachine }) {
           {machine.workspaces.map((w) => (
             <WorkspaceNode key={w.workspace.id} node={w} />
           ))}
-          {machine.workspaces.length === 0 && !adding && (
+          {machine.workspaces.length === 0 && (
             <div className="node-empty">no workspaces here yet</div>
           )}
-          {adding && <AddWorkspace machine={machine} onDone={() => setAdding(false)} />}
         </div>
       )}
     </div>
@@ -150,9 +165,10 @@ function MachineNode({ machine }: { machine: TreeMachine }) {
 }
 
 function WorkspaceNode({ node }: { node: TreeWorkspace }) {
-  const client = useStore((s) => s.client);
+  const { client, openDialog } = useStore(
+    useShallow((s) => ({ client: s.client, openDialog: s.openDialog })),
+  );
   const [collapsed, setCollapsed] = useState(false);
-  const [starting, setStarting] = useState(false);
   const { workspace, sessions } = node;
   const stopped = sessions.filter((s) => s.state !== 'running');
 
@@ -170,10 +186,17 @@ function WorkspaceNode({ node }: { node: TreeWorkspace }) {
           title="Start an agent in this workspace"
           onClick={() => {
             setCollapsed(false);
-            setStarting((v) => !v);
+            openDialog({ kind: 'startAgent', workspaceId: workspace.id });
           }}
         >
           + agent
+        </button>
+        <button
+          className="btn"
+          title="Rename this workspace or point it at another folder"
+          onClick={() => openDialog({ kind: 'editWorkspace', workspaceId: workspace.id })}
+        >
+          edit
         </button>
         {stopped.length > 0 && (
           <button
@@ -189,10 +212,17 @@ function WorkspaceNode({ node }: { node: TreeWorkspace }) {
           title="Remove this workspace"
           onClick={() => {
             const n = sessions.length;
-            const detail = n > 0 ? ` Its ${n} agent${n === 1 ? '' : 's'} go with it.` : '';
-            if (window.confirm(`Remove workspace "${workspace.name}"?${detail}`)) {
-              client?.send({ t: 'removeWorkspace', workspaceId: workspace.id });
-            }
+            const detail =
+              n > 0
+                ? ` Its ${n} agent${n === 1 ? '' : 's'} go with it.`
+                : ' It has nothing running in it.';
+            openDialog({
+              kind: 'confirm',
+              title: `Remove ${workspace.name}?`,
+              body: `The folder itself is untouched; only the workspace leaves the canvas.${detail}`,
+              confirmLabel: 'remove workspace',
+              send: { t: 'removeWorkspace', workspaceId: workspace.id },
+            });
           }}
         >
           ×
@@ -204,10 +234,7 @@ function WorkspaceNode({ node }: { node: TreeWorkspace }) {
           {sessions.map((s) => (
             <SessionNode key={s.id} session={s} />
           ))}
-          {sessions.length === 0 && !starting && (
-            <div className="node-empty">nothing running here</div>
-          )}
-          {starting && <StartAgent workspace={workspace} onDone={() => setStarting(false)} />}
+          {sessions.length === 0 && <div className="node-empty">nothing running here</div>}
         </div>
       )}
     </div>
@@ -215,11 +242,12 @@ function WorkspaceNode({ node }: { node: TreeWorkspace }) {
 }
 
 function SessionNode({ session }: { session: Session }) {
-  const { client, selectedId, requestFocus } = useStore(
+  const { client, selectedId, requestFocus, openDialog } = useStore(
     useShallow((s) => ({
       client: s.client,
       selectedId: s.selectedId,
       requestFocus: s.requestFocus,
+      openDialog: s.openDialog,
     })),
   );
   const stopped = session.state !== 'running';
@@ -261,98 +289,18 @@ function SessionNode({ session }: { session: Session }) {
         title="Remove this window and forget the session"
         onClick={(e) => {
           e.stopPropagation();
-          if (window.confirm(`Remove ${session.address}?`)) {
-            client?.send({ t: 'removeSession', sessionId: session.id });
-          }
+          openDialog({
+            kind: 'confirm',
+            title: `Remove ${session.address}?`,
+            body: stopped
+              ? 'Its window and its record go; the conversation it was resuming from is not deleted.'
+              : 'It is stopped and its window goes with it. The conversation itself is not deleted.',
+            confirmLabel: 'remove agent',
+            send: { t: 'removeSession', sessionId: session.id },
+          });
         }}
       >
         ×
-      </button>
-    </div>
-  );
-}
-
-/**
- * Adding a workspace under the machine it belongs to. The host is the node you
- * opened this on, which is one field fewer to fill in than a form that asks —
- * and no way to put a folder on a machine you did not mean.
- */
-function AddWorkspace({ machine, onDone }: { machine: TreeMachine; onDone: () => void }) {
-  const client = useStore((s) => s.client);
-  const [path, setPath] = useState('');
-  const [name, setName] = useState('');
-  // A workspace on an unreachable machine could not start anything, and
-  // offering it would only fail later.
-  const reachable = machine.state === 'connected';
-
-  return (
-    <div className="node-form">
-      <input
-        className="input wide"
-        autoFocus
-        placeholder={
-          machine.host ? `folder path on ${machine.label}` : 'folder path on this machine'
-        }
-        value={path}
-        onChange={(e) => setPath(e.target.value)}
-      />
-      <input
-        className="input"
-        placeholder="name (optional)"
-        value={name}
-        onChange={(e) => setName(e.target.value)}
-      />
-      <button
-        className="btn primary"
-        disabled={!path.trim() || !reachable}
-        title={reachable ? undefined : 'This machine is not connected'}
-        onClick={() => {
-          client?.send({
-            t: 'createWorkspace',
-            name: name.trim() || path.trim(),
-            rootPath: path.trim(),
-            hostId: machine.id || null,
-          });
-          onDone();
-        }}
-      >
-        add
-      </button>
-      <button className="btn" onClick={onDone}>
-        cancel
-      </button>
-    </div>
-  );
-}
-
-function StartAgent({ workspace, onDone }: { workspace: Workspace; onDone: () => void }) {
-  const { client, profiles } = useStore(
-    useShallow((s) => ({ client: s.client, profiles: s.profiles })),
-  );
-  const [profile, setProfile] = useState('claude');
-  const active = pickValid(profile, profiles, true);
-
-  return (
-    <div className="node-form">
-      <select className="input" autoFocus value={active} onChange={(e) => setProfile(e.target.value)}>
-        {profiles.map((p) => (
-          <option key={p.id} value={p.id}>
-            {p.id}
-          </option>
-        ))}
-      </select>
-      <button
-        className="btn primary"
-        disabled={!active}
-        onClick={() => {
-          client?.send({ t: 'startSession', workspaceId: workspace.id, profile: active });
-          onDone();
-        }}
-      >
-        start
-      </button>
-      <button className="btn" onClick={onDone}>
-        cancel
       </button>
     </div>
   );

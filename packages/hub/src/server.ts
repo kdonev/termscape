@@ -321,143 +321,179 @@ export async function serve(opts: ServeOptions): Promise<ServeResult> {
     });
   });
 
+  /**
+   * Run one client message and answer for it.
+   *
+   * A message that carried a requestId gets an `ack` either way, and a failure
+   * is *not* also raised as an `error`: the dialog that asked is showing it,
+   * and a toast in the corner repeating it is noise. Everything without a
+   * requestId keeps the old behaviour, a bare `error`.
+   */
   async function handleClientMsg(
     socket: import('ws').WebSocket,
     msg: ClientMsg,
   ): Promise<void> {
+    const requestId = 'requestId' in msg ? msg.requestId : undefined;
     try {
-      switch (msg.t) {
-        case 'hello':
-          return;
+      await dispatchClientMsg(socket, msg);
+      if (requestId) send(socket, { t: 'ack', requestId, ok: true });
+    } catch (err) {
+      const message = (err as Error).message;
+      if (requestId) send(socket, { t: 'ack', requestId, ok: false, message });
+      else send(socket, { t: 'error', message });
+    }
+  }
 
-        // Remote sessions are keyed by their address, so a single lookup
-        // decides whether a request is served locally or forwarded to a peer.
-        case 'attach': {
-          attached.get(socket)?.add(msg.sessionId);
-          const remote = hub.peers.find(msg.sessionId);
-          if (remote) {
-            await remote.peer.attach(msg.sessionId);
-            return;
-          }
-          const snap = hub.sessions.snapshotForAttach(msg.sessionId);
-          if (snap) {
-            send(socket, {
-              t: 'snapshot',
-              sessionId: msg.sessionId,
-              serialized: snap.serialized,
-              cols: snap.cols,
-              rows: snap.rows,
-            });
-          }
-          return;
-        }
+  async function dispatchClientMsg(
+    socket: import('ws').WebSocket,
+    msg: ClientMsg,
+  ): Promise<void> {
+    switch (msg.t) {
+      case 'hello':
+        return;
 
-        case 'detach': {
-          attached.get(socket)?.delete(msg.sessionId);
-          const remote = hub.peers.find(msg.sessionId);
-          if (remote) await remote.peer.detach(msg.sessionId);
+      // Remote sessions are keyed by their address, so a single lookup
+      // decides whether a request is served locally or forwarded to a peer.
+      case 'attach': {
+        attached.get(socket)?.add(msg.sessionId);
+        const remote = hub.peers.find(msg.sessionId);
+        if (remote) {
+          await remote.peer.attach(msg.sessionId);
           return;
         }
-
-        case 'resize': {
-          const remote = hub.peers.find(msg.sessionId);
-          if (remote) {
-            await remote.peer.request({
-              t: 'resize',
-              id: randomUUID(),
-              address: msg.sessionId,
-              cols: msg.cols,
-              rows: msg.rows,
-            });
-            return;
-          }
-          hub.sessions.resize(msg.sessionId, msg.cols, msg.rows);
-          return;
+        const snap = hub.sessions.snapshotForAttach(msg.sessionId);
+        if (snap) {
+          send(socket, {
+            t: 'snapshot',
+            sessionId: msg.sessionId,
+            serialized: snap.serialized,
+            cols: snap.cols,
+            rows: snap.rows,
+          });
         }
+        return;
+      }
 
-        case 'createWorkspace':
-          hub.createWorkspace(msg.name, msg.rootPath, msg.hostId ?? null);
-          return;
+      case 'detach': {
+        attached.get(socket)?.delete(msg.sessionId);
+        const remote = hub.peers.find(msg.sessionId);
+        if (remote) await remote.peer.detach(msg.sessionId);
+        return;
+      }
 
-        case 'removeWorkspace':
-          await hub.removeWorkspace(msg.workspaceId);
-          return;
-
-        case 'startSession':
-          await hub.startSession({
-            workspaceId: msg.workspaceId,
-            profile: msg.profile,
-            name: msg.name,
-            cwd: msg.cwd,
+      case 'resize': {
+        const remote = hub.peers.find(msg.sessionId);
+        if (remote) {
+          await remote.peer.request({
+            t: 'resize',
+            id: randomUUID(),
+            address: msg.sessionId,
+            cols: msg.cols,
+            rows: msg.rows,
           });
           return;
-
-        case 'stopSession': {
-          const remote = hub.peers.find(msg.sessionId);
-          if (remote) {
-            await remote.peer.request({ t: 'stopSession', id: randomUUID(), address: msg.sessionId });
-            return;
-          }
-          hub.sessions.stop(msg.sessionId);
-          return;
         }
-
-        case 'removeSession':
-          // A remote window's session belongs to its peer. Removing it here
-          // would delete nothing and merely hide the window until that peer
-          // reported it again.
-          if (await hub.peers.removeSession(msg.sessionId)) return;
-          hub.sessions.remove(msg.sessionId);
-          return;
-
-        case 'resumeSession': {
-          const remote = hub.peers.find(msg.sessionId);
-          if (remote) {
-            await remote.peer.request({ t: 'resumeSession', id: randomUUID(), address: msg.sessionId });
-            return;
-          }
-          await hub.sessions.resume(msg.sessionId);
-          return;
-        }
-
-        case 'resumeWorkspace':
-          await hub.resumeWorkspace(msg.workspaceId);
-          return;
-
-        case 'moveWindow':
-          // Layout is always local, even for a peer's session.
-          if (!hub.peers.saveLayout(msg.sessionId, msg.rect)) {
-            hub.moveWindow(msg.sessionId, msg.rect);
-          }
-          return;
-
-        case 'setViewport':
-          hub.setViewport(msg.viewport);
-          return;
-
-        case 'addHost': {
-          const host = hub.addHost(msg);
-          // Connect immediately: adding a host the user then has to connect
-          // by hand is a pointless second step.
-          void hub.connectHost(host.id).catch((e) =>
-            send(socket, { t: 'error', message: `connect ${host.label}: ${e.message}` }),
-          );
-          return;
-        }
-
-        case 'removeHost':
-          await hub.removeHost(msg.hostId);
-          return;
-
-        case 'connectHost':
-          await hub.connectHost(msg.hostId);
-          return;
-
-        default:
-          send(socket, { t: 'error', message: `unhandled: ${(msg as { t: string }).t}` });
+        hub.sessions.resize(msg.sessionId, msg.cols, msg.rows);
+        return;
       }
-    } catch (err) {
-      send(socket, { t: 'error', message: (err as Error).message });
+
+      case 'createWorkspace':
+        hub.createWorkspace(msg.name, msg.rootPath, msg.hostId ?? null);
+        return;
+
+      case 'updateWorkspace':
+        hub.updateWorkspace(msg.workspaceId, {
+          name: msg.name,
+          rootPath: msg.rootPath,
+        });
+        return;
+
+      case 'removeWorkspace':
+        await hub.removeWorkspace(msg.workspaceId);
+        return;
+
+      case 'startSession':
+        await hub.startSession({
+          workspaceId: msg.workspaceId,
+          profile: msg.profile,
+          name: msg.name,
+          cwd: msg.cwd,
+        });
+        return;
+
+      case 'stopSession': {
+        const remote = hub.peers.find(msg.sessionId);
+        if (remote) {
+          await remote.peer.request({ t: 'stopSession', id: randomUUID(), address: msg.sessionId });
+          return;
+        }
+        hub.sessions.stop(msg.sessionId);
+        return;
+      }
+
+      case 'removeSession':
+        // A remote window's session belongs to its peer. Removing it here
+        // would delete nothing and merely hide the window until that peer
+        // reported it again.
+        if (await hub.peers.removeSession(msg.sessionId)) return;
+        hub.sessions.remove(msg.sessionId);
+        return;
+
+      case 'resumeSession': {
+        const remote = hub.peers.find(msg.sessionId);
+        if (remote) {
+          await remote.peer.request({ t: 'resumeSession', id: randomUUID(), address: msg.sessionId });
+          return;
+        }
+        await hub.sessions.resume(msg.sessionId);
+        return;
+      }
+
+      case 'resumeWorkspace':
+        await hub.resumeWorkspace(msg.workspaceId);
+        return;
+
+      case 'moveWindow':
+        // Layout is always local, even for a peer's session.
+        if (!hub.peers.saveLayout(msg.sessionId, msg.rect)) {
+          hub.moveWindow(msg.sessionId, msg.rect);
+        }
+        return;
+
+      case 'setViewport':
+        hub.setViewport(msg.viewport);
+        return;
+
+      case 'addHost': {
+        const host = hub.addHost(msg);
+        // Connect immediately: adding a host the user then has to connect
+        // by hand is a pointless second step.
+        void hub.connectHost(host.id).catch((e) =>
+          send(socket, { t: 'error', message: `connect ${host.label}: ${e.message}` }),
+        );
+        return;
+      }
+
+      case 'updateHost':
+        hub.updateHost(msg.hostId, {
+          label: msg.label,
+          sshHost: msg.sshHost,
+          sshUser: msg.sshUser,
+          sshPort: msg.sshPort,
+          privateKeyPath: msg.privateKeyPath,
+        });
+        return;
+
+      case 'removeHost':
+        await hub.removeHost(msg.hostId);
+        return;
+
+      case 'connectHost':
+        await hub.connectHost(msg.hostId);
+        return;
+
+      default:
+        throw new Error(`unhandled: ${(msg as { t: string }).t}`);
     }
   }
 
