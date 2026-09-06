@@ -33,6 +33,10 @@ workspace at a folder there, and start an agent in it.
 
 - **Scroll** to pan, **Ctrl/⌘ + scroll** to zoom, **Ctrl/⌘ + 1** to fit,
   **Ctrl/⌘ + 2** to zoom to one terminal
+- A **quick flick** of the zoom — a fast pinch, or a fast spin of the wheel —
+  navigates instead of zooming: in over a terminal maximizes it, out steps
+  back to the workspace around it and then to everything. Zooming at any
+  ordinary pace is left alone
 - Below 60% zoom terminals become preview cards — zoom in to interact
 - Clicking an agent in the panel brings the canvas to it
 

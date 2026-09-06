@@ -370,6 +370,51 @@ export function wheelZoomFactor(deltaY: number, deltaMode = 0): number {
 }
 
 /**
+ * Idle gap that ends one burst of wheel detents.
+ *
+ * Slightly longer than the trackpad's, because detents are physical clicks
+ * rather than frame-paced samples: a fast spin lands them 30-60ms apart, while
+ * turning the wheel deliberately is slower than this and never accumulates a
+ * burst at all. That gap is most of what separates a flick from zooming.
+ */
+export const WHEEL_FLICK_GAP_MS = 80;
+
+/**
+ * How far a spin has to travel to read as a flick rather than as zooming,
+ * counted in detents — so a spin that doubles back cancels itself out instead
+ * of adding up.
+ */
+export const WHEEL_FLICK_MIN_DETENTS = 4;
+
+/**
+ * And how long it may take. "Short and quick" is the whole gesture, and past
+ * this a spin is someone aiming at a zoom level, however fast the wheel is
+ * going. It also caps the length: at a flick's pace this is about eight
+ * detents, and a longer spin than that was not a flick.
+ */
+export const WHEEL_FLICK_MAX_MS = 400;
+
+/**
+ * Whether a finished burst of detents reads as a flick, and in which
+ * direction.
+ *
+ * No speed test, unlike a pinch: detents are uniform, so the count already
+ * says how far, and the gap that held the burst together already said how
+ * fast. Not firing is the safe failure — the zoom the spin asked for happened
+ * either way.
+ */
+export function wheelFlickIntent(b: { ratio: number; durationMs: number }): 'in' | 'out' | null {
+  if (!(b.ratio > 0) || !Number.isFinite(b.ratio)) return null;
+  if (!(b.durationMs >= 0 && b.durationMs <= WHEEL_FLICK_MAX_MS)) return null;
+
+  const detents = Math.abs(Math.log(b.ratio)) / Math.log(WHEEL_NOTCH_FACTOR);
+  // Epsilon because exactly four detents is a float product of four factors.
+  if (detents < WHEEL_FLICK_MIN_DETENTS - 1e-9) return null;
+
+  return b.ratio > 1 ? 'in' : 'out';
+}
+
+/**
  * Idle gap that ends one pinch burst.
  *
  * This is dead time you can feel: the zoom stops at the pinch's last position

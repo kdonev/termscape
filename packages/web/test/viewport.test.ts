@@ -21,7 +21,9 @@ import {
   wheelStream,
   wheelZoomFactor,
   isWheelNotch,
+  wheelFlickIntent,
   WHEEL_NOTCH_FACTOR,
+  WHEEL_FLICK_MAX_MS,
   workspaceBounds,
   worldToScreen,
   zoomAt,
@@ -614,5 +616,48 @@ describe('wheelStream', () => {
 
   it('gives a pinch to the canvas wherever it starts', () => {
     expect(wheelStream(null, at(0, true, true)).owner).toBe('canvas');
+  });
+});
+
+describe('wheelFlickIntent', () => {
+  /** A spin of n detents, as the burst would have accumulated it. */
+  const spin = (detents: number, durationMs: number) => ({
+    ratio: WHEEL_NOTCH_FACTOR ** detents,
+    durationMs,
+  });
+
+  it('reads a short quick spin as a command to navigate', () => {
+    expect(wheelFlickIntent(spin(4, 200))).toBe('in');
+    expect(wheelFlickIntent(spin(-4, 200))).toBe('out');
+    expect(wheelFlickIntent(spin(6, 300))).toBe('in');
+  });
+
+  it('leaves ordinary zooming alone', () => {
+    // Turning the wheel a click at a time is the common case, and it must
+    // never fly the canvas somewhere.
+    expect(wheelFlickIntent(spin(1, 0))).toBeNull();
+    expect(wheelFlickIntent(spin(3, 150))).toBeNull();
+    // Far enough, but taking its time: aiming at a zoom, not flicking.
+    expect(wheelFlickIntent(spin(6, WHEEL_FLICK_MAX_MS + 1))).toBeNull();
+  });
+
+  it('cancels a spin that doubled back on itself', () => {
+    // Three in and three out is not a six-detent flick; it is nothing.
+    expect(wheelFlickIntent({ ratio: 1, durationMs: 200 })).toBeNull();
+    const there = WHEEL_NOTCH_FACTOR ** 5;
+    const andBack = there * WHEEL_NOTCH_FACTOR ** -3;
+    expect(wheelFlickIntent({ ratio: andBack, durationMs: 300 })).toBeNull();
+  });
+
+  it('counts exactly the minimum as a flick', () => {
+    // Four detents is a product of four floats and lands a hair under four.
+    expect(wheelFlickIntent(spin(4, 100))).toBe('in');
+  });
+
+  it('refuses a ratio that is not a ratio', () => {
+    expect(wheelFlickIntent({ ratio: 0, durationMs: 100 })).toBeNull();
+    expect(wheelFlickIntent({ ratio: Number.NaN, durationMs: 100 })).toBeNull();
+    expect(wheelFlickIntent({ ratio: Number.POSITIVE_INFINITY, durationMs: 100 })).toBeNull();
+    expect(wheelFlickIntent(spin(4, -1))).toBeNull();
   });
 });

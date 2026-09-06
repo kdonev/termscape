@@ -13,6 +13,8 @@ import {
   fitTo,
   focusRect,
   isWheelNotch,
+  wheelFlickIntent,
+  WHEEL_FLICK_GAP_MS,
   lerpViewport,
   pinchIntent,
   rectContainsPoint,
@@ -389,20 +391,31 @@ export function Canvas() {
   /* ----------------------------------------------------- wheel + pinch */
 
   /*
-   * A precision trackpad reports a pinch as a stream of ctrl+wheel events,
-   * which is also how the canvas gets its continuous zoom. The burst below
-   * watches that same stream for a flick — a pinch that was both fast and
-   * large — and takes it as a command to navigate: in to the window under the
-   * fingers, out one level of the workspace ladder. Anything slower or smaller
-   * is left alone, so precise zooming is never hijacked.
+   * A precision trackpad reports a pinch as a stream of ctrl+wheel events, and
+   * ctrl held over a mouse wheel arrives on the same stream a detent at a
+   * time. Either way that stream is the canvas's continuous zoom, and the
+   * burst below watches it for a flick — a gesture both fast and large — and
+   * takes that as a command to navigate: in to the window under the pointer,
+   * out one level of the workspace ladder. Anything slower or smaller is left
+   * alone, so precise zooming is never hijacked.
+   *
+   * What counts as fast and large differs by device, and only there: a pinch
+   * is judged on speed, a spin on how many detents it managed before the gap
+   * between them opened up.
    */
   const burstRef = useRef<null | {
     startedAt: number;
     lastAt: number;
     events: number;
-    /** Product of the wheel factors so far: the zoom the pinch asked for. */
+    /** Product of the wheel factors so far: the zoom the gesture asked for. */
     ratio: number;
-    /** Canvas-relative point the pinch started at. */
+    /**
+     * Whether this burst is made of wheel detents. The two devices are judged
+     * by different standards — see finishBurst — and a burst is never a mix,
+     * because nobody changes hands mid-gesture.
+     */
+    notch: boolean;
+    /** Canvas-relative point the gesture started at. */
     anchor: Point;
     /** Resolves that anchor to world space, and is where a dismissal returns. */
     startViewport: Viewport;
@@ -426,11 +439,10 @@ export function Canvas() {
     burstRef.current = null;
     if (b.timer !== null) window.clearTimeout(b.timer);
 
-    const intent = pinchIntent({
-      ratio: b.ratio,
-      durationMs: b.lastAt - b.startedAt,
-      events: b.events,
-    });
+    const durationMs = b.lastAt - b.startedAt;
+    const intent = b.notch
+      ? wheelFlickIntent({ ratio: b.ratio, durationMs })
+      : pinchIntent({ ratio: b.ratio, durationMs, events: b.events });
     if (!intent) return;
 
     const world = screenToWorld(b.anchor, b.startViewport);
@@ -470,16 +482,18 @@ export function Canvas() {
     glideTo(alignViewport(next, w, h, dprRef.current));
   }, [focusSession, glideTo]);
 
-  const notePinch = useCallback(
-    (anchor: Point, factor: number) => {
+  const noteZoom = useCallback(
+    (anchor: Point, factor: number, notch: boolean) => {
       const now = performance.now();
+      const gap = notch ? WHEEL_FLICK_GAP_MS : PINCH_GAP_MS;
       const b = burstRef.current;
-      if (b && now - b.lastAt <= PINCH_GAP_MS) {
+      // Same device, still within its gap: this is more of the same gesture.
+      if (b && b.notch === notch && now - b.lastAt <= gap) {
         if (b.timer !== null) window.clearTimeout(b.timer);
         b.lastAt = now;
         b.events += 1;
         b.ratio *= factor;
-        b.timer = window.setTimeout(finishBurst, PINCH_GAP_MS);
+        b.timer = window.setTimeout(finishBurst, gap);
         return;
       }
       discardBurst();
@@ -488,9 +502,10 @@ export function Canvas() {
         lastAt: now,
         events: 1,
         ratio: factor,
+        notch,
         anchor,
         startViewport: viewportRef.current,
-        timer: window.setTimeout(finishBurst, PINCH_GAP_MS),
+        timer: window.setTimeout(finishBurst, gap),
       };
     },
     [discardBurst, finishBurst],
@@ -535,16 +550,9 @@ export function Canvas() {
 
       if (zooming) {
         const factor = wheelZoomFactor(e.deltaY, e.deltaMode);
-        if (isWheelNotch(e.deltaY, e.deltaMode)) {
-          // A mouse has no pinch to flick. Feeding detents to the detector
-          // made any three quick ones a command to navigate, so ordinary
-          // zooming flew the canvas to whatever was under the pointer.
-          discardBurst();
-        } else {
-          // Recorded before the zoom is applied, so the burst keeps the
-          // viewport the pinch started from.
-          notePinch(point, factor);
-        }
+        // Recorded before the zoom is applied, so the burst keeps the
+        // viewport the gesture started from.
+        noteZoom(point, factor, isWheelNotch(e.deltaY, e.deltaMode));
         setViewport(zoomAt(viewport, point, viewport.zoom * factor));
       } else {
         discardBurst();
@@ -561,7 +569,7 @@ export function Canvas() {
     const opts = { passive: false, capture: true } as const;
     el.addEventListener('wheel', onWheel, opts);
     return () => el.removeEventListener('wheel', onWheel, opts);
-  }, [viewport, setViewport, markInteracting, notePinch, discardBurst]);
+  }, [viewport, setViewport, markInteracting, noteZoom, discardBurst]);
 
   /* ----------------------------------------------------- keyboard nav */
 
