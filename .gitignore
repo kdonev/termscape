@@ -4,6 +4,7 @@ node_modules/
 
 # builds
 dist/
+packages/hub/npm/
 build/
 *.tsbuildinfo
 

@@ -7,6 +7,32 @@ import { mintClientToken } from './agents/tokens.js';
 import { paths } from './paths.js';
 import { resolveBindHost } from './remote/lan.js';
 import { joinCanvas, type JoinLink } from './remote/join.js';
+import { openInBrowser } from './browser.js';
+import { ProfileRegistry } from './agents/profiles.js';
+import { which } from './agents/resolve.js';
+
+/**
+ * Warn when no agent CLI is installed.
+ *
+ * Without this the first thing a new user does - start an agent - fails inside
+ * a terminal window on the canvas, where the error is easy to miss and reads
+ * like the hub is broken. Checking every profile that wires up MCP, rather
+ * than "claude" specifically, keeps a custom ~/.termscape/agents.toml counted.
+ */
+function preflightAgents(): void {
+  const agents = ProfileRegistry.load()
+    .list()
+    .filter((profile) => profile.mcp);
+  if (agents.length === 0) return;
+  if (agents.some((profile) => which(profile.command))) return;
+
+  const names = agents.map((profile) => profile.command).join(', ');
+  console.error(`[warn] no agent CLI found on PATH (looked for: ${names})`);
+  console.error('       install one - https://claude.com/claude-code - or set');
+  console.error('       an absolute "command" in ~/.termscape/agents.toml.');
+  console.error('       Terminals with the "shell" profile still work.');
+  console.error('');
+}
 
 async function main(): Promise<void> {
   const { values } = parseArgs({
@@ -19,6 +45,8 @@ async function main(): Promise<void> {
       'join-token': { type: 'string' },
       label: { type: 'string' },
       open: { type: 'boolean', default: false },
+      // parseArgs has no --no-x negation, so the opt-out is its own flag.
+      'no-open': { type: 'boolean', default: false },
       version: { type: 'boolean', default: false },
       help: { type: 'boolean', default: false },
     },
@@ -38,7 +66,8 @@ async function main(): Promise<void> {
                     other machines can open the join page. Default: loopback
   --headless        serve no web UI; used when running as a remote hub
   --token <t>       client token to use instead of generating one
-  --open            print the UI url and open it in the browser
+  --open            open the UI in the browser even when not on a terminal
+  --no-open         do not open the browser; just print the url
 
 Joining another machine's canvas:
 
@@ -49,6 +78,8 @@ Joining another machine's canvas:
 `);
     return;
   }
+
+  preflightAgents();
 
   mkdirSync(paths.home(), { recursive: true });
   const clientToken = values.token ?? mintClientToken();
@@ -90,6 +121,21 @@ Joining another machine's canvas:
     console.log(`          that page can attach a machine to this canvas`);
   }
   if (!values.headless) console.log('');
+
+  /*
+   * Opening the canvas is the default, not a flag.
+   *
+   * The URL carries a token, so it is long and cannot be retyped - leaving
+   * the user to copy it out of scrollback is most of the friction in a
+   * one-command install. A headless hub has no UI to open, and a hub started
+   * by a script or a supervisor has nobody watching, which is what the TTY
+   * check stands in for. --open overrides that check; --no-open beats both.
+   */
+  const wantsBrowser =
+    !values.headless &&
+    !values['no-open'] &&
+    (values.open || process.stdout.isTTY === true);
+  if (wantsBrowser) openInBrowser(url);
 
   // The canvas hub asks us to stop when the user drops this host, so the
   // machine does not keep a hub running that belongs to nobody.

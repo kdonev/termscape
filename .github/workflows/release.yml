@@ -1,0 +1,115 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  # The published tarball is pure JavaScript - the native dependencies are
+  # compiled or fetched on the installing machine - so it is built once and the
+  # same bytes are what every smoke test installs and what npm receives.
+  pack:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+
+      - name: Refuse a tag that disagrees with package.json
+        shell: bash
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg="$(node -p "require('./packages/hub/package.json').version")"
+          if [ "$tag" != "$pkg" ]; then
+            echo "tag $GITHUB_REF_NAME does not match package version $pkg" >&2
+            exit 1
+          fi
+
+      - run: npm run build
+      - run: npm run pack:npm -w @termscape/hub
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tarball
+          path: packages/hub/npm/*.tgz
+          if-no-files-found: error
+
+  # The gate PLAN.md asks for: install the real artifact the way a user would,
+  # on every platform, and make sure the thing starts and serves its UI.
+  smoke:
+    needs: pack
+    name: smoke (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: tarball
+          path: tarball
+
+      - name: Install globally
+        shell: bash
+        run: npm install -g ./tarball/*.tgz
+
+      - name: Starts and reports its version
+        shell: bash
+        run: |
+          got="$(termscape --version)"
+          echo "version: $got"
+          test -n "$got"
+
+      - name: Serves the canvas
+        shell: bash
+        env:
+          TERMSCAPE_HOME: ${{ runner.temp }}/termscape-home
+        run: |
+          mkdir -p "$TERMSCAPE_HOME"
+          # --no-open because CI has no browser to hand the URL to.
+          termscape --port 7789 --no-open --token ci-smoke-token > hub.log 2>&1 &
+          for _ in $(seq 1 60); do
+            curl -sf http://127.0.0.1:7789/health >/dev/null && break
+            sleep 1
+          done
+          echo "--- hub.log ---"; cat hub.log
+          curl -sf http://127.0.0.1:7789/health
+          # The UI is the half most likely to be lost in packaging: the hub
+          # finds it by a different relative path once installed.
+          curl -sf http://127.0.0.1:7789/ | grep -q '<div id="root">'
+          echo "canvas served ok"
+
+  publish:
+    needs: smoke
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Required for npm provenance, which ties the tarball to this workflow run.
+      id-token: write
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: tarball
+          path: tarball
+
+      - name: Publish to npm
+        shell: bash
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish ./tarball/*.tgz --access public --provenance

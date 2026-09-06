@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # node-pty ships no Linux prebuild, so `npm ci` compiles it here.
+      # ubuntu-latest already has python3 and a C++ toolchain; this is only a
+      # problem for users, and the README says so.
+      - run: npm ci
+
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm test

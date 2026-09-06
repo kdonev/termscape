@@ -76,10 +76,20 @@ export interface ServeResult {
  */
 export const MEMORABLE_PORTS = [7777, 4242, 7333, 3333, 9999, 7070, 4040, 1212];
 
-/** Locate the built web assets relative to this file, if they exist. */
+/**
+ * Locate the built web assets relative to this file, if they exist.
+ *
+ * Two layouts have to work. In the monorepo the hub runs from
+ * `packages/hub/dist/` and the UI is its sibling at `packages/web/dist`. In the
+ * published package there are no siblings: the UI is copied to `web/` beside
+ * `dist/`, because npm ships one package and a relative walk out of it would
+ * land in whatever the user happens to have installed next door.
+ */
 function webRoot(): string | null {
   const here = dirname(fileURLToPath(import.meta.url));
   const candidates = [
+    // Published layout: <pkg>/dist/server.js -> <pkg>/web
+    join(here, '..', 'web'),
     join(here, '..', '..', 'web', 'dist'),
     join(here, '..', '..', '..', 'web', 'dist'),
   ];

@@ -15,7 +15,8 @@
     "dev": "npm run dev -w @termscape/hub --",
     "dev:web": "npm run dev -w @termscape/web --",
     "test": "vitest run",
-    "typecheck": "tsc -b --pretty"
+    "typecheck": "tsc -b packages/hub --pretty && tsc -p packages/web --noEmit --pretty",
+    "pack:npm": "npm run build && npm run pack:npm -w @termscape/hub"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

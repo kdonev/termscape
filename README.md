@@ -12,24 +12,20 @@ Local-first: the hub runs on your machine, binds loopback only, and the UI is a
 browser tab. Other machines run the same hub as a daemon and appear on the same
 canvas.
 
-## Requirements
-
-- Node 22 or newer
-- An agent CLI on your `PATH` — [Claude Code](https://claude.com/claude-code)
-  is the profile that ships configured
-- macOS, Windows, or Linux
-
 ## Getting started
 
 ```bash
-npm install
-npm run build
-npm run dev
+npx @kdonev/termscape
 ```
 
-The hub prints a URL with a token. Open it and slide out the **machines**
-panel: every machine, the workspaces on it, and the agents in each. Point a
-workspace at a folder there, and start an agent in it.
+That starts the hub and opens the canvas in your browser — pass `--no-open`
+if you would rather it did not; the URL is printed either way. Nothing is
+installed system-wide: state lives in `~/.termscape`, and deleting that
+directory is the uninstall.
+
+Slide out the **machines** panel: every machine, the workspaces on it, and
+the agents in each. Point a workspace at a folder there, and start an agent
+in it.
 
 - **Scroll** to pan, **Ctrl/⌘ + scroll** to zoom, **Ctrl/⌘ + 1** to fit,
   **Ctrl/⌘ + 2** to zoom to one terminal
@@ -39,6 +35,19 @@ workspace at a folder there, and start an agent in it.
   ordinary pace is left alone
 - Below 60% zoom terminals become preview cards — zoom in to interact
 - Clicking an agent in the panel brings the canvas to it
+
+## Requirements
+
+- Node 22 or newer
+- An agent CLI on your `PATH` — [Claude Code](https://claude.com/claude-code)
+  is the profile that ships configured
+- macOS, Windows, or Linux
+
+On **Linux**, expect the first install to take a minute: `node-pty` publishes
+prebuilt binaries for macOS and Windows only, so it is compiled on the way in
+and needs a toolchain —
+`sudo apt install -y python3 build-essential` on Debian/Ubuntu, or the
+equivalent for your distribution. macOS and Windows install prebuilt.
 
 ## How it fits together
 
@@ -64,10 +73,11 @@ Start the hub so the other machine can see it, then let that machine come to
 you:
 
 ```bash
-npm run dev -- --listen lan
+npx @kdonev/termscape --listen lan
 ```
 
-(Or `npm run dev -w @termscape/hub -- --listen lan` if you are calling the
+(From a clone that is `npm run dev -- --listen lan`, or
+`npm run dev -w @termscape/hub -- --listen lan` if you are calling the
 workspace directly — npm needs the `--` to hand flags to the hub rather than
 reading them itself.)
 
@@ -220,10 +230,19 @@ could be talked into sending an attacker's text to a peer.
 
 ## Development
 
+From a clone, rather than the published package:
+
+```bash
+git clone https://github.com/kdonev/termscape.git
+cd termscape
+npm install
+npm run build
+npm run dev           # hub with the built UI
+```
+
 ```bash
 npm test              # unit + integration, no LLM required
 npm run typecheck
-npm run dev           # hub with the built UI
 npm run dev:web       # vite dev server, expects a hub on :7777
 ```
 
@@ -235,3 +254,25 @@ The integration tests spawn real PTYs and drive the real MCP endpoint, so
 - On Windows, node-pty prints `AttachConsole failed` to stderr when killing a
   PTY from a process with no console attached (notably under the test runner).
   It is noise from a helper process and does not affect behaviour.
+
+### Releasing
+
+The repo is a workspace of three private packages; what gets published is a
+single package assembled by `packages/hub/scripts/pack-npm.mjs` — the hub,
+the built UI it serves, and `@termscape/protocol` bundled inside it.
+
+```bash
+npm run pack:npm      # build everything, then stage and pack the tarball
+```
+
+Tagging `v<version>` runs `.github/workflows/release.yml`, which refuses a
+tag that disagrees with `packages/hub/package.json`, installs the packed
+tarball on macOS, Windows and Linux and checks each one starts and serves the
+canvas, and only then publishes to npm with provenance. Bump the version in
+`packages/hub/package.json` **and** `HUB_VERSION` in `packages/hub/src/hub.ts`
+together — peer compatibility is gated on the constant, and a test fails if
+the two drift.
+
+## License
+
+MIT — see [LICENSE](LICENSE).

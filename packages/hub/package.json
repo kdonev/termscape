@@ -2,16 +2,41 @@
   "name": "@termscape/hub",
   "version": "0.1.0",
   "private": true,
+  "description": "Run a crew of AI coding agents on one infinite canvas, and let them talk to each other.",
+  "license": "MIT",
+  "author": "kdonev",
+  "homepage": "https://github.com/kdonev/termscape#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kdonev/termscape.git",
+    "directory": "packages/hub"
+  },
+  "bugs": {
+    "url": "https://github.com/kdonev/termscape/issues"
+  },
+  "keywords": [
+    "ai",
+    "agents",
+    "terminal",
+    "canvas",
+    "mcp",
+    "claude-code",
+    "pty",
+    "tui"
+  ],
   "type": "module",
   "bin": {
     "termscape": "./dist/cli.js"
   },
-  "main": "./dist/index.js",
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json && node scripts/pack-hub.mjs",
     "dev": "tsx watch src/cli.ts",
     "start": "node dist/cli.js",
-    "pack": "node scripts/pack-hub.mjs"
+    "pack": "node scripts/pack-hub.mjs",
+    "pack:npm": "node scripts/pack-npm.mjs"
   },
   "dependencies": {
     "@termscape/protocol": "*",
