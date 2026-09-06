@@ -1,5 +1,5 @@
 {
-  "name": "aicanvas-root",
+  "name": "termscape-root",
   "private": true,
   "type": "module",
   "workspaces": [
@@ -11,9 +11,9 @@
     "node": ">=22"
   },
   "scripts": {
-    "build": "npm run build -w @aicanvas/protocol && npm run build -w @aicanvas/web && npm run build -w @aicanvas/hub",
-    "dev": "npm run dev -w @aicanvas/hub --",
-    "dev:web": "npm run dev -w @aicanvas/web --",
+    "build": "npm run build -w @termscape/protocol && npm run build -w @termscape/web && npm run build -w @termscape/hub",
+    "dev": "npm run dev -w @termscape/hub --",
+    "dev:web": "npm run dev -w @termscape/web --",
     "test": "vitest run",
     "typecheck": "tsc -b --pretty"
   },

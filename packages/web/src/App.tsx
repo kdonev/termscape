@@ -11,12 +11,12 @@ function resolveToken(): string {
   const url = new URL(window.location.href);
   const fromUrl = url.searchParams.get('token');
   if (fromUrl) {
-    sessionStorage.setItem('aicanvas-token', fromUrl);
+    sessionStorage.setItem('termscape-token', fromUrl);
     url.searchParams.delete('token');
     window.history.replaceState({}, '', url.toString());
     return fromUrl;
   }
-  return sessionStorage.getItem('aicanvas-token') ?? '';
+  return sessionStorage.getItem('termscape-token') ?? '';
 }
 
 export function App() {

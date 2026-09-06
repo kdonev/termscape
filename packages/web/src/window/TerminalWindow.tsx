@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
-import type { Session, Workspace } from '@aicanvas/protocol';
+import type { Session, Workspace } from '@termscape/protocol';
 import { useStore } from '../state/store.js';
 import { TerminalView } from './Terminal.js';
 import { LIVE_ZOOM_THRESHOLD, snapWorldPx } from '../canvas/viewport.js';

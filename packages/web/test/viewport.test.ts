@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Viewport } from '@aicanvas/protocol';
+import type { Viewport } from '@termscape/protocol';
 import {
   alignViewport,
   alignZoom,

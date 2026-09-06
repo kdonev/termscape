@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
-import type { Session, Viewport, Workspace } from '@aicanvas/protocol';
+import type { Session, Viewport, Workspace } from '@termscape/protocol';
 import { useStore } from '../state/store.js';
 import { sessionsIn } from '../state/tree.js';
 import { TerminalWindow } from '../window/TerminalWindow.js';

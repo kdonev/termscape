@@ -14,7 +14,7 @@ import {
   type Viewport,
   type WindowRect,
   type Workspace,
-} from '@aicanvas/protocol';
+} from '@termscape/protocol';
 import { openDb, type Db } from './db/index.js';
 import { Store } from './db/store.js';
 import { ProfileRegistry } from './agents/profiles.js';

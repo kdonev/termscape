@@ -13,7 +13,7 @@ import {
   encodeBinaryFrame,
   type HubState,
   type ServerMsg,
-} from '@aicanvas/protocol';
+} from '@termscape/protocol';
 import { Hub, HUB_VERSION } from './hub.js';
 import { createPeerServer, type PeerServer } from './remote/peer-serve.js';
 import { registerEnrollment, type Enrollment } from './remote/enroll.js';

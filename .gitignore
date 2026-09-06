@@ -8,7 +8,7 @@ build/
 *.tsbuildinfo
 
 # local state (hub database, tokens, generated agent configs)
-.aicanvas/
+.termscape/
 *.db
 *.db-wal
 *.db-shm

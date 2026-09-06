@@ -7,7 +7,7 @@ import {
   PEER_SCHEMA_VERSION,
   type Host,
   type PeerResponse,
-} from '@aicanvas/protocol';
+} from '@termscape/protocol';
 import type { Hub } from '../hub.js';
 import { HUB_VERSION } from '../hub.js';
 import { joinScriptPosix, joinScriptPowerShell } from './join-script.js';
@@ -249,7 +249,7 @@ function joinPage(origin: string): string {
 <main>
   <h1>Add this machine to the canvas</h1>
   <p class="lede">Run one of these here. It installs the hub under
-    <code>~/.aicanvas</code> and connects back to <code>${escapeHtml(origin)}</code>.</p>
+    <code>~/.termscape</code> and connects back to <code>${escapeHtml(origin)}</code>.</p>
 
   <h2>macOS &middot; Linux</h2>
   <pre>curl -fsSL ${escapeHtml(origin)}/join.sh | sh</pre>

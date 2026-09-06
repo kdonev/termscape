@@ -25,7 +25,7 @@ export function Toolbar() {
   return (
     <div className="toolbar">
       <div className="brand">
-        aiCanvas
+        Termscape
         <span className={`conn ${connected ? 'on' : 'off'}`}>
           {connected ? `v${hubVersion}` : 'reconnecting…'}
         </span>

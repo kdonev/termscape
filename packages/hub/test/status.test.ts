@@ -97,12 +97,12 @@ describe('the hooks an agent is wired with', () => {
   let home: string;
 
   beforeAll(() => {
-    home = mkdtempSync(join(tmpdir(), 'aicanvas-wiring-'));
-    process.env.AICANVAS_HOME = home;
+    home = mkdtempSync(join(tmpdir(), 'termscape-wiring-'));
+    process.env.TERMSCAPE_HOME = home;
   });
 
   afterAll(() => {
-    delete process.env.AICANVAS_HOME;
+    delete process.env.TERMSCAPE_HOME;
     rmSync(home, { recursive: true, force: true });
   });
 

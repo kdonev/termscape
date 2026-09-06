@@ -6,7 +6,7 @@ import {
   PeerResponse,
   type PeerRequest,
   type Session,
-} from '@aicanvas/protocol';
+} from '@termscape/protocol';
 
 export interface PeerOptions {
   hostId: string;

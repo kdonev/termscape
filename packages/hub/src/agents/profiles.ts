@@ -1,7 +1,7 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { platform } from 'node:process';
 import { parse as parseToml } from 'smol-toml';
-import type { InjectMode } from '@aicanvas/protocol';
+import type { InjectMode } from '@termscape/protocol';
 import { paths } from '../paths.js';
 
 /**
@@ -94,7 +94,7 @@ export class ProfileRegistry {
     this.profiles = profiles ?? { ...BUILTIN_PROFILES };
   }
 
-  /** Built-ins, overlaid with ~/.aicanvas/agents.toml if present. */
+  /** Built-ins, overlaid with ~/.termscape/agents.toml if present. */
   static load(): ProfileRegistry {
     const merged: Record<string, AgentProfile> = { ...BUILTIN_PROFILES };
     const file = paths.profiles();

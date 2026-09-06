@@ -2,7 +2,7 @@ import { readFileSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { hostname, platform, arch, homedir } from 'node:os';
 import { dirname } from 'node:path';
 import { WebSocket } from 'ws';
-import { PEER_SCHEMA_VERSION, PeerResponse, type PeerRequest } from '@aicanvas/protocol';
+import { PEER_SCHEMA_VERSION, PeerResponse, type PeerRequest } from '@termscape/protocol';
 import type { Hub } from '../hub.js';
 import { HUB_VERSION } from '../hub.js';
 import { paths } from '../paths.js';
@@ -21,7 +21,7 @@ import type { PeerServer } from './peer-serve.js';
  * crash, a dropped link — rejoins silently with no second trip to the
  * download page.
  *
- * The two AICANVAS_JOIN* markers below exist for the installer to grep. A hub
+ * The two TERMSCAPE_JOIN* markers below exist for the installer to grep. A hub
  * that has started is not a hub that has joined, and reporting success on the
  * former is how you end up telling someone they are connected when the canvas
  * refused them.
@@ -87,7 +87,7 @@ export function joinCanvas(opts: JoinOptions): JoinLink {
    */
   const fatal = (message: string): void => {
     stopped = true;
-    log(`AICANVAS_JOIN_FAILED=${message}`);
+    log(`TERMSCAPE_JOIN_FAILED=${message}`);
     opts.hub.emit('joinFailed', message);
   };
   const tokenFile = opts.tokenFile ?? paths.hostTokenFile();
@@ -193,7 +193,7 @@ export function joinCanvas(opts: JoinOptions): JoinLink {
       // The canvas hub drives from here; we answer.
       opts.peerServer.serve(ws, { preAuthed: true });
       // Machine-readable: the installer waits for this, not for the port.
-      log(`AICANVAS_JOINED=1 joined ${opts.hubUrl}`);
+      log(`TERMSCAPE_JOINED=1 joined ${opts.hubUrl}`);
     };
 
     ws.on('message', onHandshake);

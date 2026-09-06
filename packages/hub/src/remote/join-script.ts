@@ -18,7 +18,7 @@
  * while it runs, and reports how long it took.
  *
  * When Node is missing or too old, a private copy is fetched into
- * `~/.aicanvas/node` rather than installed system-wide. That is deliberate:
+ * `~/.termscape/node` rather than installed system-wide. That is deliberate:
  * it needs no administrator rights, no package manager, and no PATH surgery
  * that a fresh shell would have to pick up; and uninstalling is deleting one
  * directory. The download is checksum-verified against nodejs.org's own
@@ -35,12 +35,12 @@ const NODE_DIST = 'https://nodejs.org/dist/latest-v22.x';
 
 export function joinScriptPosix(origin: string, token: string): string {
   return `#!/bin/sh
-# Joins this machine to the aiCanvas at ${origin}.
+# Joins this machine to the Termscape canvas at ${origin}.
 set -eu
 
 HUB_URL=${sq(origin)}
 JOIN_TOKEN=${sq(token)}
-HOME_DIR="\${AICANVAS_HOME:-$HOME/.aicanvas}"
+HOME_DIR="\${TERMSCAPE_HOME:-$HOME/.termscape}"
 NODE_DIST=${sq(NODE_DIST)}
 
 say()  { printf '%s\\n' "$*"; }
@@ -106,7 +106,7 @@ stop_running_hub() {
   # A hub predating the pid file, or one whose file was lost.
   if [ -z "$OLD_PID" ] && command -v pgrep >/dev/null 2>&1; then
     OLD_PID=$(pgrep -f "$HOME_DIR/hub/dist/cli.js" 2>/dev/null | head -1 || true)
-    [ -n "$OLD_PID" ] || OLD_PID=$(pgrep -f "AICANVAS_HOME=$HOME_DIR" 2>/dev/null | head -1 || true)
+    [ -n "$OLD_PID" ] || OLD_PID=$(pgrep -f "TERMSCAPE_HOME=$HOME_DIR" 2>/dev/null | head -1 || true)
   fi
   [ -n "$OLD_PID" ] || return 0
   kill -0 "$OLD_PID" 2>/dev/null || return 0
@@ -126,7 +126,7 @@ stop_running_hub() {
 
 mkdir -p "$HOME_DIR"
 say ""
-say "aiCanvas - joining $HUB_URL"
+say "Termscape - joining $HUB_URL"
 
 # --- node -------------------------------------------------------------------
 NODE_BIN=node
@@ -289,7 +289,7 @@ fi
 
 # --- join -------------------------------------------------------------------
 step 4/4 "connecting to $HUB_URL"
-AICANVAS_HOME="$HOME_DIR" nohup "$NODE_BIN" "$HOME_DIR/hub/dist/cli.js" \\
+TERMSCAPE_HOME="$HOME_DIR" nohup "$NODE_BIN" "$HOME_DIR/hub/dist/cli.js" \\
   --headless --port 0 --join "$HUB_URL" --join-token "$JOIN_TOKEN" \\
   >"$HOME_DIR/hub.log" 2>&1 &
 HUB_PID=$!
@@ -301,7 +301,7 @@ T0=$(now)
 printf '       starting the hub '
 i=0
 while [ $i -lt 360 ]; do
-  if grep -q AICANVAS_JOINED= "$HOME_DIR/hub.log" 2>/dev/null; then
+  if grep -q TERMSCAPE_JOINED= "$HOME_DIR/hub.log" 2>/dev/null; then
     printf ' %s\\n' "$(since "$T0")"
     say ""
     say "Joined. This machine is on the canvas at $HUB_URL"
@@ -310,9 +310,9 @@ while [ $i -lt 360 ]; do
     say ""
     exit 0
   fi
-  if grep -q AICANVAS_JOIN_FAILED= "$HOME_DIR/hub.log" 2>/dev/null; then
+  if grep -q TERMSCAPE_JOIN_FAILED= "$HOME_DIR/hub.log" 2>/dev/null; then
     printf '\\n'
-    REASON=$(grep -m1 AICANVAS_JOIN_FAILED= "$HOME_DIR/hub.log" | sed 's/.*AICANVAS_JOIN_FAILED=//')
+    REASON=$(grep -m1 TERMSCAPE_JOIN_FAILED= "$HOME_DIR/hub.log" | sed 's/.*TERMSCAPE_JOIN_FAILED=//')
     fail \
 "$HUB_URL refused this machine:
   $REASON
@@ -338,13 +338,13 @@ fail "The hub started but never reported joining $HUB_URL. See $HOME_DIR/hub.log
 }
 
 export function joinScriptPowerShell(origin: string, token: string): string {
-  return `# Joins this machine to the aiCanvas at ${origin}.
+  return `# Joins this machine to the Termscape canvas at ${origin}.
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'   # PS5.1's progress bar cripples Invoke-WebRequest
 
 $HubUrl    = ${sq(origin)}
 $JoinToken = ${sq(token)}
-$HomeDir   = if ($env:AICANVAS_HOME) { $env:AICANVAS_HOME } else { Join-Path $HOME '.aicanvas' }
+$HomeDir   = if ($env:TERMSCAPE_HOME) { $env:TERMSCAPE_HOME } else { Join-Path $HOME '.termscape' }
 $NodeDist  = ${sq(NODE_DIST)}
 
 # Write-Error, not exit: with $ErrorActionPreference = 'Stop' this ends the
@@ -463,10 +463,10 @@ function Stop-RunningHub($hubDir) {
 
 New-Item -ItemType Directory -Force -Path $HomeDir | Out-Null
 Write-Host ""
-Write-Host "aiCanvas - joining $HubUrl"
+Write-Host "Termscape - joining $HubUrl"
 
 # --- node -------------------------------------------------------------------
-# A private copy under ~/.aicanvas, not a system install: no administrator
+# A private copy under ~/.termscape, not a system install: no administrator
 # rights, no package manager, and no new shell needed to pick up a PATH change.
 function Install-Node {
   $arch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } else { 'x64' }
@@ -644,7 +644,7 @@ Pop-Location
 # --- join -------------------------------------------------------------------
 Step '4/4' "connecting to $HubUrl"
 $hubLog = Join-Path $HomeDir 'hub.log'
-$env:AICANVAS_HOME = $HomeDir
+$env:TERMSCAPE_HOME = $HomeDir
 # cli.js is named absolutely so this hub is findable in the process list by
 # the install it came from - which is how a later re-join knows what to stop.
 $cliArgs = '"' + (Join-Path $hubDir 'dist/cli.js') + '"' +
@@ -668,8 +668,8 @@ for ($i = 0; $i -lt 360; $i++) {
   # not a failure.
   try {
     if (Test-Path $hubLog) {
-      $joined  = Select-String -Path $hubLog -Pattern 'AICANVAS_JOINED=' -Quiet
-      $refused = Select-String -Path $hubLog -Pattern 'AICANVAS_JOIN_FAILED=(.*)' |
+      $joined  = Select-String -Path $hubLog -Pattern 'TERMSCAPE_JOINED=' -Quiet
+      $refused = Select-String -Path $hubLog -Pattern 'TERMSCAPE_JOIN_FAILED=(.*)' |
                    Select-Object -First 1
     }
   } catch { $joined = $false }

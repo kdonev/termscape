@@ -41,7 +41,7 @@ async function mcpClient(sessionId: string): Promise<Client> {
   const transport = new StreamableHTTPClientTransport(new URL(`${origin}/mcp`), {
     requestInit: { headers: { Authorization: `Bearer ${token}` } },
   });
-  const client = new Client({ name: 'aicanvas-test', version: '0.0.0' });
+  const client = new Client({ name: 'termscape-test', version: '0.0.0' });
   await client.connect(transport);
   return client;
 }
@@ -58,8 +58,8 @@ function parseResult(res: any): any {
 }
 
 beforeAll(async () => {
-  home = mkdtempSync(join(tmpdir(), 'aicanvas-home-'));
-  process.env.AICANVAS_HOME = home;
+  home = mkdtempSync(join(tmpdir(), 'termscape-home-'));
+  process.env.TERMSCAPE_HOME = home;
 
   hub = new Hub({ dbPath: join(home, 'state.db') });
   hub.on('data', (id: string, chunk: string) => {
@@ -80,7 +80,7 @@ afterAll(async () => {
   hub.shutdown();
   await app.close();
   rmSync(home, { recursive: true, force: true });
-  delete process.env.AICANVAS_HOME;
+  delete process.env.TERMSCAPE_HOME;
 });
 
 describe('agent-to-agent messaging', () => {

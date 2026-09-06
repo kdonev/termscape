@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import type { FastifyInstance } from 'fastify';
-import type { Host } from '@aicanvas/protocol';
+import type { Host } from '@termscape/protocol';
 import { Hub, HUB_VERSION } from '../src/hub.js';
 import { serve } from '../src/server.js';
 
@@ -75,9 +75,9 @@ async function mcpAs(hub: Hub, origin: string, sessionId: string): Promise<Clien
 const parse = (res: any) => JSON.parse(res.content[0].text);
 
 beforeAll(async () => {
-  homeA = mkdtempSync(join(tmpdir(), 'aicanvas-A-'));
-  homeB = mkdtempSync(join(tmpdir(), 'aicanvas-B-'));
-  process.env.AICANVAS_HOME = homeA;
+  homeA = mkdtempSync(join(tmpdir(), 'termscape-A-'));
+  homeB = mkdtempSync(join(tmpdir(), 'termscape-B-'));
+  process.env.TERMSCAPE_HOME = homeA;
 
   // Hub B stands in for the remote machine.
   hubB = new Hub({ dbPath: join(homeB, 'state.db') });
@@ -135,7 +135,7 @@ afterAll(async () => {
   await appB.close();
   rmSync(homeA, { recursive: true, force: true });
   rmSync(homeB, { recursive: true, force: true });
-  delete process.env.AICANVAS_HOME;
+  delete process.env.TERMSCAPE_HOME;
 });
 
 describe('peer link', () => {

@@ -2,7 +2,7 @@ import { EventEmitter } from 'node:events';
 import { createRequire } from 'node:module';
 import { basename } from 'node:path';
 import { platform } from 'node:process';
-import type { AgentStatus } from '@aicanvas/protocol';
+import type { AgentStatus } from '@termscape/protocol';
 import { buildAgentEnv } from '../agents/env.js';
 // Type-only imports are erased at compile time, so they are safe against the
 // CJS interop problem described below while still typing the values.

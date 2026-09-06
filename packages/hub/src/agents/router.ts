@@ -4,7 +4,7 @@ import {
   formatMessage,
   MESSAGE_RATE_LIMIT,
   type Message,
-} from '@aicanvas/protocol';
+} from '@termscape/protocol';
 import type { Store } from '../db/store.js';
 import type { SessionManager } from '../session/manager.js';
 import type { ProfileRegistry } from './profiles.js';

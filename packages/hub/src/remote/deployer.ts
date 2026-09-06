@@ -43,7 +43,7 @@ export interface DeployOptions extends HostCredentials {
   log?: (line: string) => void;
 }
 
-const DEFAULT_REMOTE_DIR = '~/.aicanvas';
+const DEFAULT_REMOTE_DIR = '~/.termscape';
 
 function connectConfig(c: HostCredentials): ConnectConfig {
   const cfg: ConnectConfig = {
@@ -134,7 +134,7 @@ export async function provision(
   if (!opts.packagePath) {
     throw new Error(
       'remote hub is missing or out of date and no package tarball was supplied; ' +
-        'run `npm pack -w @aicanvas/hub` and pass its path',
+        'run `npm pack -w @termscape/hub` and pass its path',
     );
   }
 
@@ -228,14 +228,14 @@ export async function startRemoteHub(
 
   await exec(
     conn,
-    `cd ${remoteDir}/hub && AICANVAS_HOME=${remoteDir} nohup node dist/cli.js --headless --port 0 --token '${opts.token}' > ${logFile} 2>&1 &`,
+    `cd ${remoteDir}/hub && TERMSCAPE_HOME=${remoteDir} nohup node dist/cli.js --headless --port 0 --token '${opts.token}' > ${logFile} 2>&1 &`,
   );
 
-  // The CLI prints AICANVAS_PORT=<n> precisely so this can be parsed.
+  // The CLI prints TERMSCAPE_PORT=<n> precisely so this can be parsed.
   for (let i = 0; i < 40; i++) {
     await new Promise((r) => setTimeout(r, 250));
-    const out = await exec(conn, `grep -m1 AICANVAS_PORT= ${logFile} 2>/dev/null || true`);
-    const m = out.stdout.match(/AICANVAS_PORT=(\d+)/);
+    const out = await exec(conn, `grep -m1 TERMSCAPE_PORT= ${logFile} 2>/dev/null || true`);
+    const m = out.stdout.match(/TERMSCAPE_PORT=(\d+)/);
     if (m) {
       const port = Number(m[1]);
       await exec(conn, `echo ${port} > ${remoteDir}/hub.port`);

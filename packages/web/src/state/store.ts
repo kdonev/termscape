@@ -8,7 +8,7 @@ import type {
   Viewport,
   WindowRect,
   Workspace,
-} from '@aicanvas/protocol';
+} from '@termscape/protocol';
 import { HubClient } from '../net/client.js';
 
 /** A message delivery worth drawing as an edge, with when it happened. */

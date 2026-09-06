@@ -4,7 +4,7 @@ import {
   decodeBinaryFrame,
   encodeBinaryFrame,
   ServerMsg,
-} from '@aicanvas/protocol';
+} from '@termscape/protocol';
 
 type PtyListener = (chunk: string) => void;
 

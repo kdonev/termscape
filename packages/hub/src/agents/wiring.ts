@@ -6,7 +6,7 @@ import type { AgentProfile } from './profiles.js';
 /**
  * Everything an agent process needs on disk before it starts: its MCP config,
  * its hook settings, and its brief. All generated per launch into
- * ~/.aicanvas/run/<sessionId>/ so nothing leaks between sessions.
+ * ~/.termscape/run/<sessionId>/ so nothing leaks between sessions.
  */
 
 export interface WiringInput {
@@ -48,7 +48,7 @@ export function writeWiring(input: WiringInput): WiringOutput {
     JSON.stringify(
       {
         mcpServers: {
-          aicanvas: {
+          termscape: {
             type: 'http',
             url: `${input.hubOrigin}/mcp`,
             headers: { Authorization: `Bearer ${input.token}` },
@@ -115,7 +115,7 @@ export function renderBrief(input: WiringInput): string {
       ? input.peers.map((p) => `- \`${p}\``).join('\n')
       : '- (none yet)';
 
-  return `# You are running inside aiCanvas
+  return `# You are running inside Termscape
 
 You are one of several CLI agents on a shared canvas. You have an address and
 you can talk to the others.
@@ -129,7 +129,7 @@ ${peerList}
 
 ## Talking to other agents
 
-The \`aicanvas\` MCP server gives you these tools:
+The \`termscape\` MCP server gives you these tools:
 
 - \`whoami\` — your own address and workspace.
 - \`list_agents\` — who else exists, and whether they are idle or busy.

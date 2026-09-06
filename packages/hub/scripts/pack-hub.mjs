@@ -4,12 +4,12 @@
  * that wants to join.
  *
  * This is what stops attaching a host from depending on the operator knowing
- * to run `npm pack` and export AICANVAS_HUB_TARBALL first. Both the join
+ * to run `npm pack` and export TERMSCAPE_HUB_TARBALL first. Both the join
  * installer and the SSH deployer read the result.
  *
  * Two things need care:
  *
- * - `@aicanvas/protocol` is a private workspace package. A remote `npm install`
+ * - `@termscape/protocol` is a private workspace package. A remote `npm install`
  *   would go looking for it in the registry and fail, so it is packed too and
  *   vendored in as a `file:` dependency.
  * - The tarball must not contain a previous copy of itself. Everything is
@@ -44,7 +44,7 @@ const dist = join(pkgRoot, 'dist');
 const target = join(dist, 'hub.tgz');
 
 const LF = String.fromCharCode(10);
-const VENDORED_PROTOCOL = 'vendor/aicanvas-protocol.tgz';
+const VENDORED_PROTOCOL = 'vendor/termscape-protocol.tgz';
 
 /**
  * What an installed dependency tree has to match to still be worth keeping.
@@ -101,25 +101,25 @@ if (!existsSync(join(dist, 'cli.js'))) {
   process.exit(1);
 }
 if (!existsSync(join(repoRoot, 'packages', 'protocol', 'dist', 'index.js'))) {
-  console.error('pack-hub: protocol dist missing — build @aicanvas/protocol first');
+  console.error('pack-hub: protocol dist missing — build @termscape/protocol first');
   process.exit(1);
 }
 
 // A leftover from an earlier run would otherwise be packed into this one.
 rmSync(target, { force: true });
 
-const staging = mkdtempSync(join(tmpdir(), 'aicanvas-stage-'));
-const scratch = mkdtempSync(join(tmpdir(), 'aicanvas-pack-'));
+const staging = mkdtempSync(join(tmpdir(), 'termscape-stage-'));
+const scratch = mkdtempSync(join(tmpdir(), 'termscape-pack-'));
 try {
   cpSync(dist, join(staging, 'dist'), { recursive: true });
   rmSync(join(staging, 'dist', 'hub.tgz'), { force: true });
 
   const vendorDir = join(staging, 'vendor');
   mkdirSync(vendorDir, { recursive: true });
-  renameSync(pack(null, vendorDir, '@aicanvas/protocol'), join(staging, VENDORED_PROTOCOL));
+  renameSync(pack(null, vendorDir, '@termscape/protocol'), join(staging, VENDORED_PROTOCOL));
 
   const manifest = JSON.parse(readFileSync(join(pkgRoot, 'package.json'), 'utf8'));
-  manifest.dependencies['@aicanvas/protocol'] = `file:${VENDORED_PROTOCOL}`;
+  manifest.dependencies['@termscape/protocol'] = `file:${VENDORED_PROTOCOL}`;
   // The remote installs with --omit=dev, but leaving these in would still make
   // it resolve types packages it has no use for.
   delete manifest.devDependencies;

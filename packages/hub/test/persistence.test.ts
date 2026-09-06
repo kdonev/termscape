@@ -9,7 +9,7 @@ import { Store, DEFAULT_WINDOW } from '../src/db/store.js';
 let dir: string;
 
 beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), 'aicanvas-db-'));
+  dir = mkdtempSync(join(tmpdir(), 'termscape-db-'));
 });
 
 afterEach(() => {

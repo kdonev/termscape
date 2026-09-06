@@ -1,4 +1,4 @@
-import { parseAddress, type Host, type Session, type Workspace } from '@aicanvas/protocol';
+import { parseAddress, type Host, type Session, type Workspace } from '@termscape/protocol';
 
 /**
  * The canvas as a tree: machines, the workspaces on each, the agents in each

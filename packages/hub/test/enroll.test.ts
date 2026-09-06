@@ -8,7 +8,7 @@ import websocket from '@fastify/websocket';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { WebSocket } from 'ws';
-import { PEER_SCHEMA_VERSION } from '@aicanvas/protocol';
+import { PEER_SCHEMA_VERSION } from '@termscape/protocol';
 import { Hub } from '../src/hub.js';
 import { serve, type ServeResult } from '../src/server.js';
 import { registerEnrollment } from '../src/remote/enroll.js';
@@ -39,7 +39,7 @@ let servedA: ServeResult;
 let servedB: ServeResult;
 let link: JoinLink | null = null;
 let originA: string;
-/** Hub B's durable host token, kept out of the shared AICANVAS_HOME. */
+/** Hub B's durable host token, kept out of the shared TERMSCAPE_HOME. */
 let tokenFileB: string;
 
 const outputB = new Map<string, string>();
@@ -69,10 +69,10 @@ async function mcpAs(hub: Hub, origin: string, sessionId: string): Promise<Clien
 }
 
 beforeAll(async () => {
-  homeA = mkdtempSync(join(tmpdir(), 'aicanvas-enroll-A-'));
-  homeB = mkdtempSync(join(tmpdir(), 'aicanvas-enroll-B-'));
+  homeA = mkdtempSync(join(tmpdir(), 'termscape-enroll-A-'));
+  homeB = mkdtempSync(join(tmpdir(), 'termscape-enroll-B-'));
   tokenFileB = join(homeB, 'host-token');
-  process.env.AICANVAS_HOME = homeA;
+  process.env.TERMSCAPE_HOME = homeA;
 
   hubA = new Hub({ dbPath: join(homeA, 'state.db') });
   servedA = await serve({ hub: hubA, port: 0, clientToken: 'client-token-a', headless: true });
@@ -94,7 +94,7 @@ afterAll(async () => {
   await servedB.app.close();
   rmSync(homeA, { recursive: true, force: true });
   rmSync(homeB, { recursive: true, force: true });
-  delete process.env.AICANVAS_HOME;
+  delete process.env.TERMSCAPE_HOME;
 });
 
 describe('bind address', () => {
@@ -287,10 +287,10 @@ describe('the join page', () => {
 
     for (const script of [sh, ps]) {
       // A hub that is listening has not necessarily been let in. Reporting
-      // success on AICANVAS_PORT is how you tell someone they are connected
+      // success on TERMSCAPE_PORT is how you tell someone they are connected
       // when the canvas refused them.
-      expect(script).toContain('AICANVAS_JOINED=');
-      expect(script).toContain('AICANVAS_JOIN_FAILED=');
+      expect(script).toContain('TERMSCAPE_JOINED=');
+      expect(script).toContain('TERMSCAPE_JOIN_FAILED=');
       expect(script).toContain('refused this machine');
     }
   });

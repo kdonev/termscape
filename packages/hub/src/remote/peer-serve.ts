@@ -6,7 +6,7 @@ import {
   type PeerRelayAsk,
   type PeerResponse,
   type Session,
-} from '@aicanvas/protocol';
+} from '@termscape/protocol';
 import type { WebSocket } from 'ws';
 import type { Hub } from '../hub.js';
 import { HUB_VERSION } from '../hub.js';

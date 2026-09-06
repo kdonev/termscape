@@ -30,7 +30,7 @@ async function main(): Promise<void> {
     return;
   }
   if (values.help) {
-    console.log(`aicanvas ${HUB_VERSION}
+    console.log(`termscape ${HUB_VERSION}
 
   --port <n>        port to bind; 0 lets the OS pick. Default: the first
                     free memorable port (7777, 4242, ...)
@@ -72,8 +72,8 @@ Joining another machine's canvas:
 
   const url = `${origin}/?token=${clientToken}`;
   // A remote hub is parsed by the deployer, so keep this line machine-readable.
-  console.log(`aicanvas hub ${HUB_VERSION} listening on ${origin}`);
-  console.log(`AICANVAS_PORT=${port}`);
+  console.log(`termscape hub ${HUB_VERSION} listening on ${origin}`);
+  console.log(`TERMSCAPE_PORT=${port}`);
   if (!values.headless) console.log(`\n  open:   ${url}`);
   // The canvas is worth opening from a phone or a second screen, and that
   // needs the token too - so offer the whole URL, not just the host.

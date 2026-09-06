@@ -6,7 +6,7 @@ import {
   type Viewport,
   type WindowRect,
   type Workspace,
-} from '@aicanvas/protocol';
+} from '@termscape/protocol';
 import type { Db } from './index.js';
 
 /** Row shapes as they come back from SQLite (snake_case, 0/1 booleans). */

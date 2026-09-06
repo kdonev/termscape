@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { Session } from '@aicanvas/protocol';
+import type { Session } from '@termscape/protocol';
 import { useStore } from '../state/store.js';
 
 const FLASH_MS = 2600;

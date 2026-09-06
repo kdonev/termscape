@@ -1,4 +1,4 @@
-# aiCliCanvas — Implementation Plan
+# termscape — Implementation Plan
 
 ## Context
 
@@ -51,7 +51,7 @@ This repository starts empty. We are building, from scratch, a local-first appli
 ### Repository layout
 
 ```
-aiCliCanvas/
+termscape/
   package.json                 npm workspaces, "dev" / "build" / "test"
   packages/
     protocol/                  zod schemas + TS types shared by hub and web
@@ -99,7 +99,7 @@ aiCliCanvas/
 
 **The governing principle:** SQLite holds everything needed to redraw the canvas and relaunch every agent exactly as it was. It deliberately does *not* hold conversation history, because that already exists — Claude Code keeps each conversation at `~/.claude/projects/<encoded-cwd>/<session-uuid>.jsonl`. Our DB stores the *pointer* to it. That is why resume is cheap, why we never duplicate transcripts, and why a remote agent's history correctly stays on the remote host.
 
-Single database at `~/.aicanvas/state.db` (`%USERPROFILE%\.aicanvas\` on Windows), WAL mode.
+Single database at `~/.termscape/state.db` (`%USERPROFILE%\.termscape\` on Windows), WAL mode.
 
 ```sql
 -- topology
@@ -226,8 +226,8 @@ Naively putting N live xterm instances inside a `transform: scale()` container i
 
 1. **Add host** — user supplies ssh host/user/port and a key or agent reference. `ssh2` connects.
 2. **Probe** — check for Node ≥ 22 and an existing hub install; compare `hub_version` against local.
-3. **Provision** — if missing or stale, `npm pack` the hub package locally, SFTP the tarball, install it into `~/.aicanvas/`, and (on Linux/macOS) rebuild native deps for the remote arch. Report clearly if the remote lacks a toolchain rather than failing opaquely.
-4. **Start** — launch `aicanvas --headless --port 0 --token <generated>` bound to remote `127.0.0.1`; read the chosen port back from stdout. The daemon is detached, so it survives the SSH session ending.
+3. **Provision** — if missing or stale, `npm pack` the hub package locally, SFTP the tarball, install it into `~/.termscape/`, and (on Linux/macOS) rebuild native deps for the remote arch. Report clearly if the remote lacks a toolchain rather than failing opaquely.
+4. **Start** — launch `termscape --headless --port 0 --token <generated>` bound to remote `127.0.0.1`; read the chosen port back from stdout. The daemon is detached, so it survives the SSH session ending.
 5. **Tunnel** — open an `ssh2` local port forward to that loopback port. The remote hub is never exposed on a public interface.
 6. **Register** — handshake, exchange versions, subscribe to the peer's session events. Remote sessions and their PTY streams now appear on the canvas exactly like local ones.
 7. **Reconnect** — on tunnel loss, retry with backoff; on reconnect, re-attach to still-running sessions and replay their snapshots. This is the payoff for choosing a daemon over an `ssh` subprocess.
@@ -239,7 +239,7 @@ Naively putting N live xterm instances inside a `transform: scale()` container i
 This app lets an agent write arbitrary text into another agent's stdin and spawn new agents. That is the feature, and it is also the risk surface — an agent that reads a hostile repo could be induced to call `send_message` with attacker-chosen text aimed at a peer.
 
 - Hub binds `127.0.0.1` only, never `0.0.0.0`. Remote hubs likewise, reachable solely through the SSH tunnel.
-- Per-session bearer tokens for both the WS and MCP endpoints; the browser gets its own separate token. Tokens live in `~/.aicanvas/` with `0600`.
+- Per-session bearer tokens for both the WS and MCP endpoints; the browser gets its own separate token. Tokens live in `~/.termscape/` with `0600`.
 - `send_message` bodies are length-capped and rate-limited per sender, and always carry a visible `[from <addr>]` attribution that an agent cannot spoof — the sender is taken from the token, never from the arguments.
 - Every message is persisted with sender, target, body, and delivery outcome, and is inspectable in the UI. Nothing is delivered invisibly.
 - `spawn_agent` is subject to a configurable per-workspace cap to bound runaway recursive spawning.
@@ -270,7 +270,7 @@ Workspace CRUD bound to local folders, per-workspace grouping on canvas. Full SQ
 `ssh2` deployer, provisioning and version handshake, tunnel management, hub↔hub RPC, merged cross-host agent directory, cross-host `send_message`, reconnect and re-attach.
 
 **Phase 7 — Polish.**
-Command palette, cross-terminal search, keybindings, session templates ("open workspace X with these 3 agents"), transcript export, packaging as `npx aicanvas`.
+Command palette, cross-terminal search, keybindings, session templates ("open workspace X with these 3 agents"), transcript export, packaging as `npx termscape`.
 
 ---
 

@@ -6,7 +6,7 @@ import {
   uniqueName,
   type Session,
   type WindowRect,
-} from '@aicanvas/protocol';
+} from '@termscape/protocol';
 import { DEFAULT_WINDOW, Store, type SessionLaunchSpec } from '../db/store.js';
 import { ProfileRegistry, template, templateAll, type AgentProfile } from '../agents/profiles.js';
 import { resolveCommand } from '../agents/resolve.js';

@@ -1,4 +1,4 @@
-import type { Session } from '@aicanvas/protocol';
+import type { Session } from '@termscape/protocol';
 
 /**
  * How a session reads at a glance. Shared by the window header and the tree

@@ -8,7 +8,7 @@ import {
   SpawnAgentInput,
   StopAgentInput,
   WhoamiInput,
-} from '@aicanvas/protocol';
+} from '@termscape/protocol';
 
 /**
  * Operations the MCP tools need. Implemented by the Hub; kept as an interface
@@ -57,7 +57,7 @@ async function guard(fn: () => Promise<unknown>) {
  */
 export function buildMcpServer(callerSessionId: string, api: AgentApi): McpServer {
   const server = new McpServer(
-    { name: 'aicanvas', version: '0.1.0' },
+    { name: 'termscape', version: '0.1.0' },
     { capabilities: { tools: {} } },
   );
 

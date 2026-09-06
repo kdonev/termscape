@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
-import type { Session, Workspace } from '@aicanvas/protocol';
+import type { Session, Workspace } from '@termscape/protocol';
 import { useStore } from '../state/store.js';
 import { pickValid } from '../state/selection.js';
 import { buildTree, type TreeMachine, type TreeWorkspace } from '../state/tree.js';

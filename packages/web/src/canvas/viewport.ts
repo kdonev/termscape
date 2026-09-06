@@ -1,4 +1,4 @@
-import type { Viewport } from '@aicanvas/protocol';
+import type { Viewport } from '@termscape/protocol';
 
 export const MIN_ZOOM = 0.08;
 export const MAX_ZOOM = 2.5;

@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
  * an override for anyone testing an unreleased build.
  */
 export function hubTarballPath(): string | null {
-  const override = process.env.AICANVAS_HUB_TARBALL;
+  const override = process.env.TERMSCAPE_HUB_TARBALL;
   if (override && existsSync(override)) return override;
   const here = dirname(fileURLToPath(import.meta.url));
   const candidates = [

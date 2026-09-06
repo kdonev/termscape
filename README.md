@@ -1,7 +1,7 @@
-# aiCanvas
+# Termscape
 
-Run several CLI coding agents at once on one infinite canvas, and let them talk
-to each other.
+Run a crew of AI coding agents on one infinite canvas, and let them talk to
+each other.
 
 Each terminal window on the canvas runs an agent CLI wired to an MCP server the
 hub exposes. Agents can look each other up, send each other messages, spawn
@@ -67,7 +67,7 @@ you:
 npm run dev -- --listen lan
 ```
 
-(Or `npm run dev -w @aicanvas/hub -- --listen lan` if you are calling the
+(Or `npm run dev -w @termscape/hub -- --listen lan` if you are calling the
 workspace directly — npm needs the `--` to hand flags to the hub rather than
 reading them itself.)
 
@@ -91,7 +91,7 @@ one address you have to carry to another machine and enter by hand:
 - **The port** is the first free one from `7777, 4242, 7333, 3333, ...`.
   `--port <n>` overrides it; `--port 0` takes whatever the OS hands out.
 
-That installs the hub into `~/.aicanvas` there and connects it back. The machine
+That installs the hub into `~/.termscape` there and connects it back. The machine
 appears in the **machines** panel with a node of its own, and a workspace added
 under that node runs its agents over there — same addresses, same
 `send_message`, same canvas.
@@ -99,7 +99,7 @@ under that node runs its agents over there — same addresses, same
 The installer works out what is missing before it changes anything:
 
 - **Node 22.** If the machine has none, or an older one, it fetches a private
-  copy into `~/.aicanvas/node` — checksum-verified against nodejs.org's own
+  copy into `~/.termscape/node` — checksum-verified against nodejs.org's own
   `SHASUMS256.txt`, since it is a binary about to be executed. Private rather
   than system-wide, so it needs no administrator rights, no package manager,
   and no fresh shell to pick up a PATH change; uninstalling is deleting the
@@ -111,7 +111,7 @@ The installer works out what is missing before it changes anything:
 If the machine does not appear, the installer says why rather than reporting
 success: a spent or expired key, a version gap, or a hub that exited. It waits
 for the canvas to actually accept the machine, not merely for the hub to start
-listening. `~/.aicanvas/hub.log` on that machine has the detail.
+listening. `~/.termscape/hub.log` on that machine has the detail.
 
 Re-running the join command on a machine that already joined is the supported
 way to update or repair it: it stops the hub running there, replaces the
@@ -131,7 +131,7 @@ Two things worth knowing:
   that network, and anyone who can load the join page can attach a machine to
   your canvas. Every other route still requires the token.
 - Each download carries a single-use key that expires in 15 minutes. Once a
-  machine has joined it keeps a durable token in `~/.aicanvas/host-token` and
+  machine has joined it keeps a durable token in `~/.termscape/host-token` and
   rejoins by itself after a reboot or a dropped link — its agents keep running
   in the meantime.
 
@@ -159,7 +159,7 @@ text arriving as `[from <address>] ...` is a colleague rather than the human.
 
 An agent CLI is configuration, not code. Built-ins are `claude` and `shell`
 (a plain terminal, no agent wiring). Override or add profiles in
-`~/.aicanvas/agents.toml`:
+`~/.termscape/agents.toml`:
 
 ```toml
 [my-agent]
@@ -172,7 +172,7 @@ inject = "bracketed"          # bracketed paste, or "raw"
 
 ## State and restart
 
-SQLite at `~/.aicanvas/state.db` holds everything needed to redraw the canvas
+SQLite at `~/.termscape/state.db` holds everything needed to redraw the canvas
 and relaunch every agent. It deliberately does not hold conversation history —
 Claude Code already keeps that, and we store the pointer to it.
 

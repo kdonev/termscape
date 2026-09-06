@@ -6,7 +6,7 @@ import type {
   PeerRelayAsk,
   Session,
   WindowRect,
-} from '@aicanvas/protocol';
+} from '@termscape/protocol';
 import type { Store } from '../db/store.js';
 import { DEFAULT_WINDOW } from '../db/store.js';
 import type { WebSocket as WsSocket } from 'ws';

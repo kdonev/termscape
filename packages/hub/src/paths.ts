@@ -3,11 +3,11 @@ import { join } from 'node:path';
 
 /**
  * All hub state lives under one root so it is trivially portable and
- * trivially deletable. `AICANVAS_HOME` overrides it, which is what the
+ * trivially deletable. `TERMSCAPE_HOME` overrides it, which is what the
  * integration tests use to get an isolated hub per test.
  */
 export function hubHome(): string {
-  return process.env.AICANVAS_HOME ?? join(homedir(), '.aicanvas');
+  return process.env.TERMSCAPE_HOME ?? join(homedir(), '.termscape');
 }
 
 export const paths = {

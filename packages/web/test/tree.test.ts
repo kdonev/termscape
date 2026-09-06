@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Host, Session, Workspace } from '@aicanvas/protocol';
+import type { Host, Session, Workspace } from '@termscape/protocol';
 import { buildTree, sessionsIn } from '../src/state/tree.js';
 import { workspaceBounds } from '../src/canvas/viewport.js';
 
