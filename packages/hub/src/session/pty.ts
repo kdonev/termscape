@@ -282,14 +282,25 @@ export class PtySession extends EventEmitter {
     return drawn.slice(drawn.lastIndexOf('\n') + 1).trim();
   }
 
-  /** Trailing rendered lines, for the read_screen MCP tool. */
+  /**
+   * Trailing rendered lines, for the read_screen MCP tool.
+   *
+   * Rows the terminal wrapped are rejoined. A wrap is a property of how
+   * wide the window happens to be, not of the text, so breaking a line
+   * there hands the reader a word split down the middle at a column that
+   * depends on someone else's terminal size - and the reader here is an
+   * agent trying to make sense of what another agent is doing.
+   */
   tailLines(n: number): string {
     const buf = this.term.buffer.active;
     const end = buf.baseY + this.term.rows;
     const start = Math.max(0, end - n);
     const out: string[] = [];
     for (let i = start; i < end; i++) {
-      out.push(buf.getLine(i)?.translateToString(true) ?? '');
+      const line = buf.getLine(i);
+      const text = line?.translateToString(true) ?? '';
+      if (line?.isWrapped && out.length > 0) out[out.length - 1] += text;
+      else out.push(text);
     }
     while (out.length > 0 && out[out.length - 1]!.trim() === '') out.pop();
     return out.join('\n');

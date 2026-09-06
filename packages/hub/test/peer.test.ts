@@ -388,16 +388,14 @@ describe('an agent on an attached machine', () => {
     }
     expect(screen.address).toBe('localws/here');
     expect(screen.running).toBe(true);
-    // Dumped on failure: vitest truncates the received value, and what this
-    // terminal actually rendered is the whole question when it disagrees
-    // across platforms.
-    expect(
-      screen.screen,
-      `read_screen returned:
-${screen.screen}
---- raw pty output was:
-${outputA.get(hubA.sessions.getByAddress('localws/here')!.id) ?? '(none)'}`,
-    ).toContain('other side');
+    // Dumped on failure: vitest truncates the received value, and what the
+    // terminal actually rendered is the whole question when platforms
+    // disagree - a long prompt wrapping this message is how read_screen was
+    // caught splitting words at the window edge.
+    expect(screen.screen, `read_screen returned:
+${screen.screen}`).toContain(
+      'other side',
+    );
   });
 
   it('reports a failure rather than swallowing it', async () => {
