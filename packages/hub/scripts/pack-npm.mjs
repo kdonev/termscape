@@ -39,7 +39,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const pkgRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -52,6 +52,49 @@ const outDir = join(pkgRoot, 'npm');
 /** What the package is called on the registry, as opposed to in the workspace. */
 const PUBLISHED_NAME = '@kdonev/termscape';
 const PROTOCOL_NAME = '@termscape/protocol';
+/** Where the protocol lands inside the published dist. */
+const INLINED_DIR = 'protocol';
+
+/**
+ * Point every `@termscape/protocol` import at the copy inside this package.
+ *
+ * The specifier is bare in the compiled output, so it would be looked up in
+ * node_modules and not found. Each file needs its own relative path, because
+ * the hub's output is nested - dist/cli.js and dist/remote/peer.js are not the
+ * same distance from dist/protocol.
+ */
+function rewriteProtocolImports(distDir, inlinedDir) {
+  const entry = join(inlinedDir, 'index.js');
+  let touched = 0;
+
+  const walk = (dir) => {
+    for (const item of readdirSync(dir, { withFileTypes: true })) {
+      const full = join(dir, item.name);
+      if (item.isDirectory()) {
+        // The copy itself imports its own files relatively; leave it alone.
+        if (full !== inlinedDir) walk(full);
+        continue;
+      }
+      if (!/.(js|d.ts)$/.test(item.name)) continue;
+      const before = readFileSync(full, 'utf8');
+      if (!before.includes(PROTOCOL_NAME)) continue;
+
+      let rel = relative(dirname(full), entry).split(sep).join('/');
+      if (!rel.startsWith('.')) rel = `./${rel}`;
+      const after = before
+        .split(`'${PROTOCOL_NAME}'`).join(`'${rel}'`)
+        .split(`"${PROTOCOL_NAME}"`).join(`"${rel}"`);
+      writeFileSync(full, after);
+      touched++;
+    }
+  };
+  walk(distDir);
+
+  if (touched === 0) {
+    throw new Error(`no file imported ${PROTOCOL_NAME}; the rewrite matched nothing`);
+  }
+  console.log(`rewrote ${PROTOCOL_NAME} in ${touched} files`);
+}
 
 /* ----------------------------------------------------------- preconditions */
 
@@ -78,23 +121,22 @@ try {
   // The UI, flattened: packages/web/dist -> web/
   cpSync(webDist, join(staging, 'web'), { recursive: true });
 
-  // The protocol package, bundled rather than depended on.
-  const bundled = join(staging, 'node_modules', PROTOCOL_NAME);
-  mkdirSync(bundled, { recursive: true });
-  cpSync(join(protocolRoot, 'dist'), join(bundled, 'dist'), { recursive: true });
-  const protocolManifest = JSON.parse(
-    readFileSync(join(protocolRoot, 'package.json'), 'utf8'),
-  );
-  // A bundled package that still says `private` is fine to install, but the
-  // flag only ever meant "do not publish me on my own".
-  delete protocolManifest.private;
-  delete protocolManifest.devDependencies;
-  delete protocolManifest.scripts;
-  writeFileSync(
-    join(bundled, 'package.json'),
-    `${JSON.stringify(protocolManifest, null, 2)}\n`,
-  );
-
+  // The protocol package, inlined rather than depended on.
+  //
+  // The obvious move is npm's bundleDependencies, and it does not work here.
+  // npm treats a bundled package as arriving with its entire subtree, and two
+  // things follow from that. A dependency it declares but does not ship gets
+  // an empty directory - which is what happened to zod, the one package both
+  // this and the hub import. And the surrounding tree loses track of which
+  // dependencies were optional, so ssh2's cpu-features stopped being skippable
+  // and a global install died on any machine without a C++ compiler.
+  //
+  // So the compiled protocol is copied in beside the hub's own output and the
+  // bare specifier is rewritten to a relative path. The published package then
+  // has no workspace dependency at all, and zod resolves the ordinary way.
+  const inlinedDir = join(staging, 'dist', INLINED_DIR);
+  cpSync(join(protocolRoot, 'dist'), inlinedDir, { recursive: true });
+  rewriteProtocolImports(join(staging, 'dist'), inlinedDir);
   /* ------------------------------------------------------------ manifest */
 
   const hub = JSON.parse(readFileSync(join(pkgRoot, 'package.json'), 'utf8'));
@@ -111,10 +153,11 @@ try {
     type: hub.type,
     bin: { termscape: './dist/cli.js' },
     engines: hub.engines,
-    dependencies: { ...hub.dependencies },
-    // npm needs the bundled package listed as a dependency too; the bundled
-    // copy is what satisfies it, so the range is never resolved.
-    bundleDependencies: [PROTOCOL_NAME],
+    // The workspace package is inlined above, so it is not a dependency of
+    // the published package and must not be listed as one.
+    dependencies: Object.fromEntries(
+      Object.entries(hub.dependencies).filter(([name]) => name !== PROTOCOL_NAME),
+    ),
     // Only starting the hub makes sense on an installed copy; the build
     // scripts reference sources that are not in the tarball.
     scripts: { start: 'node dist/cli.js' },
