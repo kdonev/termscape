@@ -20,6 +20,8 @@ import {
   visibleWorldRect,
   wheelStream,
   wheelZoomFactor,
+  isWheelNotch,
+  WHEEL_NOTCH_FACTOR,
   workspaceBounds,
   worldToScreen,
   zoomAt,
@@ -421,13 +423,34 @@ describe('wheelZoomFactor', () => {
     expect(wheelZoomFactor(10)).toBeLessThan(1);
   });
 
-  it('clamps a mouse notch instead of collapsing to zero', () => {
-    // deltaY 100 is one notch of a mouse wheel. The unclamped formula turns
-    // that into a factor of zero: the canvas slams to a zoom limit, and a
-    // ratio accumulated from zeroes says nothing about what was asked for.
-    expect(wheelZoomFactor(100)).toBeGreaterThan(0);
-    expect(wheelZoomFactor(1000)).toBe(0.2);
-    expect(wheelZoomFactor(-1000)).toBe(5);
+  it('takes one detent of a mouse wheel as one small step', () => {
+    // deltaY 100 is one detent. Scaled by the delta the way a trackpad moment
+    // is, that used to double the zoom going in and cut it to a fifth coming
+    // out - so finding a zoom meant overshooting past it in both directions.
+    expect(wheelZoomFactor(-100)).toBeCloseTo(WHEEL_NOTCH_FACTOR);
+    expect(wheelZoomFactor(100)).toBeCloseTo(1 / WHEEL_NOTCH_FACTOR);
+    expect(wheelZoomFactor(-100)).toBeLessThan(1.3);
+  });
+
+  it('makes a detent each way a round trip', () => {
+    // The old formula landed at 0.4x of where it started.
+    expect(wheelZoomFactor(-100) * wheelZoomFactor(100)).toBeCloseTo(1);
+    expect(wheelZoomFactor(-3, 1) * wheelZoomFactor(3, 1)).toBeCloseTo(1);
+  });
+
+  it('sizes a detent the same however much the device calls one', () => {
+    // A mouse that reports 120, or 3 lines, is still asking for one step.
+    expect(wheelZoomFactor(-120)).toBe(wheelZoomFactor(-100));
+    expect(wheelZoomFactor(-3, 1)).toBe(wheelZoomFactor(-100));
+    expect(wheelZoomFactor(-1, 2)).toBe(wheelZoomFactor(-100));
+  });
+
+  it('tells a detent from a moment of a trackpad gesture', () => {
+    // Nothing in the event says which device sent it, so size decides - and
+    // the line and page modes are never a trackpad.
+    expect(isWheelNotch(-100)).toBe(true);
+    expect(isWheelNotch(-4)).toBe(false);
+    expect(isWheelNotch(-3, 1)).toBe(true);
   });
 });
 

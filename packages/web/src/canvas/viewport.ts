@@ -331,11 +331,41 @@ export function wheelStream(
  */
 
 /** The zoom multiplier one wheel tick asks for. */
-export function wheelZoomFactor(deltaY: number): number {
-  // Clamped because a mouse notch reports deltaY 100, which the raw formula
-  // turns into a factor of zero: a single notch slams the canvas to a zoom
-  // limit, and an accumulated ratio built from zeroes says nothing at all.
-  // Trackpad pinch deltas are small and never reach these bounds.
+/**
+ * Above this, a delta is one detent of a mouse wheel rather than a moment of a
+ * trackpad gesture.
+ *
+ * Nothing in the event says which device sent it — a mouse reports 100 pixels
+ * per detent in the same `deltaMode` a trackpad streams 4s and 6s in — so size
+ * is the only thing left to read. The other delta modes are lines and pages,
+ * which no trackpad produces.
+ */
+export const WHEEL_NOTCH_MIN_DELTA = 40;
+
+export function isWheelNotch(deltaY: number, deltaMode = 0): boolean {
+  return deltaMode !== 0 || Math.abs(deltaY) >= WHEEL_NOTCH_MIN_DELTA;
+}
+
+/**
+ * What one detent of a mouse wheel is worth: five of them double the zoom.
+ * Small enough to arrive at a zoom rather than overshoot past it.
+ */
+export const WHEEL_NOTCH_FACTOR = 1.15;
+
+export function wheelZoomFactor(deltaY: number, deltaMode = 0): number {
+  if (deltaY === 0) return 1;
+
+  // One detent, one step, whatever magnitude the device picked for it — and
+  // out is the exact reciprocal of in, so a notch each way is a round trip.
+  // Scaling by the delta instead is what made a notch double the zoom going
+  // in and quarter it coming out.
+  if (isWheelNotch(deltaY, deltaMode)) {
+    return deltaY < 0 ? WHEEL_NOTCH_FACTOR : 1 / WHEEL_NOTCH_FACTOR;
+  }
+
+  // A trackpad pinch is a stream, and its zoom follows the size of each
+  // moment of it, which is what makes it continuous under the fingers. These
+  // deltas are small by definition and never approach the clamps.
   return Math.min(5, Math.max(0.2, 1 - deltaY * 0.01));
 }
 

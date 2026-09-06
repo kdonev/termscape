@@ -11,6 +11,7 @@ import {
   boundsOf,
   fitTo,
   focusRect,
+  isWheelNotch,
   lerpViewport,
   pinchIntent,
   rectContainsPoint,
@@ -532,10 +533,17 @@ export function Canvas() {
       const point = { x: e.clientX - rect.left, y: e.clientY - rect.top };
 
       if (zooming) {
-        const factor = wheelZoomFactor(e.deltaY);
-        // Recorded before the zoom is applied, so the burst keeps the viewport
-        // the pinch started from.
-        notePinch(point, factor);
+        const factor = wheelZoomFactor(e.deltaY, e.deltaMode);
+        if (isWheelNotch(e.deltaY, e.deltaMode)) {
+          // A mouse has no pinch to flick. Feeding detents to the detector
+          // made any three quick ones a command to navigate, so ordinary
+          // zooming flew the canvas to whatever was under the pointer.
+          discardBurst();
+        } else {
+          // Recorded before the zoom is applied, so the burst keeps the
+          // viewport the pinch started from.
+          notePinch(point, factor);
+        }
         setViewport(zoomAt(viewport, point, viewport.zoom * factor));
       } else {
         discardBurst();
