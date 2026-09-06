@@ -142,6 +142,9 @@ export const ClientMsg = z.discriminatedUnion('t', [
   }),
   z.object({ t: z.literal('removeHost'), requestId, hostId: z.string() }),
   z.object({ t: z.literal('connectHost'), hostId: z.string() }),
+
+  /** Re-probe what is installed, here and on every attached machine. */
+  z.object({ t: z.literal('refreshAgents') }),
 ]);
 export type ClientMsg = z.infer<typeof ClientMsg>;
 
@@ -185,7 +188,15 @@ export const HubState = z.object({
   sessions: z.array(Session),
   messages: z.array(Message),
   viewport: Viewport,
+  /** What this machine has. */
   profiles: z.array(AgentProfileInfo),
+  /**
+   * What each attached machine has, by host id. Separate from `profiles`
+   * because the answer is per machine: a host has its own PATH, and the
+   * picker for a workspace over there has to offer that machine's agents
+   * rather than this one's.
+   */
+  hostProfiles: z.record(z.string(), z.array(AgentProfileInfo)),
 });
 export type HubState = z.infer<typeof HubState>;
 
@@ -200,6 +211,18 @@ export const ServerMsg = z.discriminatedUnion('t', [
   // Deploy progress. A remote install rebuilds native modules and takes
   // minutes; without this the panel is a frozen button.
   z.object({ t: z.literal('hostLog'), hostId: z.string(), line: z.string() }),
+  /**
+   * Detection finishing, here or on a peer. It runs after the hub is already
+   * serving - never before, so it can never hold up a page load - which means
+   * the first `ready` usually arrives with nothing probed yet and this is what
+   * fills the picker in.
+   */
+  z.object({
+    t: z.literal('agentsDetected'),
+    /** null for this machine. */
+    hostId: z.string().nullable(),
+    profiles: z.array(AgentProfileInfo),
+  }),
   z.object({ t: z.literal('messageSent'), message: Message }),
   // sent on attach: serialized screen, replayed before the live stream
   z.object({

@@ -27,6 +27,27 @@ export interface AgentProfile {
    * the profile is not resumable and restarts clean.
    */
   resumeArgs?: string[];
+
+  /* ------------------------------------------------------ detection */
+
+  /**
+   * How to ask this CLI its version. Its stdout is shown to the user and is
+   * also the cache key for the model list, so a CLI that updates underneath
+   * us re-lists rather than serving last week's answer.
+   */
+  versionArgs?: string[];
+  /**
+   * How to ask this CLI what models it can be pointed at: one
+   * `provider/model` (or bare name) per line on stdout. Absent when the CLI
+   * has no such command, which is the common case.
+   */
+  modelsArgs?: string[];
+  /**
+   * The answer for a CLI that cannot be asked. Claude Code is the example:
+   * it has no listing command, and its --help documents the aliases instead.
+   * Used only when `modelsArgs` is absent or its command fails.
+   */
+  models?: string[];
 }
 
 function defaultShell(): string {
@@ -38,6 +59,13 @@ function defaultShell(): string {
  * Built-in profiles. All Claude Code flags here are verified against the CLI:
  * --mcp-config, --strict-mcp-config, --session-id, --settings,
  * --append-system-prompt-file, --resume.
+ *
+ * The other three are deliberately `mcp: false` - a terminal on the canvas
+ * running that CLI, with no hub wiring. Each of them configures MCP servers
+ * its own way and none of those ways has been verified here, and a profile
+ * that claims agent wiring it does not have is worse than one that says
+ * plainly it is a terminal. Detection still finds them, reports their version
+ * and lists their models, which is what this file is mostly for.
  */
 export const BUILTIN_PROFILES: Record<string, AgentProfile> = {
   claude: {
@@ -59,6 +87,14 @@ export const BUILTIN_PROFILES: Record<string, AgentProfile> = {
     mcp: true,
     status: 'hooks',
     inject: 'bracketed',
+    versionArgs: ['--version'],
+    /*
+     * Claude Code has no listing command, so this is the declared half of
+     * "ask where you can, declare where you cannot". Exactly the aliases
+     * `claude --help` names for --model; a full name like `claude-fable-5` is
+     * accepted too, which is why a template must not be limited to this list.
+     */
+    models: ['fable', 'opus', 'sonnet'],
     // Resume swaps --session-id for --resume; everything else is re-templated
     // identically, and crucially the session is relaunched in the same cwd,
     // because Claude Code keys its conversation store by working directory.
@@ -74,6 +110,44 @@ export const BUILTIN_PROFILES: Record<string, AgentProfile> = {
       '{{brief_path}}',
     ],
   },
+  opencode: {
+    id: 'opencode',
+    description: 'opencode TUI — no hub wiring; it configures MCP its own way',
+    command: 'opencode',
+    // Bare, which is its default subcommand and starts the TUI. `run` is the
+    // one-shot form and is not what a window on the canvas wants.
+    args: [],
+    env: {},
+    mcp: false,
+    status: 'heuristic',
+    inject: 'bracketed',
+    versionArgs: ['--version'],
+    // Real enumeration: one provider/model per line, 395 of them on the
+    // machine this was written on.
+    modelsArgs: ['models'],
+  },
+  codex: {
+    id: 'codex',
+    description: 'Codex CLI — no hub wiring yet; its flags are unverified',
+    command: 'codex',
+    args: [],
+    env: {},
+    mcp: false,
+    status: 'heuristic',
+    inject: 'bracketed',
+    versionArgs: ['--version'],
+  },
+  gemini: {
+    id: 'gemini',
+    description: 'Gemini CLI — no hub wiring yet; its flags are unverified',
+    command: 'gemini',
+    args: [],
+    env: {},
+    mcp: false,
+    status: 'heuristic',
+    inject: 'bracketed',
+    versionArgs: ['--version'],
+  },
   shell: {
     id: 'shell',
     description: 'Plain terminal, no agent wiring',
@@ -84,6 +158,9 @@ export const BUILTIN_PROFILES: Record<string, AgentProfile> = {
     status: 'heuristic',
     readyHint: '[$#>%] ?$',
     inject: 'raw',
+    // Nothing to detect: it is whatever COMSPEC or SHELL points at, it is
+    // always there, and asking a shell its version means something different
+    // on every platform.
   },
 };
 
@@ -115,6 +192,9 @@ export class ProfileRegistry {
             readyHint: v.ready_hint ?? v.readyHint ?? base?.readyHint,
             inject: v.inject ?? base?.inject ?? 'bracketed',
             resumeArgs: v.resume_args ?? v.resumeArgs ?? base?.resumeArgs,
+            versionArgs: v.version_args ?? v.versionArgs ?? base?.versionArgs,
+            modelsArgs: v.models_args ?? v.modelsArgs ?? base?.modelsArgs,
+            models: v.models ?? base?.models,
           };
         }
       } catch (err) {

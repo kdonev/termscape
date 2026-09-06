@@ -183,9 +183,11 @@ text arriving as `[from <address>] ...` is a colleague rather than the human.
 
 ## Agent profiles
 
-An agent CLI is configuration, not code. Built-ins are `claude` and `shell`
-(a plain terminal, no agent wiring). Override or add profiles in
-`~/.termscape/agents.toml`:
+An agent CLI is configuration, not code. Built-ins are `claude`, `codex`,
+`gemini`, `opencode` and `shell`. Only `claude` is wired to the hub's MCP
+endpoint; the other three run as plain terminals on the canvas, because each
+configures MCP servers its own way and none of those ways is verified here yet.
+Override or add profiles in `~/.termscape/agents.toml`:
 
 ```toml
 [my-agent]
@@ -194,7 +196,29 @@ args = ["--mcp-config", "{{mcp_config_path}}"]
 status = "heuristic"          # or "hooks", for exact turn boundaries
 ready_hint = "[$#>%] ?$"      # prompt regex, for the idle indicator
 inject = "bracketed"          # bracketed paste, or "raw"
+version_args = ["--version"]  # how to ask its version, for the panel
+models_args = ["models"]      # optional: one model per line on stdout
+models = ["opus", "sonnet"]   # the answer when it has no listing command
 ```
+
+### What is actually installed
+
+Each machine probes its own `PATH` and reports back, so the panel shows, per
+machine, which agents are there, what version each is, and the models it
+offers. That is per machine on purpose: a host has its own `PATH`, and starting
+an agent it does not have used to fail at launch inside a terminal window,
+where the error reads like the hub is broken.
+
+- A declared agent that is **not** installed stays in the list, greyed out,
+  naming the command that was not found — rather than vanishing, which looks
+  like the config was ignored.
+- Models are enumerated where the CLI can be asked (`opencode models` returns
+  a few hundred) and declared in the profile where it cannot. Claude Code has
+  no listing command; its `--help` documents the aliases instead, and it takes
+  a full model name as readily as an alias.
+- Probing runs after the hub is already serving and never blocks it. The first
+  page load usually shows *checking…*, and fills in a moment later. **check
+  again** in the start-an-agent dialog re-probes every machine.
 
 ## State and restart
 

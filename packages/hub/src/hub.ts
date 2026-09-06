@@ -6,6 +6,7 @@ import {
   encodeInjection,
   parseAddress,
   slugify,
+  type AgentProfileInfo,
   type Message,
   type Host,
   type PeerAgent,
@@ -18,6 +19,7 @@ import {
 import { openDb, type Db } from './db/index.js';
 import { Store } from './db/store.js';
 import { ProfileRegistry } from './agents/profiles.js';
+import { AgentDetector } from './agents/detect.js';
 import { TokenRegistry } from './agents/tokens.js';
 import { MessageRouter } from './agents/router.js';
 import { SessionManager } from './session/manager.js';
@@ -63,6 +65,8 @@ export class Hub extends EventEmitter implements AgentApi {
   readonly db: Db;
   readonly store: Store;
   readonly profiles: ProfileRegistry;
+  /** What of those profiles this machine actually has installed. */
+  readonly agents: AgentDetector;
   readonly tokens: TokenRegistry;
   readonly sessions: SessionManager;
   readonly router: MessageRouter;
@@ -83,6 +87,11 @@ export class Hub extends EventEmitter implements AgentApi {
     this.db = openDb(opts.dbPath ?? paths.db());
     this.store = new Store(this.db);
     this.profiles = ProfileRegistry.load();
+    this.agents = new AgentDetector(this.profiles);
+    // A joined hub is the only thing that knows its own PATH, so it says so
+    // rather than waiting to be asked again; peer-serve forwards this to the
+    // canvas the same way it forwards session changes.
+    this.agents.on('changed', (found: AgentProfileInfo[]) => this.emit('agents', found));
     this.tokens = new TokenRegistry();
     this.spawnCap = opts.spawnCap ?? DEFAULT_SPAWN_CAP;
 
@@ -106,6 +115,9 @@ export class Hub extends EventEmitter implements AgentApi {
 
     this.peers = new PeerRegistry(this.store, HUB_VERSION);
     this.peers.on('host', (h) => this.emit('host', h));
+    this.peers.on('peerAgents', (hostId: string, found: AgentProfileInfo[]) =>
+      this.emit('hostAgents', hostId, found),
+    );
     this.peers.on('peerSession', (s: Session) => this.emit('session', s));
     this.peers.on('peerSessionRemoved', (addr: string) => this.emit('removed', addr, addr));
     this.peers.on('peerSessionsChanged', () => this.emit('peersChanged'));

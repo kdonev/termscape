@@ -117,11 +117,38 @@ export const Message = z.object({
 });
 export type Message = z.infer<typeof Message>;
 
+/**
+ * Where a model list came from, because the two are not equally trustworthy.
+ *
+ * `listed` was enumerated by the CLI itself and is complete. `declared` is a
+ * static list written into the profile for a CLI with no listing command, so
+ * it is a starting point rather than the whole truth - Claude Code accepts a
+ * full model name as readily as one of the three aliases it documents.
+ */
+export const ModelSource = z.enum(['listed', 'declared', 'none']);
+export type ModelSource = z.infer<typeof ModelSource>;
+
 export const AgentProfileInfo = z.object({
   id: z.string(),
   description: z.string(),
   /** false for plain terminals like the `shell` profile. */
   mcp: z.boolean(),
   resumable: z.boolean(),
+  /** The command looked for on PATH. Shown when it was not found. */
+  command: z.string(),
+  /** Where it was found, or null when it was not. */
+  commandPath: z.string().nullable(),
+  /**
+   * null means "not probed yet", which is a real state and not a failure:
+   * detection runs after the hub is already serving, so the first page load
+   * can arrive before any of it has answered.
+   */
+  available: z.boolean().nullable(),
+  /** Whatever the CLI printed for its version, verbatim. */
+  version: z.string().nullable(),
+  /** Why it is unavailable, when it is. */
+  detail: z.string().nullable(),
+  models: z.array(z.string()),
+  modelSource: ModelSource,
 });
 export type AgentProfileInfo = z.infer<typeof AgentProfileInfo>;

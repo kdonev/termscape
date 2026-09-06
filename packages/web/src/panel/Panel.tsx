@@ -4,6 +4,7 @@ import type { Session } from '@termscape/protocol';
 import { useStore } from '../state/store.js';
 import { buildTree, type TreeMachine, type TreeWorkspace } from '../state/tree.js';
 import { statusColor, statusLabel } from '../window/status.js';
+import { agentDetail, agentsOn } from '../state/agents.js';
 
 /**
  * The index to the canvas: every machine, the workspaces on it, and the agents
@@ -61,16 +62,19 @@ export function Panel() {
 }
 
 function MachineNode({ machine }: { machine: TreeMachine }) {
-  const { client, hostLogs, openDialog } = useStore(
+  const { client, hostLogs, openDialog, profiles, hostProfiles } = useStore(
     useShallow((s) => ({
       client: s.client,
       hostLogs: s.hostLogs,
       openDialog: s.openDialog,
+      profiles: s.profiles,
+      hostProfiles: s.hostProfiles,
     })),
   );
   const [collapsed, setCollapsed] = useState(false);
 
   const host = machine.host;
+  const installed = agentsOn(machine.id || null, profiles, hostProfiles);
   const log = host ? (hostLogs[host.id] ?? []) : [];
   const agents = machine.workspaces.reduce((n, w) => n + w.sessions.length, 0);
 
@@ -142,6 +146,24 @@ function MachineNode({ machine }: { machine: TreeMachine }) {
       </div>
 
       {host?.error && <div className="node-error">{host.error}</div>}
+      {/* Per machine, because a host has its own PATH and this hub's answer
+          says nothing about it. A declared agent that is missing stays here
+          and says so rather than vanishing, which would look like the config
+          was ignored. */}
+      {!collapsed && installed.length > 0 && (
+        <div className="node-agents">
+          {installed.map((a) => (
+            <span
+              key={a.id}
+              className={`agent-chip ${a.available === false ? 'off' : ''} ${a.available === null ? 'unknown' : ''}`}
+              title={agentDetail(a)}
+            >
+              {a.id}
+              {a.version && <em>{a.version}</em>}
+            </span>
+          ))}
+        </div>
+      )}
       {machine.state === 'connecting' && log.length > 0 && (
         <div className="node-log">
           {log.map((line, i) => (

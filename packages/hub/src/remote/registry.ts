@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
 import type {
+  AgentProfileInfo,
   Host,
   PeerAgent,
   PeerRelayAsk,
@@ -24,6 +25,14 @@ export class PeerRegistry extends EventEmitter {
   private readonly peers = new Map<string, PeerConnection>();
   /** hostId -> address -> session, as last reported by that peer. */
   private readonly remote = new Map<string, Map<string, Session>>();
+  /**
+   * hostId -> what that machine has installed, as it last reported.
+   *
+   * Kept rather than derived because it cannot be: this hub's PATH says
+   * nothing about another machine's, and the only source for that answer is
+   * the machine itself.
+   */
+  private readonly remoteAgents = new Map<string, AgentProfileInfo[]>();
 
   constructor(
     private readonly store: Store,
@@ -80,6 +89,8 @@ export class PeerRegistry extends EventEmitter {
       // It knows nothing about the rest of the canvas until it is told, and
       // its agents are running the moment it reconnects.
       this.emit('directoryStale');
+      // Its PATH is its own, and it may have changed since it was last here.
+      void peer.refreshAgents();
     });
 
     peer.on('disconnected', () => {
@@ -105,6 +116,11 @@ export class PeerRegistry extends EventEmitter {
       }
       this.remote.set(host.id, map);
       this.emit('peerSessionsChanged', host.id);
+    });
+
+    peer.on('agents', (agents: AgentProfileInfo[]) => {
+      this.remoteAgents.set(host.id, agents);
+      this.emit('peerAgents', host.id, agents);
     });
 
     peer.on('sessionUpserted', (s: Session) => {
@@ -144,10 +160,21 @@ export class PeerRegistry extends EventEmitter {
     return peer;
   }
 
+  /** What every attached machine has installed, by host id. */
+  agentsByHost(): Record<string, AgentProfileInfo[]> {
+    return Object.fromEntries(this.remoteAgents);
+  }
+
+  /** Ask every attached machine to probe its PATH again. */
+  refreshAgents(): void {
+    for (const peer of this.peers.values()) void peer.refreshAgents();
+  }
+
   remove(hostId: string): void {
     this.peers.get(hostId)?.close();
     this.peers.delete(hostId);
     this.remote.delete(hostId);
+    this.remoteAgents.delete(hostId);
     this.emit('peerSessionsChanged', hostId);
   }
 

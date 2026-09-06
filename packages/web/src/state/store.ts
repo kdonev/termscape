@@ -63,7 +63,15 @@ interface AppState {
   workspaces: Workspace[];
   sessions: Session[];
   messages: Message[];
+  /** What this machine has installed. */
   profiles: AgentProfileInfo[];
+  /**
+   * What each attached machine has, by host id. Per machine because a host
+   * has its own PATH: starting an agent on a workspace over there sends a
+   * profile id that machine resolves against its own config, so offering one
+   * it does not have only fails later, in a terminal window, as a spawn error.
+   */
+  hostProfiles: Record<string, AgentProfileInfo[]>;
   viewport: Viewport;
   flashes: MessageFlash[];
   selectedId: string | null;
@@ -117,6 +125,7 @@ export const useStore = create<AppState>((set, get) => ({
   sessions: [],
   messages: [],
   profiles: [],
+  hostProfiles: {},
   viewport: { panX: 0, panY: 0, zoom: 1 },
   flashes: [],
   selectedId: null,
@@ -142,6 +151,7 @@ export const useStore = create<AppState>((set, get) => ({
           sessions: m.state.sessions,
           messages: m.state.messages,
           profiles: m.state.profiles,
+          hostProfiles: m.state.hostProfiles,
           viewport: m.state.viewport,
           // This arrives on every reconnect, not only the first, so it can
           // replace the session list under a selection made before the hub
@@ -220,6 +230,15 @@ export const useStore = create<AppState>((set, get) => ({
 
       case 'error':
         set((s) => ({ errors: [...s.errors, m.message].slice(-5) }));
+        return;
+
+      case 'agentsDetected':
+        // Arrives after `ready`, once each machine has probed its own PATH.
+        set((s) =>
+          m.hostId === null
+            ? { profiles: m.profiles }
+            : { hostProfiles: { ...s.hostProfiles, [m.hostId]: m.profiles } },
+        );
         return;
 
       case 'ack':

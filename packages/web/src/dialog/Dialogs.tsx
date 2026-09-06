@@ -3,6 +3,7 @@ import { useShallow } from 'zustand/react/shallow';
 import type { AckableMsg } from '@termscape/protocol';
 import { useStore, type DialogSpec } from '../state/store.js';
 import { pickValid } from '../state/selection.js';
+import { agentDetail, agentsOn, startable } from '../state/agents.js';
 import { sessionsIn } from '../state/tree.js';
 import { Dialog, DialogForm, Field } from './Dialog.js';
 import { JoinInstructions, SshForm } from './MachineForms.js';
@@ -190,14 +191,38 @@ function EditWorkspaceDialog({ workspaceId }: { workspaceId: string }) {
   );
 }
 
+/**
+ * Starting an agent, from the list the machine that will run it actually has.
+ *
+ * The picker used to be one global list of whatever agents.toml declared,
+ * installed or not, on this machine or another. Both halves of that were
+ * wrong: a host has its own PATH, and starting an agent it does not have
+ * failed at launch inside a terminal window, where the error reads like the
+ * hub is broken.
+ */
 function StartAgentDialog({ workspaceId }: { workspaceId: string }) {
   const request = useRequest();
-  const { workspaces, profiles } = useStore(
-    useShallow((s) => ({ workspaces: s.workspaces, profiles: s.profiles })),
+  const { workspaces, profiles, hostProfiles } = useStore(
+    useShallow((s) => ({
+      workspaces: s.workspaces,
+      profiles: s.profiles,
+      hostProfiles: s.hostProfiles,
+    })),
   );
+  const client = useStore((s) => s.client);
   const workspace = workspaces.find((w) => w.id === workspaceId);
+  const hostId = workspace?.hostId ?? null;
+  const agents = agentsOn(hostId, profiles, hostProfiles);
+
   const [profile, setProfile] = useState('claude');
-  const active = pickValid(profile, profiles, true);
+  const offered = agents.filter(startable);
+  const active = pickValid(
+    profile,
+    offered.map((a) => ({ id: a.id })),
+    true,
+  );
+  const chosen = agents.find((a) => a.id === active);
+  const missing = agents.filter((a) => a.available === false);
 
   return (
     <Dialog title={`Start an agent in ${workspace?.name ?? 'this workspace'}`}>
@@ -206,19 +231,57 @@ function StartAgentDialog({ workspaceId }: { workspaceId: string }) {
         canSubmit={Boolean(active)}
         onSubmit={() => request({ t: 'startSession', workspaceId, profile: active })}
       >
-        <Field label="agent" hint={workspace ? `Runs in ${workspace.rootPath}.` : undefined}>
-          <select
-            className="input"
-            value={active}
-            onChange={(e) => setProfile(e.target.value)}
-          >
-            {profiles.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.id}
+        <Field label="agent" hint={chosen ? agentDetail(chosen) : undefined}>
+          <select className="input" value={active} onChange={(e) => setProfile(e.target.value)}>
+            {offered.map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.id}
+                {a.version ? ` — ${a.version}` : ''}
               </option>
             ))}
           </select>
         </Field>
+
+        {/* Read-only for now: which models exist is this feature, and
+            choosing one per agent is what templates are for. Showing them is
+            still the difference between typing a model from memory and
+            knowing what the CLI will accept. */}
+        {chosen && chosen.models.length > 0 && (
+          <Field
+            label="models it offers"
+            hint={
+              chosen.modelSource === 'listed'
+                ? `${chosen.models.length} listed by ${chosen.id} itself.`
+                : `Declared, not enumerated: ${chosen.id} has no listing command, and it takes full model names too.`
+            }
+          >
+            <div className="model-list">
+              {chosen.models.slice(0, 200).map((m) => (
+                <code key={m}>{m}</code>
+              ))}
+            </div>
+          </Field>
+        )}
+
+        {missing.length > 0 && (
+          <p className="dialog-note">
+            Not on{' '}
+            {hostId ? "that machine's" : "this machine's"} PATH:{' '}
+            {missing.map((a) => a.command).join(', ')}.
+          </p>
+        )}
+
+        <p className="dialog-note">
+          {workspace ? `Runs in ${workspace.rootPath}. ` : ''}
+          <button
+            className="link"
+            type="button"
+            onClick={() => client?.send({ t: 'refreshAgents' })}
+          >
+            check again
+          </button>{' '}
+          if you have just installed one.
+        </p>
       </DialogForm>
     </Dialog>
   );

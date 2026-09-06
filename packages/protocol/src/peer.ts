@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { AgentStatus, Session, SessionState } from './domain.js';
+import { AgentProfileInfo, AgentStatus, Session, SessionState } from './domain.js';
 
 /**
  * Hub-to-hub RPC.
@@ -91,6 +91,13 @@ export const PeerHello = z.object({
 export const PeerRequest = z.discriminatedUnion('t', [
   PeerHello,
   z.object({ t: z.literal('listSessions'), id: z.string() }),
+  /**
+   * What agent CLIs that machine has. Asked rather than assumed: a host has
+   * its own PATH, and starting an agent over there sends a profile id which
+   * it resolves against its own config - so an agent it does not have fails
+   * at launch with a spawn error the canvas could have predicted.
+   */
+  z.object({ t: z.literal('listAgents'), id: z.string() }),
   z.object({
     t: z.literal('startSession'),
     id: z.string(),
@@ -176,6 +183,9 @@ export const PeerResponse = z.discriminatedUnion('t', [
   z.object({ t: z.literal('err'), id: z.string(), message: z.string() }),
   // Unsolicited: the peer pushing state changes and terminal output.
   z.object({ t: z.literal('sessions'), sessions: z.array(Session) }),
+  // Unsolicited as well as in reply: that machine's detection finishes after
+  // it connects, and again whenever it is refreshed over there.
+  z.object({ t: z.literal('agents'), agents: z.array(AgentProfileInfo) }),
   z.object({ t: z.literal('sessionUpserted'), session: Session }),
   z.object({ t: z.literal('sessionRemoved'), address: z.string() }),
   z.object({ t: z.literal('output'), address: z.string(), data: z.string() }),

@@ -4,6 +4,7 @@ import {
   PEER_SCHEMA_VERSION,
   type PeerAgent,
   type PeerRelayAsk,
+  type AgentProfileInfo,
   type PeerResponse,
   type Session,
 } from '@termscape/protocol';
@@ -76,6 +77,11 @@ export function createPeerServer(hub: Hub, clientToken: string): PeerServer {
   hub.on('session', (s: Session) => {
     for (const ws of sockets) send(ws, { t: 'sessionUpserted', session: s });
   });
+  // Detection over here finishing. Unsolicited, because it completes after
+  // the link is already up and nobody on the canvas knows to ask again.
+  hub.on('agents', (agents: AgentProfileInfo[]) => {
+    for (const ws of sockets) send(ws, { t: 'agents', agents });
+  });
   hub.on('removed', (_id: string, address: string | null) => {
     // Peers address sessions by name, not by this hub's internal id, which is
     // why the address travels with the event rather than being looked up
@@ -137,6 +143,14 @@ export function createPeerServer(hub: Hub, clientToken: string): PeerServer {
         switch (req.t) {
           case 'listSessions':
             return ok(hub.sessions.list());
+
+          case 'listAgents':
+            // Answered from what is already known rather than probing now:
+            // the canvas asks on connect, and a CLI that hangs on --version
+            // must not hold the link open behind it. A refresh over here
+            // arrives later as an unsolicited `agents`.
+            void hub.agents.refresh();
+            return ok(hub.agents.snapshot());
 
           case 'directory':
             // Replaced wholesale: this is the canvas's whole view, minus our

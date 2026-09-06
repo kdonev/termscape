@@ -4,87 +4,15 @@ Wanted features, next first. Each entry says what it is, how it should behave,
 and where the code lives. Delete an entry when it ships — the git history keeps
 the record.
 
-The order still only reads one way. **Detection comes before templates:** a
-template holds a model and an effort as *values*, and the agent declares how to
-spell them as flags. Those spellings are what entry 1 establishes — and it says
-outright that two of the four are still unverified. Templates built on guesses
-get rebuilt.
+Templates lead because detection now feeds them: the model list is real, and
+what a template still needs is the *spelling* of each agent's model and effort
+flags. Two of the four remain unverified, and entry 2 is what would establish
+them — so an agent whose flags nobody has checked gets a template that names it
+and nothing else, which is exactly today's behaviour and is fine.
 
 ---
 
-## 1. Find the agents already installed, and the models they offer
-
-**What it is.** The picker offers whatever `agents.toml` declares, and only
-`claude` and `shell` are built in. A machine usually has more than that on its
-PATH already. Find them, and find out what models each one can be pointed at,
-so a template is chosen from a real list rather than typed from memory.
-
-First four to support: **Claude Code**, **Codex CLI**, **Gemini CLI** and
-**opencode**.
-
-**How it behaves.**
-
-- **Each machine probes its own PATH.** `which()` already does this, on both
-  platforms, including the Windows `.cmd`/`.bat` shims that npm installs.
-  Nothing here needs a new mechanism.
-- **Per machine, and that is the point.** A host has its own PATH, and this
-  hub's answer says nothing about it. Today, starting an agent on a workspace
-  that lives on another machine sends a profile *id* which that machine
-  resolves against its own config, so an agent it does not have fails at
-  launch with a spawn error. The detected set has to cross the peer link, and
-  the panel should show, per machine, what that machine actually has.
-- **A declared agent that is not installed stays visible and says why.** It
-  should read as unavailable, with the command that was not found — not
-  silently vanish, which looks like the config was ignored.
-- **Models: ask where you can, declare where you cannot.** This is not uniform,
-  and the design has to carry both. Verified here:
-  - `opencode models` prints one `provider/model` per line — 395 of them on
-    this machine. Real enumeration.
-  - Claude Code has no listing command. `--help` documents the aliases
-    (`fable`, `opus`, `sonnet`) and says a full name like `claude-fable-5` is
-    also accepted.
-
-  So an agent declares an optional command whose stdout is one model per line,
-  and a static list is the fallback for the ones that cannot answer.
-- **Cache it.** Spawning a process and parsing 395 lines is not something to do
-  while someone opens a dropdown. Refresh on demand, and when the agent's
-  version changes — `claude --version` prints `2.1.263 (Claude Code)`, which is
-  both worth showing and a good cache key.
-- **Detection never blocks startup.** A CLI that hangs on `--version` must cost
-  a slow dropdown, not a hub that will not boot.
-
-**What is already known about the four.** Verified on this machine:
-
-| | model flag | effort flag | list models |
-|---|---|---|---|
-| Claude Code | `--model` (alias or full name) | `--effort <level>` | none |
-| opencode | `run -m provider/model` | `run --variant` (high, max, minimal) | `opencode models` |
-| Codex CLI | not verified | not verified | not verified |
-| Gemini CLI | not verified | not verified | not verified |
-
-Codex and Gemini were not installed here, so their rows are the first thing to
-establish on a machine that has them. Do not take them from memory: the two
-that *were* installed both differed from what had been assumed of them.
-
-**Where it lives.**
-
-- `packages/hub/src/agents/resolve.ts:30` — `which()`. The whole detection
-  primitive, already written.
-- `packages/hub/src/agents/profiles.ts:42` — `BUILTIN_PROFILES`. Needs entries
-  for codex, gemini and opencode, each with its own MCP wiring: opencode's
-  default command is a TUI and it has its own `mcp` subcommand, so none of this
-  is a copy of the claude profile.
-- `packages/protocol/src/domain.ts:120` — `AgentProfileInfo`, what the browser
-  is given. Gains availability, version and the model list.
-- `packages/hub/src/remote/peer-serve.ts` and `remote/registry.ts` — the
-  detected set has to travel, the way sessions already do.
-- `packages/web/src/dialog/Dialogs.tsx:193` — `StartAgentDialog`, the picker,
-  now in a dialog with room for it. It becomes per machine rather than one
-  global list.
-
----
-
-## 2. Agent templates: which agent, which model, how much effort, and a first instruction
+## 1. Agent templates: which agent, which model, how much effort, and a first instruction
 
 **What it is.** Starting an agent asks one question — which CLI — and nothing
 else. Everything that actually distinguishes one agent from another is missing:
@@ -125,8 +53,7 @@ is internally: the recipe for launching one CLI.
 - **Model and effort are per-agent flags, and this is the hard part.** Claude
   Code takes `--model` and `--effort`; opencode takes `run -m provider/model`
   and calls effort `--variant`; Codex and Gemini spell both differently again
-  (see entry 1, finding the agents, for what is verified and what is not).
-  So a template
+  (see the table below for what is verified and what is not). So a template
   cannot hold argv — it holds *values*, and the agent declares how to spell
   them. The `{{...}}` substitution already used for the MCP config path
   is the mechanism; what is new is that a fragment has to disappear entirely
@@ -146,8 +73,29 @@ is internally: the recipe for launching one CLI.
 - **The opening instruction does not repeat on resume.** It is how the session
   started, not what it is.
 
+**What is verified about the four.** Re-checked on this machine against the
+CLIs that are installed; do not take the unverified rows from memory, because
+both of the ones that *were* installed differed from what had been assumed.
+
+| | model flag | effort flag | list models |
+|---|---|---|---|
+| Claude Code 2.1.263 | `--model` — aliases `fable`, `opus`, `sonnet`, or a full name like `claude-fable-5` | `--effort <level>` — `low`, `medium`, `high`, `xhigh`, `max` | none; the aliases are declared in the profile instead |
+| opencode 1.1.51 | `run -m provider/model` | `run --variant` (high, max, minimal) | `opencode models`, 395 lines |
+| Codex CLI | not verified | not verified | not verified |
+| Gemini CLI | not verified | not verified | not verified |
+
+Detection already carries the model list, so the picker knows what each agent
+offers. What it does not carry is how to *spell* a chosen model or effort on
+the command line, which is the row above and the work here.
+
 **Where it lives.**
 
+- `packages/hub/src/agents/profiles.ts` — `AgentProfile`, which already
+  declares `versionArgs`, `modelsArgs` and `models` for detection. The model
+  and effort *argument fragments* would sit beside them, alongside the argv it
+  already declares.
+- `packages/hub/src/agents/detect.ts` — where the model list comes from, and
+  what a template's model should be validated against.
 - `packages/hub/src/agents/profiles.ts:11` — `AgentProfile`. Where an agent
   would declare its model and effort argument fragments, alongside the argv it
   already declares.
@@ -174,3 +122,46 @@ is internally: the recipe for launching one CLI.
   A template has to either resolve to concrete values before it crosses, or
   exist on both machines. The first is the smaller change and the only one that
   works when the two machines have different config.
+
+---
+
+## 2. Wire Codex, Gemini and opencode to the hub's MCP endpoint
+
+**What it is.** Detection finds all four agents and the panel shows what each
+machine has, but only `claude` is an *agent* on the canvas. The other three are
+built-in profiles with `mcp: false` — a terminal running that CLI, with no
+address, no brief, and no `send_message`. That is honest rather than desirable:
+each configures MCP its own way, and a profile claiming wiring it does not have
+is worse than one that says plainly it is a terminal.
+
+**What is known.**
+
+- **opencode** has no `--mcp-config <file>` equivalent. `opencode mcp add`
+  mutates its own config, and its `--help` lists no per-run config flag. Wiring
+  it therefore means writing to config the user owns, which needs a decision
+  about where and whether to clean up — not just a profile entry. Verified
+  against opencode 1.1.51.
+- **Codex CLI** and **Gemini CLI** were not installed on the machine this was
+  written on, so nothing about them is verified. Establish that first.
+
+**How it behaves.**
+
+- **Whatever is written, is written back.** If wiring an agent means editing a
+  config file the user owns, removing the agent has to undo it, and a hub that
+  was killed rather than stopped must not leave the file pointing at a port
+  nothing is listening on.
+- **A profile says which it is.** `mcp: true` is a promise that the agent gets
+  an address and can be messaged; nothing should set it before that is true on
+  the machine in front of you.
+- **The brief has to arrive somehow.** Claude Code takes
+  `--append-system-prompt-file`; an agent with no equivalent needs its brief
+  typed in at startup, which is the same wait `spawn_agent` already uses.
+
+**Where it lives.**
+
+- `packages/hub/src/agents/profiles.ts` — `BUILTIN_PROFILES`, where the three
+  currently sit as `mcp: false` with a description saying so.
+- `packages/hub/src/agents/wiring.ts` — how a session's MCP config, settings
+  and brief are generated for Claude Code today.
+- `README.md`, "Agent profiles" — which states plainly that only `claude` is
+  wired, and is the sentence this entry would rewrite.

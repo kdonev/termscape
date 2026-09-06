@@ -5,6 +5,7 @@ import {
   PEER_SCHEMA_VERSION,
   PeerResponse,
   type PeerRequest,
+  type AgentProfileInfo,
   type Session,
 } from '@termscape/protocol';
 
@@ -207,6 +208,9 @@ export class PeerConnection extends EventEmitter {
       case 'sessions':
         this.emit('sessions', msg.sessions as Session[]);
         return;
+      case 'agents':
+        this.emit('agents', msg.agents as AgentProfileInfo[]);
+        return;
       case 'sessionUpserted':
         this.emit('sessionUpserted', msg.session as Session);
         return;
@@ -265,6 +269,25 @@ export class PeerConnection extends EventEmitter {
       this.emit('sessions', sessions);
     } catch (err) {
       this.emit('error', err as Error);
+    }
+  }
+
+  /**
+   * What agent CLIs that machine has. Its own failure is swallowed rather
+   * than raised as a host error: not knowing which agents are over there is
+   * a worse picker, not a broken host, and marking it `error` for that would
+   * take its windows off the canvas.
+   */
+  async refreshAgents(): Promise<void> {
+    try {
+      const agents = await this.request<AgentProfileInfo[]>({
+        t: 'listAgents',
+        id: randomUUID(),
+      });
+      this.emit('agents', agents);
+    } catch {
+      // Older hub, or a link that dropped mid-question. It pushes an
+      // unsolicited `agents` when its own detection finishes anyway.
     }
   }
 

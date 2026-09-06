@@ -223,12 +223,11 @@ export async function serve(opts: ServeOptions): Promise<ServeResult> {
     sessions: hub.allSessions(),
     messages: hub.messages(),
     viewport: hub.store.getViewport(),
-    profiles: hub.profiles.list().map((p) => ({
-      id: p.id,
-      description: p.description,
-      mcp: p.mcp,
-      resumable: !!p.resumeArgs,
-    })),
+    // Whatever detection knows right now, which on the first load is usually
+    // "not probed yet" - it starts after this server is already listening, on
+    // purpose, so nothing about spawning CLIs can delay a page.
+    profiles: hub.agents.snapshot(),
+    hostProfiles: hub.peers.agentsByHost(),
   });
 
   hub.on('session', (s) => broadcast({ t: 'sessionUpserted', session: s }));
@@ -238,6 +237,12 @@ export async function serve(opts: ServeOptions): Promise<ServeResult> {
   hub.on('message', (m) => broadcast({ t: 'messageSent', message: m }));
   hub.on('host', (h) => broadcast({ t: 'hostUpserted', host: h }));
   hub.on('hostRemoved', (id) => broadcast({ t: 'hostRemoved', hostId: id }));
+  hub.on('agents', (profiles) =>
+    broadcast({ t: 'agentsDetected', hostId: null, profiles }),
+  );
+  hub.on('hostAgents', (hostId, profiles) =>
+    broadcast({ t: 'agentsDetected', hostId, profiles }),
+  );
   // Deploy progress. Installing on a remote can take minutes; the panel shows
   // these lines so it is not a frozen button.
   hub.on('hostLog', (hostId, line) => broadcast({ t: 'hostLog', hostId, line }));
@@ -492,6 +497,14 @@ export async function serve(opts: ServeOptions): Promise<ServeResult> {
         await hub.connectHost(msg.hostId);
         return;
 
+      case 'refreshAgents':
+        // Not awaited: the answer arrives as `agentsDetected` when each
+        // machine has one, and a CLI that hangs must cost a slow dropdown
+        // rather than a socket sitting on a reply.
+        void hub.agents.refresh();
+        hub.peers.refreshAgents();
+        return;
+
       default:
         throw new Error(`unhandled: ${(msg as { t: string }).t}`);
     }
@@ -585,6 +598,18 @@ export async function serve(opts: ServeOptions): Promise<ServeResult> {
     enrollOrigin = lanOrigin;
     enrollAltOrigin = lanAltOrigin;
   }
+
+  /*
+   * Detection starts here, after listen() has resolved, and is deliberately
+   * not awaited. It spawns every declared CLI to ask its version and its
+   * models; one of them hanging must cost a slow dropdown rather than a hub
+   * that will not boot, and the browser is told through `agentsDetected` when
+   * each answer lands.
+   */
+  void hub.agents.refresh().catch(() => {
+    // Individual probes already fail softly; this is only here so a bug in
+    // the detector cannot become an unhandled rejection that stops the hub.
+  });
 
   void address;
   return {
