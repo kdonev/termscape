@@ -43,35 +43,3 @@ link see each other's agents, and a message crosses in either direction.
   should see every machine on the canvas, or only the canvas machine and its
   own. Only the canvas hub knows the full set, so the second is a much smaller
   change — and it is the one that makes handing work back work.
-
----
-
-## 2. A workspace on an attached machine gets no frame around its windows
-
-**What you see.** Start agents in a workspace that lives on another machine and
-the dashed frame with the workspace name never appears, however far you zoom
-out. The windows are there; nothing groups them.
-
-**What should happen.** Every workspace with a window on the canvas is drawn
-inside its own frame, wherever its agents happen to be running.
-
-**Where it lives.**
-- `packages/web/src/canvas/Canvas.tsx:629` — the grouping:
-  `sessions.filter((s) => s.workspaceId === ws.id)`. A remote session carries
-  the *peer's* workspace id, because the peer created that row and owns it, and
-  that id is not in this database at all. The filter matches nothing,
-  `workspaceBounds` gets an empty list and returns null, and no frame is
-  pushed. The windows still draw, because they are keyed by session.
-- `packages/web/src/state/tree.ts` — `sessionsIn` is this same question already
-  answered for the panel: match by id, and for a workspace on a host fall back
-  to the workspace half of the address, which is the one thing that survives
-  the trip. The canvas should use it rather than grow a second copy.
-- `packages/web/src/canvas/Canvas.tsx:455` — the step-out path groups by
-  `workspaceId` the same way and wants the same treatment, or zooming out of a
-  remote window steps to the wrong bounds.
-- Checked and *not* the fault: two workspaces on this machine each get their
-  own frame. A second workspace's windows are placed about 2,600px to the right
-  (`session/manager.ts:450`), so it and its frame are off screen until you pan
-  or fit — which can read as a missing frame. If a frame is genuinely missing
-  for a workspace on this machine, that is a different fault and this entry
-  does not cover it.

@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
-import type { Session, Viewport } from '@aicanvas/protocol';
+import type { Session, Viewport, Workspace } from '@aicanvas/protocol';
 import { useStore } from '../state/store.js';
+import { sessionsIn } from '../state/tree.js';
 import { TerminalWindow } from '../window/TerminalWindow.js';
 import { MessageEdges } from './MessageEdges.js';
 import {
@@ -609,11 +610,6 @@ export function Canvas() {
     [viewport, size],
   );
 
-  const wsById = useMemo(
-    () => new Map(workspaces.map((w) => [w.id, w])),
-    [workspaces],
-  );
-
   const decorated = useMemo(
     () =>
       sessions.map((s) => {
@@ -630,15 +626,25 @@ export function Canvas() {
 
   /* --------------------------------------------- workspace grouping */
 
-  const groups = useMemo(() => {
-    const out: { ws: (typeof workspaces)[number]; box: Rect }[] = [];
+  /**
+   * The frame drawn around each workspace's windows, and which workspace each
+   * window belongs to — one pass, because they are the same question.
+   *
+   * `sessionsIn` rather than a join on `workspaceId`: an agent running on a
+   * host is stamped with *that* hub's workspace id, which is not a row in this
+   * database, so the join matched nothing. A workspace on another machine got
+   * no frame at all, and its windows no workspace colour.
+   */
+  const { groups, wsBySession } = useMemo(() => {
+    const groups: { ws: Workspace; box: Rect }[] = [];
+    const wsBySession = new Map<string, Workspace>();
     for (const ws of workspaces) {
-      const box = workspaceBounds(
-        sessions.filter((s) => s.workspaceId === ws.id).map((s) => s.window),
-      );
-      if (box) out.push({ ws, box });
+      const members = sessionsIn(ws, sessions);
+      for (const s of members) wsBySession.set(s.id, ws);
+      const box = workspaceBounds(members.map((s) => s.window));
+      if (box) groups.push({ ws, box });
     }
-    return out;
+    return { groups, wsBySession };
   }, [workspaces, sessions]);
 
   return (
@@ -688,7 +694,7 @@ export function Canvas() {
             <TerminalWindow
               key={session.id}
               session={session}
-              workspace={wsById.get(session.workspaceId)}
+              workspace={wsBySession.get(session.id)}
               zoom={viewport.zoom}
               dpr={devicePixelRatio}
               renderScale={renderScale}

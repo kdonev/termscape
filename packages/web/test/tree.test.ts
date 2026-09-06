@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Host, Session, Workspace } from '@aicanvas/protocol';
 import { buildTree, sessionsIn } from '../src/state/tree.js';
+import { workspaceBounds } from '../src/canvas/viewport.js';
 
 const workspace = (over: Partial<Workspace>): Workspace => ({
   id: 'w1',
@@ -111,5 +112,33 @@ describe('sessionsIn', () => {
     const local = workspace({ id: 'local-uuid', name: 'api', hostId: null });
     const remote = session({ id: 's9', workspaceId: 'peer-uuid', address: 'api/claude-1' });
     expect(sessionsIn(local, [remote])).toHaveLength(0);
+  });
+});
+
+// The canvas asks the same question to decide where to draw a workspace frame,
+// so this is that expression exactly.
+describe('the frame drawn around a workspace', () => {
+  it('encloses the windows of a workspace running on another machine', () => {
+    const w = workspace({ id: 'local-uuid', name: 'api', hostId: 'h1', kind: 'remote' });
+    const members = [
+      session({ id: 'api/one', workspaceId: 'peer-uuid', address: 'api/one' }),
+      session({
+        id: 'api/two',
+        workspaceId: 'peer-uuid',
+        address: 'api/two',
+        window: { x: 800, y: 0, w: 100, h: 100, z: 1, collapsed: false },
+      }),
+    ];
+
+    const box = workspaceBounds(sessionsIn(w, members).map((s) => s.window));
+    expect(box).not.toBeNull();
+    // Both windows inside it, which is the whole point of the frame.
+    expect(box!.x).toBeLessThanOrEqual(0);
+    expect(box!.x + box!.w).toBeGreaterThanOrEqual(900);
+  });
+
+  it('draws nothing for a workspace with no windows', () => {
+    const w = workspace({ id: 'empty' });
+    expect(workspaceBounds(sessionsIn(w, []).map((s) => s.window))).toBeNull();
   });
 });
