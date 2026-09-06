@@ -178,6 +178,9 @@ function unprobed(p: AgentProfile): AgentProfileInfo {
     detail: null,
     models: p.models ?? [],
     modelSource: p.models?.length ? 'declared' : 'none',
+    takesModel: p.modelArgs !== undefined,
+    takesEffort: p.effortArgs !== undefined,
+    efforts: p.efforts ?? [],
   };
 }
 

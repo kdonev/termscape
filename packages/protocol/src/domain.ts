@@ -79,6 +79,22 @@ export const Session = z.object({
   name: z.string(),
   address: z.string(),
   profile: z.string(),
+  /**
+   * The template this session was started from, and what it resolved to.
+   *
+   * Recorded here rather than looked up at resume time. Resume deliberately
+   * rebuilds argv instead of replaying it, so without these the model and
+   * effort are quietly lost the first time a machine restarts — and an agent
+   * coming back on a different model than it left with is worse than one that
+   * does not come back. A template is editable, too: the answer belongs to
+   * the session that used it.
+   *
+   * The opening instruction is deliberately absent. It is how the session
+   * started, not what it is, and it must not repeat on resume.
+   */
+  template: z.string().nullable(),
+  model: z.string().nullable(),
+  effort: z.string().nullable(),
   cwd: z.string(),
   /** The agent CLI's own conversation id (Claude Code `--session-id`). */
   agentSessionUuid: z.string().nullable(),
@@ -128,6 +144,29 @@ export type Message = z.infer<typeof Message>;
 export const ModelSource = z.enum(['listed', 'declared', 'none']);
 export type ModelSource = z.infer<typeof ModelSource>;
 
+/**
+ * A template as the picker sees it: an agent, and what it has already decided.
+ *
+ * The picker offers these rather than CLIs. One that names only an agent is
+ * exactly the old behaviour, which is why every agent gets one for free.
+ */
+export const AgentTemplateInfo = z.object({
+  id: z.string(),
+  description: z.string(),
+  /** The agent (profile) id it launches. */
+  agent: z.string(),
+  model: z.string().nullable(),
+  effort: z.string().nullable(),
+  prompt: z.string().nullable(),
+  /**
+   * Why it cannot be used. A template asking for an effort on an agent with
+   * no effort setting is a configuration error, and it stays in the list
+   * saying so rather than vanishing as if the config had been ignored.
+   */
+  error: z.string().nullable(),
+});
+export type AgentTemplateInfo = z.infer<typeof AgentTemplateInfo>;
+
 export const AgentProfileInfo = z.object({
   id: z.string(),
   description: z.string(),
@@ -150,5 +189,15 @@ export const AgentProfileInfo = z.object({
   detail: z.string().nullable(),
   models: z.array(z.string()),
   modelSource: ModelSource,
+  /**
+   * Whether this agent declares how to spell a model, or an effort, on the
+   * command line. A template holds a *value*; the agent says how to write it
+   * down, and one that says nothing takes neither — so the dialog offers the
+   * field only where there is somewhere for the value to go.
+   */
+  takesModel: z.boolean(),
+  takesEffort: z.boolean(),
+  /** The effort levels this agent documents, when it takes one. */
+  efforts: z.array(z.string()),
 });
 export type AgentProfileInfo = z.infer<typeof AgentProfileInfo>;

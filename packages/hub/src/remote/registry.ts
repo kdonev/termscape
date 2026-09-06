@@ -385,7 +385,12 @@ export class PeerRegistry extends EventEmitter {
     req: {
       workspaceName: string;
       rootPath: string;
+      /** The agent id, already resolved from the template on this side. */
       profile: string;
+      template?: string | null;
+      model?: string;
+      effort?: string;
+      prompt?: string;
       name?: string;
       spawnedByAddress: string | null;
     },

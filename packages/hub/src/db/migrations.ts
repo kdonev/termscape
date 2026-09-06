@@ -166,6 +166,29 @@ export const MIGRATIONS: Migration[] = [
       CREATE INDEX idx_pending_removal_host ON pending_removal(host_id);
     `,
   },
+  {
+    version: 5,
+    name: 'session_model_effort',
+    up: `
+      -- What a template resolved to when this session started.
+      --
+      -- Recorded on the session rather than looked up from the template at
+      -- resume time, for two reasons. Resume deliberately rebuilds argv
+      -- instead of replaying it, so without these the model and effort are
+      -- quietly lost the first time a machine restarts - and an agent coming
+      -- back on a different model than it left with is worse than one that
+      -- does not come back. And a template is editable: the answer belongs to
+      -- the session that used it, not to whatever the template says today.
+      --
+      -- The opening instruction is deliberately *not* here. It is how the
+      -- session started, not what it is, and it must not repeat on resume.
+      ALTER TABLE session ADD COLUMN model    TEXT;
+      ALTER TABLE session ADD COLUMN effort   TEXT;
+      -- Which template was picked, for showing on the window. Null for a
+      -- session started before templates existed, or by an agent's spawn_agent.
+      ALTER TABLE session ADD COLUMN template TEXT;
+    `,
+  },
 ];
 
 export function runMigrations(db: Database): number {

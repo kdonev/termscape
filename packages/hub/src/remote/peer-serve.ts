@@ -190,9 +190,17 @@ export function createPeerServer(hub: Hub, clientToken: string): PeerServer {
           case 'startSession': {
             let ws = hub.store.getWorkspaceByName(req.workspaceName);
             if (!ws) ws = hub.createWorkspace(req.workspaceName, req.rootPath, null);
-            const s = await hub.startSession({
+            // `profile` is an agent id here, not a template: the canvas
+            // resolved the template on its own side precisely because the two
+            // machines do not share config. The model and effort arrive as
+            // values, and this hub's own profile says how to spell them.
+            const s = await hub.startResolved({
               workspaceId: ws.id,
-              profile: req.profile,
+              agent: req.profile,
+              template: req.template ?? null,
+              model: req.model,
+              effort: req.effort,
+              prompt: req.prompt,
               name: req.name,
             });
             return ok(s);

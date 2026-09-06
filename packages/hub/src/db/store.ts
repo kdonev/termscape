@@ -15,6 +15,9 @@ interface SessionRow {
   workspace_id: string;
   name: string;
   profile: string;
+  template: string | null;
+  model: string | null;
+  effort: string | null;
   cwd: string;
   agent_session_uuid: string | null;
   argv_json: string;
@@ -193,6 +196,9 @@ export class Store {
       name: r.name,
       address: makeAddress(r.workspace_name, r.name),
       profile: r.profile,
+      template: r.template,
+      model: r.model,
+      effort: r.effort,
       cwd: r.cwd,
       agentSessionUuid: r.agent_session_uuid,
       spawnedBy: r.spawned_by,
@@ -256,11 +262,13 @@ export class Store {
       this.db
         .prepare(
           `INSERT INTO session (
-             id, workspace_id, name, profile, cwd, agent_session_uuid,
+             id, workspace_id, name, profile, template, model, effort, cwd,
+             agent_session_uuid,
              argv_json, env_json, spawned_by, state, status_text, title,
              pid, exit_code, cols, rows, created_at, exited_at, last_active_at)
            VALUES (
-             @id, @workspaceId, @name, @profile, @cwd, @agentSessionUuid,
+             @id, @workspaceId, @name, @profile, @template, @model, @effort, @cwd,
+             @agentSessionUuid,
              @argvJson, @envJson, @spawnedBy, @state, @statusText, @title,
              @pid, @exitCode, @cols, @rows, @createdAt, @exitedAt, @lastActiveAt)`,
         )
@@ -269,6 +277,9 @@ export class Store {
           workspaceId: s.workspaceId,
           name: s.name,
           profile: s.profile,
+          template: s.template,
+          model: s.model,
+          effort: s.effort,
           cwd: s.cwd,
           agentSessionUuid: s.agentSessionUuid,
           argvJson: JSON.stringify(spec.argv),

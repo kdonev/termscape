@@ -30,6 +30,25 @@ export function startable(agent: AgentProfileInfo): boolean {
   return agent.available !== false;
 }
 
+/**
+ * Whether the agent a template names can be started on this machine.
+ *
+ * A template is config and lives on the canvas hub; whether its agent exists
+ * is the other machine's answer, so the two are joined in the browser. An
+ * agent nobody has probed yet counts as startable, for the same reason
+ * `startable` says so: detection is slower than opening a dropdown.
+ */
+export function startableAgent(
+  template: { agent: string },
+  agents: AgentProfileInfo[],
+): boolean {
+  const agent = agents.find((a) => a.id === template.agent);
+  // Not in the list at all means the machine does not declare it - which for
+  // a peer running an older hub is every agent, and refusing them all would
+  // make the picker empty rather than merely optimistic.
+  return agent === undefined || startable(agent);
+}
+
 /** The one line under an agent's name in a list. */
 export function agentDetail(agent: AgentProfileInfo): string {
   if (agent.available === false) return agent.detail ?? `not found: ${agent.command}`;

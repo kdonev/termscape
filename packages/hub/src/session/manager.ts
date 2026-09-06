@@ -28,6 +28,14 @@ export const LAYOUT_DEBOUNCE_MS = 250;
 export interface StartOptions {
   workspaceId: string;
   profileId: string;
+  /**
+   * The template this came from and what it resolved to. Values, never argv:
+   * the agent declares how to spell them, which is the only way one template
+   * can name a model for CLIs that all spell `--model` differently.
+   */
+  template?: string | null;
+  model?: string;
+  effort?: string;
   name?: string;
   cwd?: string;
   spawnedBy?: string | null;
@@ -107,7 +115,14 @@ export class SessionManager extends EventEmitter {
 
   /** Build the resolved argv/env for a launch. `resume` swaps in --resume. */
   private buildSpec(
-    session: { id: string; address: string; cwd: string; agentSessionUuid: string | null },
+    session: {
+      id: string;
+      address: string;
+      cwd: string;
+      agentSessionUuid: string | null;
+      model?: string | null;
+      effort?: string | null;
+    },
     workspaceName: string,
     profile: AgentProfile,
     peers: string[],
@@ -120,6 +135,8 @@ export class SessionManager extends EventEmitter {
       cwd: session.cwd,
       session_uuid: session.agentSessionUuid ?? '',
       default_shell: profile.command,
+      model: session.model ?? '',
+      effort: session.effort ?? '',
     };
 
     if (profile.mcp) {
@@ -141,7 +158,24 @@ export class SessionManager extends EventEmitter {
       };
     }
 
-    const argTemplate = resume && profile.resumeArgs ? profile.resumeArgs : profile.args;
+    /*
+     * The model and effort fragments are appended, and a fragment for a value
+     * the session does not have disappears entirely rather than expanding to
+     * an empty string - `--model ''` is not the same request as no --model at
+     * all, and the CLIs treat it as an error.
+     *
+     * Appending is also what makes resume keep them: resume swaps the base
+     * args for resumeArgs and these ride along either way, so an agent comes
+     * back on the model it left with. That is the whole reason the values are
+     * on the session row rather than read from the template, which may have
+     * been edited since.
+     */
+    const base = resume && profile.resumeArgs ? profile.resumeArgs : profile.args;
+    const argTemplate = [
+      ...base,
+      ...(session.model && profile.modelArgs ? profile.modelArgs : []),
+      ...(session.effort && profile.effortArgs ? profile.effortArgs : []),
+    ];
 
     // Resolve to an absolute path here rather than at spawn time, so the
     // stored argv is exactly what will be run and a missing CLI is reported
@@ -185,6 +219,9 @@ export class SessionManager extends EventEmitter {
       name,
       address: makeAddress(ws.name, name),
       profile: profile.id,
+      template: opts.template ?? null,
+      model: opts.model ?? null,
+      effort: opts.effort ?? null,
       cwd,
       // Claude Code keys its conversation store by cwd + this uuid; holding on
       // to it is what makes --resume possible after a restart.

@@ -7,6 +7,7 @@ import {
   Workspace,
   WindowRect,
   AgentProfileInfo,
+  AgentTemplateInfo,
 } from './domain.js';
 
 /* ------------------------------------------------------------------ *
@@ -101,7 +102,17 @@ export const ClientMsg = z.discriminatedUnion('t', [
     t: z.literal('startSession'),
     requestId,
     workspaceId: z.string(),
+    /**
+     * A template id. Still called `profile` on the wire, and still resolved
+     * as a profile id when no template has that name, so a client from before
+     * templates existed keeps working — every agent has a bare template under
+     * its own name, so the two agree for all the old values.
+     */
     profile: z.string(),
+    /** Overrides for what the template already decided, from the dialog. */
+    model: z.string().optional(),
+    effort: z.string().optional(),
+    prompt: z.string().optional(),
     name: z.string().optional(),
     cwd: z.string().optional(),
   }),
@@ -190,6 +201,8 @@ export const HubState = z.object({
   viewport: Viewport,
   /** What this machine has. */
   profiles: z.array(AgentProfileInfo),
+  /** What the picker offers: agents plus the models and efforts already chosen. */
+  templates: z.array(AgentTemplateInfo),
   /**
    * What each attached machine has, by host id. Separate from `profiles`
    * because the answer is per machine: a host has its own PATH, and the

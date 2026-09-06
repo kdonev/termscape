@@ -48,6 +48,27 @@ export interface AgentProfile {
    * Used only when `modelsArgs` is absent or its command fails.
    */
   models?: string[];
+
+  /* ------------------------------------------------------- templates */
+
+  /**
+   * How this agent spells a model on the command line. `{{model}}` carries
+   * the value a template chose.
+   *
+   * A template holds *values*, not argv, because no two of these agents agree:
+   * Claude Code takes `--model`, opencode takes `-m provider/model`. So the
+   * template says which model and the agent says how to write it down.
+   *
+   * Absent means the agent takes no model here, and a template that names one
+   * for it is a configuration error reported at load rather than a flag
+   * silently dropped at launch. The whole fragment disappears when a template
+   * leaves the value unset - it does not expand to an empty string.
+   */
+  modelArgs?: string[];
+  /** The same for effort, with `{{effort}}`. */
+  effortArgs?: string[];
+  /** The effort levels this agent documents, for the dialog to offer. */
+  efforts?: string[];
 }
 
 function defaultShell(): string {
@@ -95,6 +116,11 @@ export const BUILTIN_PROFILES: Record<string, AgentProfile> = {
      * accepted too, which is why a template must not be limited to this list.
      */
     models: ['fable', 'opus', 'sonnet'],
+    // Both verified against `claude --help`: --model takes an alias or a full
+    // name, --effort takes low, medium, high, xhigh or max.
+    modelArgs: ['--model', '{{model}}'],
+    effortArgs: ['--effort', '{{effort}}'],
+    efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
     // Resume swaps --session-id for --resume; everything else is re-templated
     // identically, and crucially the session is relaunched in the same cwd,
     // because Claude Code keys its conversation store by working directory.
@@ -125,6 +151,12 @@ export const BUILTIN_PROFILES: Record<string, AgentProfile> = {
     // Real enumeration: one provider/model per line, 395 of them on the
     // machine this was written on.
     modelsArgs: ['models'],
+    // `-m provider/model` is a top-level option, so it applies to the TUI and
+    // not only to `run`. Verified against `opencode --help`.
+    modelArgs: ['-m', '{{model}}'],
+    // No effortArgs on purpose: `--variant` is documented under `opencode run`
+    // and is not a top-level option, so the TUI this profile starts does not
+    // take one. A template asking for an effort here is refused at load.
   },
   codex: {
     id: 'codex',
@@ -180,6 +212,9 @@ export class ProfileRegistry {
         const raw = parseToml(readFileSync(file, 'utf8')) as Record<string, any>;
         for (const [id, v] of Object.entries(raw)) {
           if (typeof v !== 'object' || v === null) continue;
+          // `[template.reviewer]` parses as one table named `template`, and it
+          // belongs to TemplateRegistry rather than here.
+          if (id === 'template') continue;
           const base = merged[id];
           merged[id] = {
             id,
@@ -195,6 +230,9 @@ export class ProfileRegistry {
             versionArgs: v.version_args ?? v.versionArgs ?? base?.versionArgs,
             modelsArgs: v.models_args ?? v.modelsArgs ?? base?.modelsArgs,
             models: v.models ?? base?.models,
+            modelArgs: v.model_args ?? v.modelArgs ?? base?.modelArgs,
+            effortArgs: v.effort_args ?? v.effortArgs ?? base?.effortArgs,
+            efforts: v.efforts ?? base?.efforts,
           };
         }
       } catch (err) {

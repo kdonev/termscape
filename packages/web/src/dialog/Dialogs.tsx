@@ -1,9 +1,13 @@
 import { useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
-import type { AckableMsg } from '@termscape/protocol';
+import type {
+  AckableMsg,
+  AgentProfileInfo,
+  AgentTemplateInfo,
+} from '@termscape/protocol';
 import { useStore, type DialogSpec } from '../state/store.js';
 import { pickValid } from '../state/selection.js';
-import { agentDetail, agentsOn, startable } from '../state/agents.js';
+import { agentDetail, agentsOn, startableAgent } from '../state/agents.js';
 import { sessionsIn } from '../state/tree.js';
 import { Dialog, DialogForm, Field } from './Dialog.js';
 import { JoinInstructions, SshForm } from './MachineForms.js';
@@ -202,10 +206,11 @@ function EditWorkspaceDialog({ workspaceId }: { workspaceId: string }) {
  */
 function StartAgentDialog({ workspaceId }: { workspaceId: string }) {
   const request = useRequest();
-  const { workspaces, profiles, hostProfiles } = useStore(
+  const { workspaces, profiles, templates, hostProfiles } = useStore(
     useShallow((s) => ({
       workspaces: s.workspaces,
       profiles: s.profiles,
+      templates: s.templates,
       hostProfiles: s.hostProfiles,
     })),
   );
@@ -214,14 +219,22 @@ function StartAgentDialog({ workspaceId }: { workspaceId: string }) {
   const hostId = workspace?.hostId ?? null;
   const agents = agentsOn(hostId, profiles, hostProfiles);
 
-  const [profile, setProfile] = useState('claude');
-  const offered = agents.filter(startable);
-  const active = pickValid(
-    profile,
-    offered.map((a) => ({ id: a.id })),
-    true,
-  );
-  const chosen = agents.find((a) => a.id === active);
+  // A template names an agent; whether that agent is installed is the other
+  // machine's answer, so the two lists are joined here rather than on the hub.
+  const offered = templates.filter((t) => !t.error && startableAgent(t, agents));
+  const [picked, setPicked] = useState('claude');
+  const active = pickValid(picked, offered, true);
+  const template = offered.find((t) => t.id === active);
+  const agent = agents.find((a) => a.id === template?.agent);
+
+  // Overrides. Empty means "whatever the template said", which is why these
+  // are strings rather than the template's values copied in: copying would
+  // make a later edit to the template invisible to a dialog left open.
+  const [model, setModel] = useState('');
+  const [effort, setEffort] = useState('');
+  const [prompt, setPrompt] = useState('');
+
+  const broken = templates.filter((t) => t.error);
   const missing = agents.filter((a) => a.available === false);
 
   return (
@@ -229,44 +242,106 @@ function StartAgentDialog({ workspaceId }: { workspaceId: string }) {
       <DialogForm
         submitLabel="start"
         canSubmit={Boolean(active)}
-        onSubmit={() => request({ t: 'startSession', workspaceId, profile: active })}
+        onSubmit={() =>
+          request({
+            t: 'startSession',
+            workspaceId,
+            profile: active,
+            model: model.trim() || undefined,
+            effort: effort.trim() || undefined,
+            prompt: prompt.trim() || undefined,
+          })
+        }
       >
-        <Field label="agent" hint={chosen ? agentDetail(chosen) : undefined}>
-          <select className="input" value={active} onChange={(e) => setProfile(e.target.value)}>
-            {offered.map((a) => (
-              <option key={a.id} value={a.id}>
-                {a.id}
-                {a.version ? ` — ${a.version}` : ''}
+        <Field
+          label="template"
+          hint={templateHint(template, agent)}
+        >
+          <select className="input" value={active} onChange={(e) => setPicked(e.target.value)}>
+            {offered.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.id}
+                {t.id === t.agent ? '' : ` — ${t.agent}`}
               </option>
             ))}
           </select>
         </Field>
 
-        {/* Read-only for now: which models exist is this feature, and
-            choosing one per agent is what templates are for. Showing them is
-            still the difference between typing a model from memory and
-            knowing what the CLI will accept. */}
-        {chosen && chosen.models.length > 0 && (
-          <Field
-            label="models it offers"
-            hint={
-              chosen.modelSource === 'listed'
-                ? `${chosen.models.length} listed by ${chosen.id} itself.`
-                : `Declared, not enumerated: ${chosen.id} has no listing command, and it takes full model names too.`
-            }
-          >
-            <div className="model-list">
-              {chosen.models.slice(0, 200).map((m) => (
-                <code key={m}>{m}</code>
-              ))}
-            </div>
-          </Field>
+        {/* Only offered for an agent that declares how to spell it. A template
+            holds a value; the agent says how to write it down, and one that
+            says nothing takes neither. */}
+        {agent && (agent.takesModel || agent.takesEffort) && (
+          <div className="dialog-row">
+            {agent.takesModel && (
+              <Field
+                label="model"
+                hint={
+                  template?.model
+                    ? `${template.id} uses ${template.model}.`
+                    : agent.modelSource === 'listed'
+                      ? `${agent.models.length} to choose from.`
+                      : 'Or a full model name.'
+                }
+              >
+                <input
+                  className="input"
+                  list={`models-${agent.id}`}
+                  placeholder={template?.model ?? "the agent's default"}
+                  value={model}
+                  onChange={(e) => setModel(e.target.value)}
+                />
+                <datalist id={`models-${agent.id}`}>
+                  {agent.models.map((m) => (
+                    <option key={m} value={m} />
+                  ))}
+                </datalist>
+              </Field>
+            )}
+            {agent.takesEffort && (
+              <Field
+                label="effort"
+                hint={template?.effort ? `${template.id} uses ${template.effort}.` : undefined}
+              >
+                <input
+                  className="input"
+                  list={`efforts-${agent.id}`}
+                  placeholder={template?.effort ?? 'default'}
+                  value={effort}
+                  onChange={(e) => setEffort(e.target.value)}
+                />
+                <datalist id={`efforts-${agent.id}`}>
+                  {agent.efforts.map((e) => (
+                    <option key={e} value={e} />
+                  ))}
+                </datalist>
+              </Field>
+            )}
+          </div>
+        )}
+
+        <Field
+          label="first instruction"
+          hint="Typed into the terminal once the CLI is up, not passed as an argument. It does not repeat when the session is resumed."
+        >
+          <textarea
+            className="input"
+            rows={3}
+            placeholder={template?.prompt ?? 'optional'}
+            value={prompt}
+            onChange={(e) => setPrompt(e.target.value)}
+          />
+        </Field>
+
+        {broken.length > 0 && (
+          <p className="dialog-note">
+            Not offered, from <code>agents.toml</code>:{' '}
+            {broken.map((t) => `${t.id} (${t.error})`).join('; ')}.
+          </p>
         )}
 
         {missing.length > 0 && (
           <p className="dialog-note">
-            Not on{' '}
-            {hostId ? "that machine's" : "this machine's"} PATH:{' '}
+            Not on {hostId ? "that machine's" : "this machine's"} PATH:{' '}
             {missing.map((a) => a.command).join(', ')}.
           </p>
         )}
@@ -280,11 +355,22 @@ function StartAgentDialog({ workspaceId }: { workspaceId: string }) {
           >
             check again
           </button>{' '}
-          if you have just installed one.
+          if you have just installed an agent.
         </p>
       </DialogForm>
     </Dialog>
   );
+}
+
+/** The line under the template picker: which agent, and is it actually there. */
+function templateHint(
+  template: AgentTemplateInfo | undefined,
+  agent: AgentProfileInfo | undefined,
+): string | undefined {
+  if (!template) return undefined;
+  const parts = [template.id === template.agent ? null : `Runs ${template.agent}.`];
+  if (agent) parts.push(agentDetail(agent));
+  return parts.filter(Boolean).join(' ') || undefined;
 }
 
 /* --------------------------------------------------------------- machines */

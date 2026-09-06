@@ -281,10 +281,15 @@ function SessionNode({ session }: { session: Session }) {
       onClick={() => requestFocus(session.id)}
     >
       <span className="dot" style={{ background: statusColor(session) }} />
-      <span className="node-label" title={session.address}>
+      <span className="node-label" title={describeSession(session)}>
         {session.title || session.name}
       </span>
       <span className="node-sub">{session.statusText ?? statusLabel(session)}</span>
+      {/* What the template resolved to, when it resolved to anything. This is
+          also what the session came back on after a restart, which is the
+          reason it is stored rather than looked up. */}
+      {session.model && <span className="node-tag">{session.model}</span>}
+      {session.effort && <span className="node-tag">{session.effort}</span>}
       <span className="spacer" />
       <button
         className="btn"
@@ -326,6 +331,12 @@ function SessionNode({ session }: { session: Session }) {
       </button>
     </div>
   );
+}
+
+/** The tooltip on an agent row: its address, and what it was started as. */
+function describeSession(s: Session): string {
+  const from = [s.template, s.model, s.effort].filter(Boolean).join(' · ');
+  return from ? `${s.address}\n${from}` : s.address;
 }
 
 function Twisty({ collapsed, onClick }: { collapsed: boolean; onClick: () => void }) {

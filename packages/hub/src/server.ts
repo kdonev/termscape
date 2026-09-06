@@ -227,6 +227,7 @@ export async function serve(opts: ServeOptions): Promise<ServeResult> {
     // "not probed yet" - it starts after this server is already listening, on
     // purpose, so nothing about spawning CLIs can delay a page.
     profiles: hub.agents.snapshot(),
+    templates: hub.templates.info(),
     hostProfiles: hub.peers.agentsByHost(),
   });
 
@@ -421,6 +422,9 @@ export async function serve(opts: ServeOptions): Promise<ServeResult> {
         await hub.startSession({
           workspaceId: msg.workspaceId,
           profile: msg.profile,
+          model: msg.model,
+          effort: msg.effort,
+          prompt: msg.prompt,
           name: msg.name,
           cwd: msg.cwd,
         });

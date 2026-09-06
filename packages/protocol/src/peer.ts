@@ -103,7 +103,21 @@ export const PeerRequest = z.discriminatedUnion('t', [
     id: z.string(),
     workspaceName: z.string(),
     rootPath: z.string(),
+    /** The *agent* id, resolved from the template before it crossed. */
     profile: z.string(),
+    /**
+     * Resolved values rather than a template id.
+     *
+     * A template is config, and the two machines do not share config: a name
+     * that means "opus, high effort" here may mean nothing over there, or
+     * something else. Resolving before the request crosses is the smaller
+     * change and the only one that works when the two disagree. The template
+     * id travels only so the window can say which one was picked.
+     */
+    template: z.string().nullable().optional(),
+    model: z.string().optional(),
+    effort: z.string().optional(),
+    prompt: z.string().optional(),
     name: z.string().optional(),
     spawnedByAddress: z.string().nullable(),
   }),

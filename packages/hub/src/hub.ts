@@ -20,6 +20,7 @@ import { openDb, type Db } from './db/index.js';
 import { Store } from './db/store.js';
 import { ProfileRegistry } from './agents/profiles.js';
 import { AgentDetector } from './agents/detect.js';
+import { TemplateRegistry } from './agents/templates.js';
 import { TokenRegistry } from './agents/tokens.js';
 import { MessageRouter } from './agents/router.js';
 import { SessionManager } from './session/manager.js';
@@ -65,6 +66,8 @@ export class Hub extends EventEmitter implements AgentApi {
   readonly db: Db;
   readonly store: Store;
   readonly profiles: ProfileRegistry;
+  /** What the picker offers: an agent plus a model, an effort and a first task. */
+  readonly templates: TemplateRegistry;
   /** What of those profiles this machine actually has installed. */
   readonly agents: AgentDetector;
   readonly tokens: TokenRegistry;
@@ -87,6 +90,7 @@ export class Hub extends EventEmitter implements AgentApi {
     this.db = openDb(opts.dbPath ?? paths.db());
     this.store = new Store(this.db);
     this.profiles = ProfileRegistry.load();
+    this.templates = TemplateRegistry.load(this.profiles);
     this.agents = new AgentDetector(this.profiles);
     // A joined hub is the only thing that knows its own PATH, so it says so
     // rather than waiting to be asked again; peer-serve forwards this to the
@@ -454,42 +458,127 @@ export class Hub extends EventEmitter implements AgentApi {
 
   /* ------------------------------------------------------------ sessions */
 
+  /**
+   * Turn what the picker sent into an agent, a model and an effort.
+   *
+   * `profile` on the wire is a *template* id, and it is still called profile
+   * because every agent has a bare template under its own name - so the value
+   * a client sent before templates existed still resolves, to the same thing
+   * it always did. Anything the caller passed explicitly beats the template,
+   * which is what makes the dialog's model dropdown an override rather than a
+   * second source of truth.
+   */
+  private resolveTemplate(opts: {
+    profile: string;
+    model?: string;
+    effort?: string;
+    prompt?: string;
+  }): { agent: string; template: string | null; model?: string; effort?: string; prompt?: string } {
+    const t = this.templates.get(opts.profile);
+    if (!t) {
+      // Not a template: an agent id straight from spawn_agent or an older
+      // client. Nothing has been chosen for it, which is today's behaviour.
+      return {
+        agent: opts.profile,
+        template: null,
+        model: opts.model,
+        effort: opts.effort,
+        prompt: opts.prompt,
+      };
+    }
+    if (t.error) throw new Error(`template "${t.id}": ${t.error}`);
+    return {
+      agent: t.agent,
+      template: t.id,
+      model: opts.model ?? t.model,
+      effort: opts.effort ?? t.effort,
+      prompt: opts.prompt ?? t.prompt,
+    };
+  }
+
   async startSession(opts: {
     workspaceId: string;
     profile: string;
+    model?: string;
+    effort?: string;
+    prompt?: string;
     name?: string;
     cwd?: string;
     spawnedBy?: string | null;
   }): Promise<Session> {
     const ws = this.store.getWorkspace(opts.workspaceId);
     if (!ws) throw new Error(`unknown workspace ${opts.workspaceId}`);
+    const picked = this.resolveTemplate(opts);
 
     // A workspace that belongs to a host runs its agents there. The peer owns
     // the PTY; what comes back is a session we show on our own canvas.
     if (ws.hostId) {
       const spawner = opts.spawnedBy ? this.sessions.get(opts.spawnedBy) : null;
+      // Resolved values cross, never the template id: a template is config
+      // and the two machines do not share config, so a name that means "opus,
+      // high effort" here may mean nothing over there. The id travels only so
+      // the window can say which one was picked.
       return this.peers.startSession(ws.hostId, {
         workspaceName: ws.name,
         rootPath: ws.rootPath,
-        profile: opts.profile,
+        profile: picked.agent,
+        template: picked.template,
+        model: picked.model,
+        effort: picked.effort,
+        prompt: picked.prompt,
         name: opts.name,
         spawnedByAddress: spawner?.address ?? null,
       });
     }
 
+    return this.startResolved({ ...opts, ...picked });
+  }
+
+  /**
+   * Start an agent whose template has already been resolved to values.
+   *
+   * Its own entry point because the peer path must not resolve again. A
+   * template is config and the two machines do not share config: if this hub
+   * happened to declare `[template.claude]` with a model, re-resolving an
+   * agent id the canvas sent would apply a choice the canvas never made.
+   */
+  async startResolved(opts: {
+    workspaceId: string;
+    agent: string;
+    template?: string | null;
+    model?: string;
+    effort?: string;
+    prompt?: string;
+    name?: string;
+    cwd?: string;
+    spawnedBy?: string | null;
+  }): Promise<Session> {
     const count = this.sessions.list().filter((s) => s.workspaceId === opts.workspaceId).length;
     if (count >= this.spawnCap) {
       throw new Error(
         `workspace already has ${count} agents (cap ${this.spawnCap}); stop one first`,
       );
     }
-    return this.sessions.start({
+    const session = await this.sessions.start({
       workspaceId: opts.workspaceId,
-      profileId: opts.profile,
-      name: opts.name,
+      profileId: opts.agent,
+      template: opts.template ?? null,
+      model: opts.model,
+      effort: opts.effort,
+      // A window called "reviewer" says more than one called "claude", so the
+      // template names the agent when nothing else did.
+      name: opts.name ?? opts.template ?? undefined,
       cwd: opts.cwd,
       spawnedBy: opts.spawnedBy ?? null,
     });
+
+    // Typed in once the CLI is up rather than written into argv, where it
+    // would be a different thing entirely - and not immediately, because it
+    // would land before the program is reading. Not awaited: the window
+    // should appear now, and the instruction arrives when the agent is ready.
+    if (opts.prompt) void this.deliverOpeningInstruction(session.id, opts.prompt);
+
+    return session;
   }
 
   async resumeWorkspace(workspaceId: string): Promise<Session[]> {
@@ -742,6 +831,34 @@ export class Hub extends EventEmitter implements AgentApi {
     fromAddr: string,
     prompt: string,
   ): Promise<void> {
+    // A spawned agent's first task came from another agent, so it is attributed
+    // exactly as any other message from that agent would be.
+    await this.typeWhenReady(sessionId, `[from ${fromAddr}] ${prompt}`);
+  }
+
+  /**
+   * A template's opening instruction, typed in plainly.
+   *
+   * Deliberately not through deliverInitialPrompt: that prefixes
+   * `[from <address>]`, which is right for a message from a peer and wrong
+   * for an instruction from the human sitting in front of the canvas. The
+   * agent's brief tells it that a `[from ...]` line is a colleague rather than
+   * the human, so wearing that prefix here would be a lie about who is asking.
+   */
+  private async deliverOpeningInstruction(
+    sessionId: string,
+    prompt: string,
+  ): Promise<void> {
+    await this.typeWhenReady(sessionId, prompt);
+  }
+
+  /**
+   * Wait for the CLI to be up, then type. Written straight away the text lands
+   * before the program is reading it; the wait is for output to arrive and
+   * then pause, which is as close to "it has drawn its prompt" as this gets
+   * without knowing the CLI.
+   */
+  private async typeWhenReady(sessionId: string, text: string): Promise<void> {
     const pty = this.sessions.pty(sessionId);
     if (!pty) return;
 
@@ -765,10 +882,7 @@ export class Hub extends EventEmitter implements AgentApi {
     if (!session) return;
     const mode = this.profiles.get(session.profile)?.inject ?? 'bracketed';
     try {
-      this.sessions.write(
-        sessionId,
-        encodeInjection(`[from ${fromAddr}] ${prompt}`, mode),
-      );
+      this.sessions.write(sessionId, encodeInjection(text, mode));
     } catch {
       // The agent died between the readiness check and the write; the message
       // log already reflects that it never started.

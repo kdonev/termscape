@@ -199,7 +199,47 @@ inject = "bracketed"          # bracketed paste, or "raw"
 version_args = ["--version"]  # how to ask its version, for the panel
 models_args = ["models"]      # optional: one model per line on stdout
 models = ["opus", "sonnet"]   # the answer when it has no listing command
+model_args = ["--model", "{{model}}"]    # how it spells a model, if it takes one
+effort_args = ["--effort", "{{effort}}"] # and an effort
+efforts = ["low", "high"]                # the levels it documents
 ```
+
+### Templates
+
+The picker offers **templates**, not CLIs. A template is an agent plus a model,
+an effort and an opening instruction — a saved answer to all four, picked once
+instead of typed every time. Every agent gets a bare template under its own
+name, so `claude` and `shell` are still there and nothing that worked stops
+working.
+
+```toml
+[template.reviewer]
+agent  = "claude"
+model  = "opus"
+effort = "high"
+prompt = "Review the diff on this branch for correctness bugs. Report, do not fix."
+```
+
+Three words, kept apart deliberately: an **agent** is the CLI program, a
+**template** is what you pick from the list, and a **session** is one running
+instance with an address and a window.
+
+- **A template holds values, not arguments.** Claude Code takes `--model` and
+  `--effort`; opencode takes `-m provider/model` and has no effort setting on
+  its TUI at all. So the template says *which* model, and the agent declares
+  how to spell it. An agent that declares nothing takes nothing, and a template
+  asking for a model or an effort it cannot spell is a configuration error
+  reported when the file loads — visible in the dialog, not a flag silently
+  dropped at launch.
+- **The first instruction is typed in once the CLI is up**, not passed as an
+  argument, and it does not repeat when a session is resumed. It is how the
+  session started, not what it is.
+- **A resumed session comes back on the model it left with.** What the template
+  resolved to is recorded on the session, because resume rebuilds the command
+  line rather than replaying it — and because a template can be edited
+  afterwards.
+- **Starting an agent on another machine sends values, not a template name.**
+  The two machines do not share config, so the name is resolved here first.
 
 ### What is actually installed
 

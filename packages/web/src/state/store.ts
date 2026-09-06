@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import type {
   AckableMsg,
   AgentProfileInfo,
+  AgentTemplateInfo,
   Host,
   Message,
   Session,
@@ -65,6 +66,8 @@ interface AppState {
   messages: Message[];
   /** What this machine has installed. */
   profiles: AgentProfileInfo[];
+  /** What the picker offers: an agent plus what has already been chosen for it. */
+  templates: AgentTemplateInfo[];
   /**
    * What each attached machine has, by host id. Per machine because a host
    * has its own PATH: starting an agent on a workspace over there sends a
@@ -125,6 +128,7 @@ export const useStore = create<AppState>((set, get) => ({
   sessions: [],
   messages: [],
   profiles: [],
+  templates: [],
   hostProfiles: {},
   viewport: { panX: 0, panY: 0, zoom: 1 },
   flashes: [],
@@ -151,6 +155,7 @@ export const useStore = create<AppState>((set, get) => ({
           sessions: m.state.sessions,
           messages: m.state.messages,
           profiles: m.state.profiles,
+          templates: m.state.templates,
           hostProfiles: m.state.hostProfiles,
           viewport: m.state.viewport,
           // This arrives on every reconnect, not only the first, so it can

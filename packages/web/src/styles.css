@@ -605,3 +605,22 @@ body {
   cursor: pointer;
   text-decoration: underline;
 }
+
+/* What a session's template resolved to, on its row in the tree. */
+.node-tag {
+  flex: 0 0 auto;
+  padding: 0 5px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  color: var(--muted);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+/* The opening instruction is the one multi-line field in the app, and the one
+   thing that could not fit in the tree at all. */
+.dialog-field textarea.input {
+  font: inherit;
+  resize: vertical;
+  min-height: 56px;
+}
