@@ -5,7 +5,7 @@ import { Hub, HUB_VERSION } from './hub.js';
 import { serve, MEMORABLE_PORTS } from './server.js';
 import { mintClientToken } from './agents/tokens.js';
 import { paths } from './paths.js';
-import { resolveBindHost } from './remote/lan.js';
+import { listenPlan } from './remote/lan.js';
 import { joinCanvas, type JoinLink } from './remote/join.js';
 import { openInBrowser } from './browser.js';
 import { ProfileRegistry } from './agents/profiles.js';
@@ -62,8 +62,10 @@ async function main(): Promise<void> {
 
   --port <n>        port to bind; 0 lets the OS pick. Default: the first
                     free memorable port (7777, 4242, ...)
-  --listen <addr>   bind address; "lan" picks this machine's own address so
-                    other machines can open the join page. Default: loopback
+  --listen <addr>   bind address. Default: every interface, so the canvas is
+                    reachable from your network with its token. "loopback"
+                    keeps it to this machine; "lan" also turns on the join
+                    page, which is served without the token
   --headless        serve no web UI; used when running as a remote hub
   --token <t>       client token to use instead of generating one
   --open            open the UI in the browser even when not on a terminal
@@ -88,12 +90,22 @@ Joining another machine's canvas:
   // files; on Windows a loaded .node cannot be deleted while it runs.
   writeFileSync(paths.pidFile(), String(process.pid));
 
-  const bindHost = values.listen ? resolveBindHost(values.listen) : undefined;
+  const plan = listenPlan(values.listen, { headless: values.headless });
 
   const hub = new Hub();
-  const { app, origin, enrollOrigin, enrollAltOrigin, port, peerServer } = await serve({
+  const {
+    app,
+    origin,
+    lanOrigin,
+    lanAltOrigin,
+    enrollOrigin,
+    enrollAltOrigin,
+    port,
+    peerServer,
+  } = await serve({
     hub,
-    host: bindHost,
+    host: plan.host,
+    enroll: plan.enroll,
     // The join page has to be typed by hand on another machine, so prefer a
     // port worth remembering unless one was asked for explicitly.
     port: values.port === undefined ? MEMORABLE_PORTS : Number(values.port),
@@ -105,20 +117,44 @@ Joining another machine's canvas:
   // A remote hub is parsed by the deployer, so keep this line machine-readable.
   console.log(`termscape hub ${HUB_VERSION} listening on ${origin}`);
   console.log(`TERMSCAPE_PORT=${port}`);
+
+  /*
+   * Binding wide is the default now, which makes it news rather than a
+   * confirmation - so it is said first, before the URLs, and it says what it
+   * costs before it says what it buys. The old banner put this last, where it
+   * read as an acknowledgement of something the operator had just typed.
+   */
+  if (!values.headless && lanOrigin) {
+    const where = lanOrigin.replace(/^http:\/\//, '');
+    console.log(`\n  on your network at ${where}`);
+    if (enrollOrigin) {
+      console.log(`          anyone who can reach it can load the join page and`);
+      console.log(`          attach a machine to this canvas. Everything else`);
+      console.log(`          needs the token below.`);
+    } else {
+      console.log(`          the canvas needs the token below, so this is worth`);
+      console.log(`          opening on a phone or a second screen.`);
+      console.log(`          --listen loopback keeps the hub to this machine.`);
+    }
+  }
+
   if (!values.headless) console.log(`\n  open:   ${url}`);
   // The canvas is worth opening from a phone or a second screen, and that
   // needs the token too - so offer the whole URL, not just the host.
-  if (!values.headless && enrollOrigin) {
-    console.log(`       or ${enrollOrigin}/?token=${clientToken}`);
-  }
-  if (enrollOrigin) {
-    // Say plainly what binding wider actually did. Every other route still
-    // requires the token, but the hub is on the network either way now.
-    console.log(`  enroll: ${enrollOrigin}/join`);
+  if (!values.headless && lanOrigin) {
+    console.log(`       or ${lanOrigin}/?token=${clientToken}`);
     // If the name does not resolve on the other machine, the IP always will.
+    if (lanAltOrigin) console.log(`       or ${lanAltOrigin}/?token=${clientToken}`);
+  }
+
+  if (enrollOrigin) {
+    console.log(`\n  enroll: ${enrollOrigin}/join`);
     if (enrollAltOrigin) console.log(`       or ${enrollAltOrigin}/join`);
-    console.log(`          reachable from your network — anyone who can load`);
-    console.log(`          that page can attach a machine to this canvas`);
+  } else if (!values.headless) {
+    // The join page is the point of --listen lan now that reachability is not,
+    // and a hub that never mentions it is a hub whose second machine is never
+    // attached.
+    console.log(`\n  to attach another machine, restart with --listen lan`);
   }
   if (!values.headless) console.log('');
 

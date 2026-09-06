@@ -72,8 +72,10 @@ function JoinTab({
     return (
       <div className="host-form">
         <p className="host-note">
-          This hub is bound to loopback, so no other machine can reach it.
-          Restart it with <code>--listen lan</code> to hand out a join link.
+          Handing out a join link is opt-in: <code>/join</code> is the one page
+          served without your token, because it has to be typed by hand on a
+          machine that has nothing yet. Restart the hub with{' '}
+          <code>--listen lan</code> to turn it on.
         </p>
       </div>
     );

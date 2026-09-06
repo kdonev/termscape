@@ -28,10 +28,17 @@ import { buildMcpServer, buildMcpTransport } from './mcp/server.js';
 export interface ServeOptions {
   hub: Hub;
   /**
-   * Bind address. Defaults to loopback; anything else is a deliberate choice
-   * by the operator to let other machines reach the join page.
+   * Bind address. Defaults to loopback. The CLI decides what a hub started by
+   * a person should bind — see listenPlan — and passes the answer here; this
+   * default is what the tests and any other caller get.
    */
   host?: string;
+  /**
+   * Whether `/join` answers. Off unless the operator asked for it, even when
+   * the bind is wide: the canvas is token-gated and the join page is not, so
+   * being reachable and being enrollable are two different permissions.
+   */
+  enroll?: boolean;
   /**
    * A port to bind exactly (0 lets the OS pick), or a list of candidates to
    * try in order until one is free.
@@ -52,7 +59,19 @@ export interface ServeResult {
    * specific non-loopback interface, where loopback genuinely will not answer.
    */
   origin: string;
-  /** Where another machine can reach the join page, or null when loopback-bound. */
+  /**
+   * Where another machine can reach this hub at all — the canvas included, so
+   * the token URL can be opened on a phone — or null when loopback-bound.
+   * Prefers this machine's name over its address.
+   */
+  lanOrigin: string | null;
+  /** The same origin by IP, when `lanOrigin` uses this machine's name. */
+  lanAltOrigin: string | null;
+  /**
+   * Where another machine can reach the join page: `lanOrigin` when
+   * enrollment was asked for, and null otherwise. A reachable hub that was
+   * not asked to enroll advertises no join page and serves none.
+   */
   enrollOrigin: string | null;
   /** The same origin by IP, when `enrollOrigin` uses this machine's name. */
   enrollAltOrigin: string | null;
@@ -178,6 +197,8 @@ export async function serve(opts: ServeOptions): Promise<ServeResult> {
 
   // The bind address is not known until listen() resolves, so the enroll
   // routes read it through a closure rather than a captured value.
+  let lanOrigin: string | null = null;
+  let lanAltOrigin: string | null = null;
   let enrollOrigin: string | null = null;
   let enrollAltOrigin: string | null = null;
   const enrollment = registerEnrollment(app, { hub, enrollOrigin: () => enrollOrigin });
@@ -499,9 +520,9 @@ export async function serve(opts: ServeOptions): Promise<ServeResult> {
 
   /* --------------------------------------------------------------- bind */
 
-  // Loopback unless the operator asked otherwise. An SSH-deployed hub is
-  // always reached through its tunnel and never binds wider; `--listen` exists
-  // so a machine can fetch the join page and enroll itself.
+  // Loopback unless the caller asked otherwise. The CLI widens this for a hub
+  // that serves a UI; an SSH-deployed hub is headless, is reached only through
+  // its tunnel, and gets the default.
   const host = opts.host ?? '127.0.0.1';
   const address = await listenOnFirstFree(app, host, opts.port ?? 0);
   const port = (app.server.address() as { port: number }).port;
@@ -517,12 +538,30 @@ export async function serve(opts: ServeOptions): Promise<ServeResult> {
     // Prefer this machine's name: it is the URL someone has to carry to
     // another machine and type in. The IP stays available underneath.
     const name = await preferredHostname(advertised);
-    enrollOrigin = `http://${name ?? advertised}:${port}`;
-    enrollAltOrigin = name ? `http://${advertised}:${port}` : null;
+    lanOrigin = `http://${name ?? advertised}:${port}`;
+    lanAltOrigin = name ? `http://${advertised}:${port}` : null;
+  }
+
+  // The join page reads enrollOrigin through its closure and 404s on null, so
+  // withholding the origin is what withholds the page - there is no second
+  // switch to keep in step with this one.
+  if (opts.enroll) {
+    enrollOrigin = lanOrigin;
+    enrollAltOrigin = lanAltOrigin;
   }
 
   void address;
-  return { app, origin, enrollOrigin, enrollAltOrigin, port, peerServer, enrollment };
+  return {
+    app,
+    origin,
+    lanOrigin,
+    lanAltOrigin,
+    enrollOrigin,
+    enrollAltOrigin,
+    port,
+    peerServer,
+    enrollment,
+  };
 }
 
 /**

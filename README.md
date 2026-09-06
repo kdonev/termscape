@@ -8,9 +8,10 @@ hub exposes. Agents can look each other up, send each other messages, spawn
 helpers into their workspace, and check on each other's terminals. A message
 from one agent is delivered by typing it into the other's terminal, immediately.
 
-Local-first: the hub runs on your machine, binds loopback only, and the UI is a
-browser tab. Other machines run the same hub as a daemon and appear on the same
-canvas.
+Local-first: the hub runs on your machine and the UI is a browser tab. It binds
+every interface, so the canvas opens on your phone or a second screen as well —
+with its token; `--listen loopback` keeps it to this machine. Other machines run
+the same hub as a daemon and appear on the same canvas.
 
 ## Getting started
 
@@ -22,6 +23,15 @@ That starts the hub and opens the canvas in your browser — pass `--no-open`
 if you would rather it did not; the URL is printed either way. Nothing is
 installed system-wide: state lives in `~/.termscape`, and deleting that
 directory is the uninstall.
+
+The hub is reachable from your network, so the same URL — token and all — opens
+the canvas on a phone or a second screen. Attaching another machine is a
+separate opt-in; see [Adding another machine](#adding-another-machine). To keep
+the hub to this machine entirely:
+
+```bash
+npx @kdonev/termscape --listen loopback
+```
 
 Slide out the **machines** panel: every machine, the workspaces on it, and
 the agents in each. Point a workspace at a folder there, and start an agent
@@ -68,8 +78,11 @@ next window.
 
 ## Adding another machine
 
-Start the hub so the other machine can see it, then let that machine come to
-you:
+The hub is already reachable from your network, but it does not hand out join
+links until asked. `/join` is the one page served without your token — it has
+to be typed by hand on a machine that has nothing yet — so being reachable and
+being enrollable are kept as two separate permissions. Turn the second one on,
+then let the other machine come to you:
 
 ```bash
 npx @kdonev/termscape --listen lan
@@ -136,9 +149,10 @@ have actually changed, and checks that tree really loads before trusting it.
 
 Two things worth knowing:
 
-- `--listen` is opt-in and off by default. With it, your hub is reachable on
-  that network, and anyone who can load the join page can attach a machine to
-  your canvas. Every other route still requires the token.
+- The **join page** is opt-in and off by default; `--listen lan` is what turns
+  it on. With it, anyone who can reach your hub can load that page and attach a
+  machine to your canvas. Every other route still requires the token, and being
+  reachable — which a default install already is — grants none of this.
 - Each download carries a single-use key that expires in 15 minutes. Once a
   machine has joined it keeps a durable token in `~/.termscape/host-token` and
   rejoins by itself after a reboot or a dropped link — its agents keep running
@@ -215,7 +229,13 @@ Agents can type into each other's terminals and spawn more agents. That is the
 feature, and it is the risk surface: an agent that reads a hostile repository
 could be talked into sending an attacker's text to a peer.
 
-- The hub binds `127.0.0.1` only, never a network interface. Remote hubs too.
+- The hub binds every interface, so the canvas is reachable from your network —
+  but only with its token, which is minted per run and never printed anywhere
+  the network can read. `--listen loopback` narrows it to this machine.
+- A hub running `--headless` — one that joined a canvas, or was deployed over
+  ssh and is reached through its tunnel — stays on `127.0.0.1` regardless.
+- `/join` is the only route served without the token, and it is off unless you
+  passed `--listen lan`.
 - Every agent gets its own bearer token. The sender of a message is taken from
   that token, never from the arguments, so attribution cannot be forged.
 - Messages are length-capped, rate-limited per sender, and always arrive with a

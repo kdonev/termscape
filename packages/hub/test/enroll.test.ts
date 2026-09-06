@@ -18,6 +18,8 @@ import {
   advertisedHost,
   coversLoopback,
   isLoopback,
+  lanAddress,
+  listenPlan,
   preferredHostname,
   resolveBindHost,
 } from '../src/remote/lan.js';
@@ -105,6 +107,15 @@ describe('bind address', () => {
     expect(advertisedHost('::1')).toBeNull();
     // A hub that nobody else can reach must not claim it has a join page.
     expect(servedA.enrollOrigin).toBeNull();
+    expect(servedA.lanOrigin).toBeNull();
+  });
+
+  it('spells the way back to loopback', () => {
+    // There was no need for this while loopback was the default. Now that a
+    // hub with a UI widens on its own, "narrower than the default" has to be
+    // sayable, and it is the sentence the banner points at.
+    expect(resolveBindHost('loopback')).toBe('127.0.0.1');
+    expect(listenPlan('loopback')).toEqual({ host: '127.0.0.1', enroll: false });
   });
 
   it('binds the wildcard for lan so loopback keeps answering', () => {
@@ -122,6 +133,102 @@ describe('bind address', () => {
   it('advertises the address it was told to bind', () => {
     expect(advertisedHost('192.168.1.40')).toBe('192.168.1.40');
     expect(advertisedHost('fd00::1')).toBe('[fd00::1]');
+  });
+});
+
+/*
+ * What a hub binds when nobody said. This is the promise the README used to
+ * make in the other direction, so it is worth pinning down rather than
+ * inferring from the banner.
+ */
+describe('the default bind', () => {
+  it('goes wide for a hub with a canvas', () => {
+    expect(listenPlan(undefined, { hasLan: true })).toEqual({
+      host: '0.0.0.0',
+      enroll: false,
+    });
+  });
+
+  it('stays on loopback for a headless hub', () => {
+    // Headless means a hub that joined a canvas or was deployed over SSH. The
+    // SSH one is reached only through its tunnel, and widening it would put a
+    // hub on a network whose operator never asked for it and cannot see it.
+    expect(listenPlan(undefined, { headless: true, hasLan: true })).toEqual({
+      host: '127.0.0.1',
+      enroll: false,
+    });
+  });
+
+  it('falls back to loopback rather than throwing with no lan address', () => {
+    // resolveBindHost throws here, which is right for a flag someone typed
+    // and wrong for a default: a machine off the network must still start.
+    expect(listenPlan(undefined, { hasLan: false })).toEqual({
+      host: '127.0.0.1',
+      enroll: false,
+    });
+  });
+
+  it('does not hand out enrollments until asked', () => {
+    // Reachable and enrollable are two permissions. The canvas carries a
+    // token; /join deliberately does not, because it has to be typed by hand
+    // on a machine that has nothing yet. So the wide default gives the first
+    // and --listen lan is still what gives the second.
+    expect(listenPlan(undefined, { hasLan: true }).enroll).toBe(false);
+    expect(listenPlan('lan', { hasLan: true }).enroll).toBe(true);
+    expect(listenPlan('192.168.1.40').enroll).toBe(true);
+    expect(listenPlan('127.0.0.1').enroll).toBe(false);
+  });
+});
+
+describe('reachable without being enrollable', () => {
+  const skip = lanAddress() === null;
+
+  it.skipIf(skip)('serves no join page on a wide bind that was not asked to', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'termscape-wide-'));
+    const hub = new Hub({ dbPath: join(home, 'state.db') });
+    const served = await serve({
+      hub,
+      host: '0.0.0.0',
+      port: 0,
+      clientToken: 'wide',
+      headless: true,
+    });
+    try {
+      // Another machine can reach it...
+      expect(served.lanOrigin).not.toBeNull();
+      // ...and still gets nothing from the one route that needs no token.
+      expect(served.enrollOrigin).toBeNull();
+      const res = await served.app.inject({ method: 'GET', url: '/join' });
+      expect(res.statusCode).toBe(404);
+      const sh = await served.app.inject({ method: 'GET', url: '/join.sh' });
+      expect(sh.statusCode).toBe(404);
+    } finally {
+      hub.shutdown();
+      await served.app.close();
+      removeTree(home);
+    }
+  });
+
+  it.skipIf(skip)('serves one when it was', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'termscape-enrollable-'));
+    const hub = new Hub({ dbPath: join(home, 'state.db') });
+    const served = await serve({
+      hub,
+      host: '0.0.0.0',
+      enroll: true,
+      port: 0,
+      clientToken: 'enrollable',
+      headless: true,
+    });
+    try {
+      expect(served.enrollOrigin).toBe(served.lanOrigin);
+      const res = await served.app.inject({ method: 'GET', url: '/join' });
+      expect(res.statusCode).toBe(200);
+    } finally {
+      hub.shutdown();
+      await served.app.close();
+      removeTree(home);
+    }
   });
 });
 

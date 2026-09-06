@@ -34,8 +34,13 @@ export function lanAddress(): string | null {
  * config points. Binding the LAN address by itself would take the hub off
  * 127.0.0.1 and break both. The LAN address is still what gets *advertised* —
  * see advertisedHost.
+ *
+ * `loopback` is the way back. It was not needed while loopback was the
+ * default and nothing could be narrower; now that a hub with a UI binds wide
+ * on its own, there has to be a spelling for "only this machine".
  */
 export function resolveBindHost(spec: string): string {
+  if (spec === 'loopback') return '127.0.0.1';
   if (spec === 'lan') {
     if (!lanAddress()) {
       throw new Error(
@@ -46,6 +51,59 @@ export function resolveBindHost(spec: string): string {
     return '0.0.0.0';
   }
   return spec;
+}
+
+/** What a hub binds and whether it hands out enrollments. */
+export interface ListenPlan {
+  /** The address passed to listen(). */
+  host: string;
+  /**
+   * Whether `/join` answers. Separate from the bind on purpose: see
+   * listenPlan.
+   */
+  enroll: boolean;
+}
+
+/**
+ * Decide what to bind, and whether to hand out enrollments, from `--listen`.
+ *
+ * A hub with a UI binds wide by default. The canvas is worth opening on a
+ * phone or a second screen and a second machine is worth attaching, and
+ * neither is discoverable from a hub that only ever prints 127.0.0.1. Every
+ * route that matters still requires the client token, so what widens is which
+ * interfaces answer, not who gets in.
+ *
+ * Two things are deliberately *not* covered by that default:
+ *
+ * - **A headless hub stays on loopback.** Headless means a hub that joined a
+ *   canvas or was deployed over SSH, and the SSH one is reached only through
+ *   its tunnel — binding it wide would put a hub on a network that its
+ *   operator never asked to expose and cannot see. It has no UI to reach
+ *   anyway, so there is nothing to gain against that.
+ * - **Enrollment stays opt-in.** `/join` is the one route served without the
+ *   token, because it has to be typed by hand on a machine that has nothing
+ *   yet. A token-gated canvas on the café wi-fi is a different proposition
+ *   from a page that hands anyone an installer and a slot on your canvas. So
+ *   the default is reachable, and `--listen lan` is still what makes it
+ *   enrollable.
+ *
+ * `hasLan` is injected so this is testable without a network interface; the
+ * fallback matters because a machine with no non-loopback address must still
+ * start rather than throw the way an explicit `--listen lan` does.
+ */
+export function listenPlan(
+  spec: string | undefined,
+  opts: { headless?: boolean; hasLan?: boolean } = {},
+): ListenPlan {
+  const hasLan = opts.hasLan ?? lanAddress() !== null;
+  if (spec === undefined) {
+    const wide = !opts.headless && hasLan;
+    return { host: wide ? '0.0.0.0' : '127.0.0.1', enroll: false };
+  }
+  const host = resolveBindHost(spec);
+  // Asking for a wider bind by hand is the deliberate act that turns the join
+  // page on; it is what `--listen lan` has always meant.
+  return { host, enroll: !isLoopback(host) };
 }
 
 /** Whether a bind on this address also answers on 127.0.0.1. */
