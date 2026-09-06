@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeAll, afterAll } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -7,6 +7,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import type { FastifyInstance } from 'fastify';
 import { Hub } from '../src/hub.js';
 import { serve } from '../src/server.js';
+import { removeTree } from './tmp.js';
 
 /**
  * End-to-end proof of the core idea, with no LLM in the loop: two real PTYs
@@ -79,7 +80,7 @@ beforeAll(async () => {
 afterAll(async () => {
   hub.shutdown();
   await app.close();
-  rmSync(home, { recursive: true, force: true });
+  removeTree(home);
   delete process.env.TERMSCAPE_HOME;
 });
 

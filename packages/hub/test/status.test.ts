@@ -1,10 +1,11 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { PtySession } from '../src/session/pty.js';
 import { writeWiring } from '../src/agents/wiring.js';
 import type { AgentProfile } from '../src/agents/profiles.js';
+import { removeTree } from './tmp.js';
 
 /**
  * What the status dot is showing. These spawn real PTYs running a program that
@@ -103,7 +104,7 @@ describe('the hooks an agent is wired with', () => {
 
   afterAll(() => {
     delete process.env.TERMSCAPE_HOME;
-    rmSync(home, { recursive: true, force: true });
+    removeTree(home);
   });
 
   const profile = (status: 'hooks' | 'heuristic'): AgentProfile =>

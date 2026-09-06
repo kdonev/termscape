@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeAll, afterAll } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -9,6 +9,7 @@ import type { FastifyInstance } from 'fastify';
 import type { Host } from '@termscape/protocol';
 import { Hub, HUB_VERSION } from '../src/hub.js';
 import { serve } from '../src/server.js';
+import { removeTree } from './tmp.js';
 
 /**
  * Cross-host behaviour without SSH.
@@ -133,8 +134,8 @@ afterAll(async () => {
   hubB.shutdown();
   await appA.close();
   await appB.close();
-  rmSync(homeA, { recursive: true, force: true });
-  rmSync(homeB, { recursive: true, force: true });
+  removeTree(homeA);
+  removeTree(homeB);
   delete process.env.TERMSCAPE_HOME;
 });
 

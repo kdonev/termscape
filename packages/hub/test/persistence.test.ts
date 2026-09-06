@@ -1,10 +1,11 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openDb, LATEST_VERSION } from '../src/db/index.js';
 import { runMigrations } from '../src/db/migrations.js';
 import { Store, DEFAULT_WINDOW } from '../src/db/store.js';
+import { removeTree } from './tmp.js';
 
 let dir: string;
 
@@ -13,7 +14,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  rmSync(dir, { recursive: true, force: true });
+  removeTree(dir);
 });
 
 describe('migrations', () => {

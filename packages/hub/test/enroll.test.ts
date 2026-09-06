@@ -1,6 +1,6 @@
 import { describe, expect, it, beforeAll, afterAll } from 'vitest';
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Fastify, { type FastifyInstance } from 'fastify';
@@ -21,6 +21,7 @@ import {
   preferredHostname,
   resolveBindHost,
 } from '../src/remote/lan.js';
+import { removeTree } from './tmp.js';
 
 /**
  * Enrollment: a machine fetches the installer, runs it, and dials in.
@@ -92,8 +93,8 @@ afterAll(async () => {
   hubB.shutdown();
   await servedA.app.close();
   await servedB.app.close();
-  rmSync(homeA, { recursive: true, force: true });
-  rmSync(homeB, { recursive: true, force: true });
+  removeTree(homeA);
+  removeTree(homeB);
   delete process.env.TERMSCAPE_HOME;
 });
 
