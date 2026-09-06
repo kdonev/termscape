@@ -75,3 +75,36 @@ inside its own frame, wherever its agents happen to be running.
   or fit — which can read as a missing frame. If a frame is genuinely missing
   for a workspace on this machine, that is a different fault and this entry
   does not cover it.
+
+---
+
+## 3. One notch of a mouse wheel zooms far too far
+
+**What you see.** Zooming with a mouse wheel jumps rather than moves. A single
+notch doubles the zoom going in, and a single notch going out drops it to a
+fifth — so a notch out followed by a notch in leaves the canvas at 0.4x of
+where it started, and finding a comfortable zoom means overshooting in both
+directions. A trackpad pinch is fine; this is the wheel.
+
+**What should happen.** A notch is a small step — something in the region of
+1.1x — and a notch each way returns you to where you were. The steps a
+trackpad pinch produces stay as smooth as they are now.
+
+**Where it lives.**
+- `packages/web/src/canvas/viewport.ts:334` — `wheelZoomFactor`, and the whole
+  fault is visible in one line: `1 - deltaY * 0.01` against a mouse notch of
+  `deltaY` 100 gives 2.0 zooming in and 0 zooming out, and the clamp turns that
+  0 into 0.2. Hence both the size of the jump and its asymmetry.
+- The clamp is not the thing to just loosen. It is there because a factor of
+  zero also destroys the pinch detector: `pinchIntent` accumulates a ratio out
+  of these factors (`viewport.ts:397`), and zeroes tell it nothing. Whatever
+  replaces the formula has to keep feeding that something meaningful.
+- Nor is lowering the 0.01 coefficient on its own the fix: trackpad deltas are
+  small and already produce ~1.04 per event, and scaling everything down makes
+  a pinch sluggish. The two input kinds have to be told apart — `deltaMode`,
+  or the magnitude of the delta, at `packages/web/src/canvas/Canvas.tsx:535`
+  where the event is still in hand — and only the discrete one re-scaled.
+- `packages/web/test/viewport.test.ts:412` — the existing expectations encode
+  the current behaviour, including `wheelZoomFactor(-1000) === 5`. They will
+  need rewriting alongside, and are the right place to pin down that a notch
+  each way is a round trip.
