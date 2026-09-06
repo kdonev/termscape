@@ -4,7 +4,7 @@ Wanted features, next first. Each entry says what it is, how it should behave,
 and where the code lives. Delete an entry when it ships — the git history keeps
 the record.
 
-The order is not arbitrary, and 3, 4 and 5 are a chain that only reads one way:
+The order is not arbitrary, and 2, 3 and 4 are a chain that only reads one way:
 
 - **The dialog comes before the picker gets richer.** Detection wants to show,
   per machine, which agents are there, which are missing and why, what version
@@ -12,63 +12,19 @@ The order is not arbitrary, and 3, 4 and 5 are a chain that only reads one way:
   picker lives in now, so building it inline would mean building it twice.
 - **Detection comes before templates.** A template holds a model and an effort
   as *values*, and the agent declares how to spell them as flags. Those
-  spellings are what entry 4 establishes — and it says outright that two of the
+  spellings are what entry 3 establishes — and it says outright that two of the
   four are still unverified. Templates built on guesses get rebuilt.
-- **Entry 3 says so itself**, under "This is what makes entry 5 fit": the
+- **Entry 2 says so itself**, under "This is what makes entry 4 fit": the
   dialog is a prerequisite for templates rather than a polish item.
 
-Entries 1 and 2 sit outside that chain. 1 is a few lines and blocks nothing.
-2 is independent of all the UI work, so it can be taken whenever — it is second
-because it is the one that makes an existing feature discoverable rather than
-adding a new one, not because anything waits on it.
+Entry 1 sits outside that chain, independent of all the UI work, so it can be
+taken whenever — it is first because it is the one that makes an existing
+feature discoverable rather than adding a new one, not because anything waits
+on it.
 
 ---
 
-## 1. Clicking the canvas closes the side panel
-
-**What it is.** The machines panel slides over the right of the canvas and only
-closes from its own `›` button or the toolbar. Reaching for either is a
-detour when the thing you actually want is the canvas you can already see.
-Clicking the canvas should close it.
-
-**How it behaves.**
-
-- **Any pointer down inside the canvas closes it**, whether it lands on empty
-  canvas or on a terminal window. Both mean the same thing: you are done with
-  the list and back on the canvas.
-- **Nothing inside the panel closes it.** Adding a workspace, starting an
-  agent, expanding a node — all of that is panel work, and the panel is a
-  sibling of the canvas rather than a child, so those clicks never reach it.
-- **Clicking an agent row is the exception worth thinking about.** It moves the
-  canvas to that window, and the click is on the panel, so the panel stays
-  open — which is right when you are working down a list of agents, and wrong
-  if you meant to go there and get on with it. Leave it open, since the canvas
-  is one click away from closing it anyway.
-- **Escape should close it too**, before it clears the selection, so the key
-  unwinds one thing at a time.
-
-**Where it lives.**
-
-- `packages/web/src/canvas/Canvas.tsx:211` — `onPointerDown` on `.canvas`. Note
-  its second line returns early unless the event landed on the canvas itself,
-  which is what stops a click on a window from starting a pan. The close
-  belongs *above* that guard: pointer events from a window bubble up to this
-  element, so one line there covers both cases and no change to
-  `window/TerminalWindow.tsx` is needed.
-- `packages/web/src/state/store.ts:210` — `setPanelOpen`. Worth guarding on the
-  current value rather than writing `false` on every canvas click: each write
-  is a new store object and a re-render for everything subscribed to it, and
-  most canvas clicks happen with the panel already shut.
-- `packages/web/src/canvas/Canvas.tsx:600` — the Escape branch, if that half is
-  taken as well. It currently clears the selection unconditionally; it would
-  need to close the panel first and clear the selection only when the panel was
-  already closed.
-- `packages/web/src/panel/Panel.tsx:44` — the `›` button, which stays as the
-  deliberate way to close it.
-
----
-
-## 2. Reach the canvas from another machine without being told to
+## 1. Reach the canvas from another machine without being told to
 
 **What it is.** The hub binds loopback and nothing else unless you pass
 `--listen lan`. That is one flag more than most people will find: the canvas is
@@ -137,7 +93,7 @@ café. It should be taken deliberately or not at all.
 
 ---
 
-## 3. Add and edit in a dialog, not in the tree
+## 2. Add and edit in a dialog, not in the tree
 
 **What it is.** Adding a workspace, starting an agent and attaching a machine
 all open a small form *inside* the tree, in a 420px panel. The fields wrap, the
@@ -155,7 +111,7 @@ live at all.
   host's ssh details today, because there is nowhere to put the form. Once the
   dialog exists, an *edit* on a node is the same dialog opened with values in
   it, and that is most of the work of adding editing at all.
-- **This is what makes entry 5 fit.** A template is an agent, a model, an
+- **This is what makes entry 4 fit.** A template is an agent, a model, an
   effort and an opening instruction — four fields, one of them multi-line.
   There is no version of that which belongs inline in a 420px column, so the
   dialog is a prerequisite rather than a polish item.
@@ -192,7 +148,7 @@ live at all.
 
 ---
 
-## 4. Find the agents already installed, and the models they offer
+## 3. Find the agents already installed, and the models they offer
 
 **What it is.** The picker offers whatever `agents.toml` declares, and only
 `claude` and `shell` are built in. A machine usually has more than that on its
@@ -263,7 +219,7 @@ that *were* installed both differed from what had been assumed of them.
 
 ---
 
-## 5. Agent templates: which agent, which model, how much effort, and a first instruction
+## 4. Agent templates: which agent, which model, how much effort, and a first instruction
 
 **What it is.** Starting an agent asks one question — which CLI — and nothing
 else. Everything that actually distinguishes one agent from another is missing:
@@ -304,7 +260,7 @@ is internally: the recipe for launching one CLI.
 - **Model and effort are per-agent flags, and this is the hard part.** Claude
   Code takes `--model` and `--effort`; opencode takes `run -m provider/model`
   and calls effort `--variant`; Codex and Gemini spell both differently again
-  (see entry 4, finding the agents, for what is verified and what is not).
+  (see entry 3, finding the agents, for what is verified and what is not).
   So a template
   cannot hold argv — it holds *values*, and the agent declares how to spell
   them. The `{{...}}` substitution already used for the MCP config path

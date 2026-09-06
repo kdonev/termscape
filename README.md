@@ -35,6 +35,8 @@ in it.
   ordinary pace is left alone
 - Below 60% zoom terminals become preview cards — zoom in to interact
 - Clicking an agent in the panel brings the canvas to it
+- Clicking the canvas closes the panel, as does **Escape** — which closes the
+  panel first and clears the selection only once it is shut
 
 ## Requirements
 

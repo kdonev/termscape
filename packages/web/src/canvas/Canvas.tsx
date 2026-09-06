@@ -96,7 +96,7 @@ export function Canvas() {
   const settleRef = useRef<number | null>(null);
   const [devicePixelRatio, setDevicePixelRatio] = useState(dpr);
 
-  const { sessions, workspaces, viewport, setViewport, selectedId, select } = useStore(
+  const { sessions, workspaces, viewport, setViewport, selectedId, select, setPanelOpen } = useStore(
     useShallow((s) => ({
       sessions: s.sessions,
       workspaces: s.workspaces,
@@ -104,6 +104,7 @@ export function Canvas() {
       setViewport: s.setViewport,
       selectedId: s.selectedId,
       select: s.select,
+      setPanelOpen: s.setPanelOpen,
     })),
   );
 
@@ -210,6 +211,11 @@ export function Canvas() {
 
   const onPointerDown = useCallback(
     (e: React.PointerEvent) => {
+      // Above the pan guard on purpose. Pointer events from a terminal window
+      // bubble up to this element, so landing on a window and landing on empty
+      // canvas both mean the same thing here: done with the list, back on the
+      // canvas. Only the pan below cares which one it was.
+      setPanelOpen(false);
       // Empty canvas, middle button, or space-drag starts a pan.
       if (e.target !== e.currentTarget && e.button !== 1) return;
       if (e.button === 0) select(null);
@@ -217,7 +223,7 @@ export function Canvas() {
       setPanning(true);
       (e.currentTarget as Element).setPointerCapture(e.pointerId);
     },
-    [select],
+    [select, setPanelOpen],
   );
 
   const onPointerMove = useCallback(
@@ -597,11 +603,18 @@ export function Canvas() {
         e.preventDefault();
         if (selectedId) toggleMaximize(selectedId);
       }
-      if (e.key === 'Escape') select(null);
+      // Escape unwinds one thing at a time: the panel first if it is open,
+      // and only then the selection. Read at keydown rather than subscribed to,
+      // so opening the panel does not re-render the canvas and every terminal
+      // on it.
+      if (e.key === 'Escape') {
+        if (useStore.getState().panelOpen) setPanelOpen(false);
+        else select(null);
+      }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [sessions, size, glideTo, select, selectedId, toggleMaximize]);
+  }, [sessions, size, glideTo, select, selectedId, toggleMaximize, setPanelOpen]);
 
   /**
    * The window whose button should offer to go back, rather than the one we

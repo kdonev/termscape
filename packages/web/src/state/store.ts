@@ -207,7 +207,12 @@ export const useStore = create<AppState>((set, get) => ({
   requestFocus: (sessionId) =>
     set({ selectedId: sessionId, focusRequest: { sessionId, at: Date.now() } }),
 
-  setPanelOpen: (panelOpen) => set({ panelOpen }),
+  // Guarded rather than a plain write: clicking the canvas closes the panel,
+  // and most canvas clicks happen with it already shut. Returning the state
+  // itself is zustand's no-op - it bails on Object.is before notifying, so a
+  // click on empty canvas re-renders nothing.
+  setPanelOpen: (panelOpen) =>
+    set((s) => (s.panelOpen === panelOpen ? s : { panelOpen })),
 
   takeSnapshot: (sessionId) => {
     const s = get().pendingSnapshots.get(sessionId);
