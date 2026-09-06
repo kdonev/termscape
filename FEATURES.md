@@ -264,3 +264,72 @@ live at all.
 - Use the native `<dialog>` element rather than a div with a high z-index: it
   gives the backdrop, the focus trap and Escape without writing any of them,
   and `showModal()` is supported everywhere this app runs.
+
+---
+
+## 5. Reach the canvas from another machine without being told to
+
+**What it is.** The hub binds loopback and nothing else unless you pass
+`--listen lan`. That is one flag more than most people will find: the canvas is
+worth opening on a second screen or a phone, and attaching a second machine is
+the feature the join page exists for, and neither is discoverable from a hub
+that only ever prints `127.0.0.1`. Running the package should bind so other
+machines can reach it, and loopback should keep working exactly as it does now.
+
+Say plainly what this trades. Today a fresh install is reachable by nothing but
+the browser on the same machine, and going wider is a decision someone makes on
+purpose. Afterwards every install is on the network by default, and the join
+page — the one route that is deliberately unauthenticated, so it can be typed
+by hand — answers anyone who can reach the port. That is a real change in what
+a default install exposes, on a laptop that moves between a home network and a
+café. It should be taken deliberately or not at all.
+
+**How it behaves.**
+
+- **The bind widens; the token does not move.** `--listen lan` already resolves
+  to `0.0.0.0` rather than the LAN address alone, precisely so loopback keeps
+  answering — the browser opens the canvas there and every agent's generated
+  MCP config points there. Making it the default changes which interfaces
+  answer and nothing else. The canvas, the WebSocket and `/mcp` still require
+  the client token.
+- **A machine with no LAN address must still start.** `resolveBindHost`
+  (`packages/hub/src/remote/lan.ts:38`) throws when there is no non-loopback
+  IPv4 address, which is right for a flag someone typed and wrong for a
+  default. As a default it has to fall back to loopback quietly.
+- **`--listen loopback` becomes the way back.** There is currently no spelling
+  for "narrower than the default", because the default was the narrowest thing
+  there was. It needs one, and `--listen 127.0.0.1` already works — it just has
+  to be documented as the opt-out rather than as an oddity.
+- **The startup banner has to lead with the consequence.** It already prints
+  the enroll URL and a "reachable from your network" note when bound wide, but
+  that reads as confirmation of something you asked for. As a default it is
+  news, and should be the first thing said, not the last.
+- **Worth pairing with a narrower join page.** The enrollment token is already
+  single-use and expires in fifteen minutes
+  (`packages/hub/src/remote/enroll.ts:29`), but the page that hands one out is
+  reachable by anyone who can reach the port. If the hub is on the network by
+  default, that page should probably be off until asked for — which would make
+  this change "reachable by default, enrollable on request" rather than both.
+
+**Where it lives.**
+
+- `packages/hub/src/cli.ts:91` — `values.listen ? resolveBindHost(values.listen)
+  : undefined`, where `undefined` currently means loopback. This is the line
+  that changes.
+- `packages/hub/src/remote/lan.ts:38` — `resolveBindHost`, and the comment above
+  it explaining why `lan` binds the wildcard. It needs a non-throwing path for
+  the default case.
+- `packages/hub/src/cli.ts:43,65` — the `listen` option and its help text, which
+  has to describe the default and the way out of it.
+- `packages/hub/src/cli.ts:106-121` — the banner, including the existing
+  `enroll:` and "reachable from your network" lines.
+- `packages/hub/src/server.ts:34` — `ServeOptions.host`, and `advertisedHost` /
+  `coversLoopback` around it, which already do the right thing for a wide bind
+  and should need no change.
+- `README.md` — the requirements and the "Adding another machine" section, which
+  currently states that `--listen` is opt-in and off by default. That sentence
+  is the promise being reversed, so it is the one to rewrite first.
+- `packages/hub/test/enroll.test.ts:101` — the `bind address` block, which
+  asserts today's behaviour directly: `advertisedHost('127.0.0.1')` is null and
+  `servedA.enrollOrigin` is null. Those expectations encode the old default and
+  are the honest measure of whether this landed.
