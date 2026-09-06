@@ -43,11 +43,8 @@ in it.
   is the profile that ships configured
 - macOS, Windows, or Linux
 
-On **Linux**, expect the first install to take a minute: `node-pty` publishes
-prebuilt binaries for macOS and Windows only, so it is compiled on the way in
-and needs a toolchain —
-`sudo apt install -y python3 build-essential` on Debian/Ubuntu, or the
-equivalent for your distribution. macOS and Windows install prebuilt.
+Everything native is prebuilt on all three platforms, so no compiler is
+needed.
 
 ## How it fits together
 

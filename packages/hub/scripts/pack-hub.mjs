@@ -23,6 +23,7 @@
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
+  copyFileSync,
   cpSync,
   existsSync,
   mkdirSync,
@@ -80,6 +81,23 @@ function depsFingerprint(dependencies, protocolDir) {
   return h.digest('hex').slice(0, 32);
 }
 
+/**
+ * Move a file that may be crossing a device boundary.
+ *
+ * The staging directories live in the OS temp dir, which is not always on the
+ * same volume as the repo - on a Windows CI runner temp is C: and the checkout
+ * is D:, and renameSync fails there with EXDEV rather than falling back.
+ */
+function moveFile(from, to) {
+  try {
+    renameSync(from, to);
+  } catch (err) {
+    if (err.code !== 'EXDEV') throw err;
+    copyFileSync(from, to);
+    rmSync(from, { force: true });
+  }
+}
+
 function pack(cwdOrTarget, destination, workspace) {
   const args = ['pack', '--pack-destination', destination];
   if (workspace) args.push('-w', workspace);
@@ -116,7 +134,7 @@ try {
 
   const vendorDir = join(staging, 'vendor');
   mkdirSync(vendorDir, { recursive: true });
-  renameSync(pack(null, vendorDir, '@termscape/protocol'), join(staging, VENDORED_PROTOCOL));
+  moveFile(pack(null, vendorDir, '@termscape/protocol'), join(staging, VENDORED_PROTOCOL));
 
   const manifest = JSON.parse(readFileSync(join(pkgRoot, 'package.json'), 'utf8'));
   manifest.dependencies['@termscape/protocol'] = `file:${VENDORED_PROTOCOL}`;
@@ -138,7 +156,7 @@ try {
   );
 
   mkdirSync(dist, { recursive: true });
-  renameSync(pack(staging, scratch), target);
+  moveFile(pack(staging, scratch), target);
   console.log(`packed hub + protocol -> dist/hub.tgz`);
 } finally {
   rmSync(staging, { recursive: true, force: true });

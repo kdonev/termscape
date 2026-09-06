@@ -30,9 +30,10 @@ jobs:
       # honour the flag.
       - run: npm ci --ignore-scripts
 
-      # --ignore-scripts also skips the one native build that is real. node-pty
-      # publishes prebuilds for macOS and Windows only, so this is a no-op there
-      # and a genuine compile on Linux.
+      # --ignore-scripts also skips node-pty's, which is the one that can matter.
+      # The pinned prerelease ships prebuilds for all three platforms, so this is
+      # a no-op today - it is here so a version without them compiles rather than
+      # silently installing nothing.
       - run: npm rebuild node-pty
 
       - name: "diagnostic: node-pty on macOS"
