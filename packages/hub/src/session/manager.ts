@@ -148,6 +148,12 @@ export interface StartOptions {
   workspaceId: string;
   profileId: string;
   /**
+   * The id to start under, when the caller has already chosen one — a peer
+   * starting a child on behalf of a canvas that needs to recognise it on the
+   * wire. Absent means mint one here, which is the local case.
+   */
+  id?: string;
+  /**
    * The template this came from and what it resolved to. Values, never argv:
    * the agent declares how to spell them, which is the only way one template
    * can name a model for CLIs that all spell `--model` differently.
@@ -350,7 +356,7 @@ export class SessionManager extends EventEmitter {
       opts.name ?? opts.profileId,
       this.store.namesInWorkspace(ws.id),
     );
-    const id = randomUUID();
+    const id = opts.id ?? randomUUID();
     const cwd = opts.cwd ?? ws.rootPath;
     if (!existsSync(cwd)) throw new Error(`working directory does not exist: ${cwd}`);
 

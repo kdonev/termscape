@@ -855,6 +855,8 @@ export class Hub extends EventEmitter implements AgentApi {
   async startResolved(opts: {
     workspaceId: string;
     agent: string;
+    /** The id to start under, chosen by the canvas when this is a peer start. */
+    id?: string;
     template?: string | null;
     model?: string;
     effort?: string;
@@ -872,6 +874,7 @@ export class Hub extends EventEmitter implements AgentApi {
     const session = await this.sessions.start({
       workspaceId: opts.workspaceId,
       profileId: opts.agent,
+      id: opts.id,
       template: opts.template ?? null,
       model: opts.model,
       effort: opts.effort,

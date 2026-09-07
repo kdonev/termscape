@@ -210,6 +210,32 @@ describe('peer link', () => {
       'remote child carrying its local parent id',
     );
   });
+
+  it('keeps lineage for an unnamed remote spawn, whose first upsert races the reply', async () => {
+    // The default path: spawn_agent with no name. Nothing about the child is
+    // predictable from here — which is why its id is chosen on this side of
+    // the link, so the lineage can be keyed on it before any frame moves.
+    const host = hubA.store.listHosts()[0]!;
+    const ws = hubA.createWorkspace('spawn-remote-2', homeB, host.id);
+    const parent = await hubA.startSession({
+      workspaceId: wsA,
+      profile: 'shell',
+      name: 'spawner-2',
+    });
+
+    await hubA.spawnAgent(parent.id, { workspace: ws.name });
+    await waitFor(
+      () =>
+        // Unnamed: the peer names the child after the agent, so match the
+        // workspace by address prefix rather than by our own workspace id,
+        // which the re-keyed session does not carry.
+        hubA.peers.sessions().some(
+          (s) => s.address.startsWith('spawn-remote-2/') && s.spawnedBy === parent.id,
+        ),
+      15_000,
+      'unnamed remote child carrying its local parent id',
+    );
+  });
 });
 
 describe('cross-host messaging', () => {

@@ -196,6 +196,9 @@ export function createPeerServer(hub: Hub, clientToken: string): PeerServer {
             // values, and this hub's own profile says how to spell them.
             const s = await hub.startResolved({
               workspaceId: ws.id,
+              // The canvas chose this id so it can recognise the child on
+              // the wire — its first upsert crosses before the reply does.
+              id: req.sessionId,
               agent: req.profile,
               template: req.template ?? null,
               model: req.model,

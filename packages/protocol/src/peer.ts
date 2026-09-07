@@ -120,6 +120,16 @@ export const PeerRequest = z.discriminatedUnion('t', [
     prompt: z.string().optional(),
     name: z.string().optional(),
     spawnedByAddress: z.string().nullable(),
+    /**
+     * The id the canvas has already chosen for the child.
+     *
+     * The child's first upsert crosses before the start request's reply does,
+     * and the canvas keeps the lineage — who spawned this — keyed on this id,
+     * so it can stamp that first upsert no matter what the child ends up
+     * being called. Without it the canvas could only guess the address from a
+     * name that may not even have been given.
+     */
+    sessionId: z.string().optional(),
   }),
   z.object({ t: z.literal('stopSession'), id: z.string(), address: z.string() }),
   // Closing a window has to reach the hub that owns the PTY. Handled locally
