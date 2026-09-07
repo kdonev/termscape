@@ -31,6 +31,105 @@ const TITLE_COALESCE_MS = 250;
 /** Debounce for persisting window geometry while a window is being dragged. */
 export const LAYOUT_DEBOUNCE_MS = 250;
 
+/** Breathing room kept between neighbouring windows. */
+const WINDOW_GAP = 40;
+
+/** Bounding box of world rects, or null for an empty list. */
+function bounds(rects: WindowRect[]): WindowRect | null {
+  if (rects.length === 0) return null;
+  const x = Math.min(...rects.map((r) => r.x));
+  const y = Math.min(...rects.map((r) => r.y));
+  return {
+    x,
+    y,
+    w: Math.max(...rects.map((r) => r.x + r.w)) - x,
+    h: Math.max(...rects.map((r) => r.y + r.h)) - y,
+    z: 0,
+    collapsed: false,
+  };
+}
+
+/**
+ * Where a new window goes, given what is already on the canvas.
+ *
+ * The anchor choice is the "near" in the promise this makes: below-right of
+ * the parent when it was spawned by an agent, otherwise in the first clear
+ * slot beside its own workspace's group — or, when that workspace is still
+ * empty, beside the rightmost group already on the canvas rather than at the
+ * origin, where it would sit on top of the first workspace's windows. From
+ * the anchor, candidates are scanned outward in rings and checked against
+ * every occupied rect, so a window the user dragged across the grid no longer
+ * silently receives the next "free" slot, and a second child of the same
+ * parent no longer stacks exactly on the first.
+ */
+export function choosePlacement(opts: {
+  workspaceId: string;
+  parentId: string | null;
+  sessions: Pick<Session, 'id' | 'workspaceId' | 'window'>[];
+}): WindowRect {
+  const { workspaceId, parentId, sessions } = opts;
+  const siblings = sessions.filter((s) => s.workspaceId === workspaceId);
+  const parent = parentId ? (sessions.find((s) => s.id === parentId) ?? null) : null;
+  const occupied = sessions.map((s) => s.window);
+  const pitchX = DEFAULT_WINDOW.w + WINDOW_GAP;
+  const pitchY = DEFAULT_WINDOW.h + WINDOW_GAP;
+  const overlaps = (r: WindowRect) =>
+    occupied.some(
+      (o) => r.x < o.x + o.w && o.x < r.x + r.w && r.y < o.y + o.h && o.y < r.y + r.h,
+    );
+
+  const anchor: { x: number; y: number; z: number } = (() => {
+    if (parent) {
+      return {
+        x: parent.window.x + 60,
+        y: parent.window.y + parent.window.h + WINDOW_GAP,
+        z: parent.window.z + 1,
+      };
+    }
+    if (siblings.length > 0) {
+      const b = bounds(siblings.map((s) => s.window))!;
+      return { x: b.x + b.w + WINDOW_GAP, y: b.y, z: siblings.length };
+    }
+    // An empty workspace: group the rest of the canvas by workspace and go
+    // beside the rightmost group, so the new workspace extends the row
+    // instead of landing on top of the first one.
+    const groups = new Map<string, WindowRect[]>();
+    for (const s of sessions) {
+      const rects = groups.get(s.workspaceId) ?? [];
+      rects.push(s.window);
+      groups.set(s.workspaceId, rects);
+    }
+    let rightmost: WindowRect | null = null;
+    for (const rects of groups.values()) {
+      const b = bounds(rects)!;
+      if (!rightmost || b.x + b.w > rightmost.x + rightmost.w) rightmost = b;
+    }
+    return rightmost
+      ? { x: rightmost.x + rightmost.w + WINDOW_GAP, y: rightmost.y, z: 0 }
+      : { x: 0, y: 0, z: 0 };
+  })();
+
+  // Ring scan: straight right first, then a fresh row below, outward until a
+  // slot overlaps nothing. Bounded so the scan always terminates; each
+  // occupied window can only ever block a handful of candidates, so the bound
+  // is never reached in practice.
+  for (let ring = 0; ring <= occupied.length + 1; ring++) {
+    for (let col = ring; col >= 0; col--) {
+      const row = ring - col;
+      const r: WindowRect = {
+        ...DEFAULT_WINDOW,
+        x: anchor.x + col * pitchX,
+        y: anchor.y + row * pitchY,
+        z: anchor.z,
+      };
+      if (!overlaps(r)) return r;
+    }
+  }
+  // Exhausted only on a canvas packed far beyond what the ring bound allows;
+  // returning the anchor at least keeps the window near its group.
+  return { ...DEFAULT_WINDOW, x: anchor.x, y: anchor.y, z: anchor.z };
+}
+
 export interface StartOptions {
   workspaceId: string;
   profileId: string;
@@ -478,38 +577,16 @@ export class SessionManager extends EventEmitter {
   }
 
   /**
-   * Place a new window: tucked below-right of its parent when spawned by
-   * another agent, otherwise in the next free slot of a simple grid.
+   * Place a new window where it overlaps nothing, near the workspace it
+   * belongs to. The mechanics live in `choosePlacement`, which is pure and
+   * exported so the rules can be tested without a PTY in sight.
    */
   private placeWindow(workspaceId: string, parentId: string | null): WindowRect {
-    const siblings = this.list().filter((s) => s.workspaceId === workspaceId);
-    if (parentId) {
-      const parent = this.get(parentId);
-      if (parent) {
-        return {
-          ...DEFAULT_WINDOW,
-          x: parent.window.x + 60,
-          y: parent.window.y + parent.window.h + 40,
-          z: parent.window.z + 1,
-        };
-      }
-    }
-    const all = this.list();
-    const col = siblings.length % 3;
-    const row = Math.floor(siblings.length / 3);
-    const originX = all.length === siblings.length ? 0 : this.workspaceOriginX(workspaceId);
-    return {
-      ...DEFAULT_WINDOW,
-      x: originX + col * (DEFAULT_WINDOW.w + 40),
-      y: row * (DEFAULT_WINDOW.h + 40),
-      z: siblings.length,
-    };
-  }
-
-  /** Workspaces are laid out left to right so their groups do not overlap. */
-  private workspaceOriginX(workspaceId: string): number {
-    const order = this.store.listWorkspaces().findIndex((w) => w.id === workspaceId);
-    return Math.max(0, order) * (DEFAULT_WINDOW.w + 40) * 3.5;
+    return choosePlacement({
+      workspaceId,
+      parentId,
+      sessions: this.list(),
+    });
   }
 
   /* -------------------------------------------------------------- helpers */

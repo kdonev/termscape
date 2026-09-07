@@ -93,8 +93,12 @@ interface AppState {
    * canvas owns the viewport and the animation, so this is a request rather
    * than a viewport: the timestamp is what makes asking twice for the same
    * window a second request rather than a no-op.
+   *
+   * `alsoId` widens the frame to a second window — a child the focused
+   * terminal just spawned — without moving the selection, so the parent keeps
+   * the keyboard and both stay in view.
    */
-  focusRequest: { sessionId: string; at: number } | null;
+  focusRequest: { sessionId: string; at: number; alsoId?: string } | null;
   /** Whether the tree panel is slid out over the canvas. */
   panelOpen: boolean;
   /** The one dialog that is up, or null. */
@@ -180,9 +184,24 @@ export const useStore = create<AppState>((set, get) => ({
         }));
         return;
 
-      case 'sessionUpserted':
+      case 'sessionUpserted': {
+        // A window nobody asked for is a spawn: when the focused terminal
+        // just created one, widen the view so parent and child are both in
+        // frame. Selection stays on the parent — it asked for the child, and
+        // it keeps the keyboard.
+        const fresh = !get().sessions.some((x) => x.id === m.session.id);
         set((s) => ({ sessions: upsert(s.sessions, m.session) }));
+        if (fresh && m.session.spawnedBy && m.session.spawnedBy === get().selectedId) {
+          set({
+            focusRequest: {
+              sessionId: m.session.id,
+              at: Date.now(),
+              alsoId: m.session.spawnedBy,
+            },
+          });
+        }
         return;
+      }
 
       case 'sessionRemoved':
         set((s) => ({

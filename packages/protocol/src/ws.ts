@@ -325,6 +325,12 @@ export const ServerMsg = z.discriminatedUnion('t', [
     requestId: z.string(),
     ok: z.boolean(),
     message: z.string().optional(),
+    /**
+     * What the mutation created, when it created anything: the dialog that
+     * started an agent wants to focus the window it just brought into being,
+     * and the broadcast alone does not tell it which session was its own.
+     */
+    sessionId: z.string().optional(),
   }),
 ]);
 export type ServerMsg = z.infer<typeof ServerMsg>;

@@ -1141,9 +1141,18 @@ export class Hub extends EventEmitter implements AgentApi {
       : this.store.getWorkspace(me.workspaceId);
     if (!ws) throw new Error(`unknown workspace "${opts.workspace}"`);
 
+    // The child starts the way its parent did: from the same template, so the
+    // model and effort the template chose are not silently dropped in favour
+    // of the bare agent's defaults. A template deleted since the parent
+    // started falls back to the agent itself; a profile the spawning agent
+    // named explicitly always wins.
+    const inherit =
+      opts.profile ??
+      (me.template && this.templates.get(me.template) ? me.template : me.profile);
+
     const child = await this.startSession({
       workspaceId: ws.id,
-      profile: opts.profile ?? me.profile,
+      profile: inherit,
       name: opts.name,
       spawnedBy: me.id,
     });

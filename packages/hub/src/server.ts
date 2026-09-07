@@ -365,8 +365,8 @@ export async function serve(opts: ServeOptions): Promise<ServeResult> {
   ): Promise<void> {
     const requestId = 'requestId' in msg ? msg.requestId : undefined;
     try {
-      await dispatchClientMsg(socket, msg);
-      if (requestId) send(socket, { t: 'ack', requestId, ok: true });
+      const sessionId = (await dispatchClientMsg(socket, msg)) || undefined;
+      if (requestId) send(socket, { t: 'ack', requestId, ok: true, sessionId });
     } catch (err) {
       const message = (err as Error).message;
       if (requestId) send(socket, { t: 'ack', requestId, ok: false, message });
@@ -377,7 +377,7 @@ export async function serve(opts: ServeOptions): Promise<ServeResult> {
   async function dispatchClientMsg(
     socket: import('ws').WebSocket,
     msg: ClientMsg,
-  ): Promise<void> {
+  ): Promise<string | void> {
     switch (msg.t) {
       case 'hello':
         return;
@@ -468,8 +468,8 @@ export async function serve(opts: ServeOptions): Promise<ServeResult> {
         });
         return;
 
-      case 'startSession':
-        await hub.startSession({
+      case 'startSession': {
+        const session = await hub.startSession({
           workspaceId: msg.workspaceId,
           profile: msg.profile,
           model: msg.model,
@@ -478,7 +478,10 @@ export async function serve(opts: ServeOptions): Promise<ServeResult> {
           name: msg.name,
           cwd: msg.cwd,
         });
-        return;
+        // Back to the asker, in the ack: whoever started this agent is about
+        // to want the canvas to fly to it.
+        return session.id;
+      }
 
       case 'stopSession': {
         const remote = hub.peers.find(msg.sessionId);

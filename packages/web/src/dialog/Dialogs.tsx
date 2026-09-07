@@ -10,6 +10,7 @@ import { useStore, type DialogSpec } from '../state/store.js';
 import { pickValid } from '../state/selection.js';
 import { agentDetail, agentsOn, startableAgent } from '../state/agents.js';
 import { sessionsIn } from '../state/tree.js';
+import type { RequestResult } from '../net/client.js';
 import { Dialog, DialogForm, Field } from './Dialog.js';
 import { JoinInstructions, SshForm } from './MachineForms.js';
 
@@ -71,7 +72,7 @@ function Body({ spec }: { spec: DialogSpec }) {
 }
 
 /** Everything here sends through the acknowledged path, never fire-and-forget. */
-function useRequest(): (msg: AckableMsg) => Promise<void> {
+function useRequest(): (msg: AckableMsg) => Promise<RequestResult> {
   const client = useStore((s) => s.client);
   return (msg) =>
     client ? client.request(msg) : Promise.reject(new Error('not connected to the hub'));
@@ -224,6 +225,7 @@ function StartAgentDialog({ workspaceId }: { workspaceId: string }) {
     })),
   );
   const client = useStore((s) => s.client);
+  const requestFocus = useStore((s) => s.requestFocus);
   const workspace = workspaces.find((w) => w.id === workspaceId);
   const hostId = workspace?.hostId ?? null;
   const agents = agentsOn(hostId, profiles, hostProfiles);
@@ -251,16 +253,19 @@ function StartAgentDialog({ workspaceId }: { workspaceId: string }) {
       <DialogForm
         submitLabel="start"
         canSubmit={Boolean(active)}
-        onSubmit={() =>
-          request({
+        onSubmit={async () => {
+          const result = await request({
             t: 'startSession',
             workspaceId,
             profile: active,
             model: model.trim() || undefined,
             effort: effort.trim() || undefined,
             prompt: prompt.trim() || undefined,
-          })
-        }
+          });
+          // The ack names what it created, so the canvas can fly to the new
+          // window instead of leaving it wherever the hub placed it.
+          if (result.sessionId) requestFocus(result.sessionId);
+        }}
       >
         <Field
           label="template"

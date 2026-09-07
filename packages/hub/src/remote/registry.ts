@@ -14,6 +14,28 @@ import type { WebSocket as WsSocket } from 'ws';
 import { PeerConnection } from './peer.js';
 
 /**
+ * Re-key a peer's session for this canvas.
+ *
+ * The peer's internal session id means nothing here and could collide with a
+ * local one, whereas the address is already globally unique and is what every
+ * cross-hub call uses — so the id becomes the address. The lineage is dragged
+ * across with it: `spawnedBy` names the parent in the peer's id space, and
+ * once the parent window here answers to its address, a canvas that cannot
+ * tell who spawned a window cannot frame parent and child together. A parent
+ * the translator does not know is left as it arrived.
+ */
+export function localizeRemoteSession(
+  s: Session,
+  parentAddress: (peerSessionId: string) => string | null,
+): Session {
+  return {
+    ...s,
+    id: s.address,
+    spawnedBy: s.spawnedBy ? (parentAddress(s.spawnedBy) ?? s.spawnedBy) : null,
+  };
+}
+
+/**
  * Tracks connected peer hubs and the sessions they own.
  *
  * Remote sessions are held in memory only: the peer is the source of truth for
@@ -33,6 +55,12 @@ export class PeerRegistry extends EventEmitter {
    * the machine itself.
    */
   private readonly remoteAgents = new Map<string, AgentProfileInfo[]>();
+  /**
+   * hostId -> the peer's internal session id -> the address it answers to
+   * here. Kept only so `spawnedBy`, which arrives in the peer's id space, can
+   * be translated when the session is re-keyed by address.
+   */
+  private readonly peerIds = new Map<string, Map<string, string>>();
 
   constructor(
     private readonly store: Store,
@@ -110,6 +138,9 @@ export class PeerRegistry extends EventEmitter {
       // layout row on the way past, undoing the close a second time.
       const pending = new Set(this.store.pendingRemovals(host.id).map((p) => p.address));
       const map = new Map<string, Session>();
+      // Two passes: a child can report before its parent, and the lineage
+      // translation needs the whole generation noted first.
+      for (const s of sessions) if (!pending.has(s.address)) this.notePeerId(host.id, s);
       for (const s of sessions) {
         if (pending.has(s.address)) continue;
         map.set(s.address, this.withLocalLayout(host.id, s));
@@ -125,6 +156,7 @@ export class PeerRegistry extends EventEmitter {
 
     peer.on('sessionUpserted', (s: Session) => {
       if (this.isPendingRemoval(host.id, s.address)) return;
+      this.notePeerId(host.id, s);
       const map = this.remote.get(host.id) ?? new Map<string, Session>();
       map.set(s.address, this.withLocalLayout(host.id, s));
       this.remote.set(host.id, map);
@@ -175,6 +207,7 @@ export class PeerRegistry extends EventEmitter {
     this.peers.delete(hostId);
     this.remote.delete(hostId);
     this.remoteAgents.delete(hostId);
+    this.peerIds.delete(hostId);
     this.emit('peerSessionsChanged', hostId);
   }
 
@@ -203,16 +236,22 @@ export class PeerRegistry extends EventEmitter {
    * user put its window, and should not: layout is a local concern.
    */
   private withLocalLayout(hostId: string, s: Session): Session {
-    // Re-key remote sessions by address. The peer's internal session id means
-    // nothing here and could collide with a local one, whereas the address is
-    // already globally unique and is what every cross-hub call uses. This
-    // makes attach/input/resize routing fall out of a single lookup.
-    const base: Session = { ...s, id: s.address };
+    const base = localizeRemoteSession(s, (id) => this.peerIds.get(hostId)?.get(id) ?? null);
     const saved = this.store.getRemoteWindows().get(s.address);
     if (saved) return { ...base, window: saved };
     const placed = this.placeRemote(hostId);
     this.store.saveRemoteWindow(s.address, hostId, placed);
     return { ...base, window: placed };
+  }
+
+  /** Remember a peer session's original id so lineage can be translated later. */
+  private notePeerId(hostId: string, s: Session): void {
+    let ids = this.peerIds.get(hostId);
+    if (!ids) {
+      ids = new Map<string, string>();
+      this.peerIds.set(hostId, ids);
+    }
+    ids.set(s.id, s.address);
   }
 
   /** Remote hosts get their own band of canvas, well clear of local windows. */

@@ -370,7 +370,20 @@ export function Canvas() {
    */
   const focusRequest = useStore((s) => s.focusRequest);
   useEffect(() => {
-    if (focusRequest) focusSession(focusRequest.sessionId);
+    if (!focusRequest) return;
+    if (focusRequest.alsoId) {
+      // A child the focused terminal just spawned: frame both, keep the
+      // selection where it is so the parent keeps the keyboard.
+      const pair = sessionsRef.current.filter((s) =>
+        s.id === focusRequest.sessionId || s.id === focusRequest.alsoId,
+      );
+      if (pair.length > 0) {
+        setMaximized(null);
+        glideTo(fitTo(pair.map((s) => s.window), sizeRef.current.w, sizeRef.current.h));
+      }
+      return;
+    }
+    focusSession(focusRequest.sessionId);
     // Deliberately keyed on the request alone: focusSession changes identity
     // with the viewport, and re-running on that would fly the canvas back to
     // the last-clicked window every time the user panned away from it.

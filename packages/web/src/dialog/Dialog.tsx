@@ -114,8 +114,13 @@ export function DialogForm({
    * both answers somebody is waiting on, and closing the dialog is neither -
    * it leaves the question open.
    */
-  secondary?: { label: string; onClick: () => Promise<void> };
-  onSubmit: () => Promise<void>;
+  secondary?: { label: string; onClick: () => Promise<unknown> };
+  /**
+   * Anything awaited to completion. Resolving to a value is fine — a start
+   * dialog reads back the session its mutation created — the form only ever
+   * cares whether it threw.
+   */
+  onSubmit: () => Promise<unknown>;
   children: React.ReactNode;
 }) {
   const closeDialog = useStore((s) => s.closeDialog);

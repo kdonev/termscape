@@ -11,8 +11,14 @@ type PtyListener = (chunk: string) => void;
 
 /** A mutation that has been sent and is waiting for its ack. */
 interface Pending {
-  resolve: () => void;
+  resolve: (result: RequestResult) => void;
   reject: (err: Error) => void;
+}
+
+/** What an ack carries back to the dialog that asked. */
+export interface RequestResult {
+  /** The session the mutation created, when it created one. */
+  sessionId?: string;
 }
 
 /**
@@ -63,13 +69,13 @@ export class HubClient {
       if (!parsed.success) return;
 
       if (parsed.data.t === 'ack') {
-        const { requestId, ok, message } = parsed.data;
+        const { requestId, ok, message, sessionId } = parsed.data;
         const waiting = this.pending.get(requestId);
         this.pending.delete(requestId);
-        if (ok) waiting?.resolve();
+        if (ok) waiting?.resolve({ sessionId });
         else waiting?.reject(new Error(message || 'the hub refused that'));
-        // Nothing downstream has any use for an ack; the promise is the whole
-        // interface. Passing it on would only make every reducer skip it.
+        // The promise is the whole interface for callers that only need to
+        // know it happened; the ones that want a created id read the result.
         return;
       }
 
@@ -119,12 +125,12 @@ export class HubClient {
    * that sat waiting for a reconnect would report neither success nor
    * failure, and the honest answer is available immediately.
    */
-  request(msg: AckableMsg): Promise<void> {
+  request(msg: AckableMsg): Promise<RequestResult> {
     if (this.ws?.readyState !== WebSocket.OPEN) {
       return Promise.reject(new Error('not connected to the hub'));
     }
     const requestId = `r${++this.nextRequest}`;
-    return new Promise<void>((resolve, reject) => {
+    return new Promise<RequestResult>((resolve, reject) => {
       this.pending.set(requestId, { resolve, reject });
       this.rawSend({ ...msg, requestId });
     });
