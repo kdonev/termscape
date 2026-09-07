@@ -12,9 +12,10 @@ missing is making one without a text editor. It carries one real decision,
 about where a template written from the UI is stored, and that decision is
 argued out in the entry rather than left to whoever picks it up.
 
-2 needs a machine with Codex and Gemini actually installed on it. Nothing about
-those two should be written down from memory: both of the CLIs that *were*
-installed differed from what had been assumed of them.
+2 is what is left of wiring the other agent CLIs, now that Codex and Gemini are
+done. It is smaller than it looks and it is mostly one decision — whether the
+hub may write to a config file the user owns — because opencode, unlike the
+other two, offers no way in that lasts only for one run.
 
 ---
 
@@ -124,46 +125,55 @@ their file is worse than a UI refusing an id the file has claimed.
 
 ---
 
-## 2. Wire Codex, Gemini and opencode to the hub's MCP endpoint
+## 2. Wire opencode to the hub, or decide not to
 
-**What it is.** Detection finds all four agents and the panel shows what each
-machine has, but only `claude` is an *agent* on the canvas. The other three are
-built-in profiles with `mcp: false` — a terminal running that CLI, with no
-address, no brief, and no `send_message`. That is honest rather than desirable:
-each configures MCP its own way, and a profile claiming wiring it does not have
-is worse than one that says plainly it is a terminal.
+**What it is.** Codex and Gemini are wired now, and the way they got there says
+what is left. Both had a per-run route into their MCP config — Codex takes
+`-c mcp_servers.termscape.url=…` on any invocation, Gemini has
+`GEMINI_CLI_SYSTEM_SETTINGS_PATH` — so neither needed a byte written to a file
+the user owns, and there is nothing to undo when a session ends or when the hub
+is killed rather than stopped.
 
-**What is known.**
+opencode has neither. `opencode mcp add` mutates its own config and its
+`--help` lists no per-run equivalent, verified against opencode 1.1.51. So
+wiring it is not a profile entry; it is a decision about writing to somebody
+else's file and cleaning up afterwards even when the hub did not exit cleanly.
+That decision is the entry.
 
-- **opencode** has no `--mcp-config <file>` equivalent. `opencode mcp add`
-  mutates its own config, and its `--help` lists no per-run config flag. Wiring
-  it therefore means writing to config the user owns, which needs a decision
-  about where and whether to clean up — not just a profile entry. Verified
-  against opencode 1.1.51.
-- **Codex CLI** and **Gemini CLI** were not installed on the machine this was
-  written on, so nothing about them is verified. Establish that first. The same
-  trip settles their `model_args` and `effort_args`, which templates already
-  support and which these two currently declare as absent — so a template can
-  name them and nothing else, and asking one for a model is refused at load.
+**How it behaves, if it is done.**
 
-**How it behaves.**
+- **Whatever is written, is written back.** A hub that was killed rather than
+  stopped must not leave `opencode.json` pointing at a port nothing is
+  listening on. That means the cleanup cannot live only in a shutdown path —
+  it has to be something the next hub start can finish on the dead one's
+  behalf.
+- **A profile says which it is.** `mcp: false` is the honest answer today.
+  Nothing should set it true before the wiring is real on the machine in front
+  of you.
+- **The brief arrives the way Codex's and Gemini's do.** That machinery exists
+  now: a profile marked `brief: 'typed'` has its brief typed in once the CLI is
+  up, ahead of the opening instruction, because neither of those two can
+  *append* to a system prompt. opencode would be the third.
 
-- **Whatever is written, is written back.** If wiring an agent means editing a
-  config file the user owns, removing the agent has to undo it, and a hub that
-  was killed rather than stopped must not leave the file pointing at a port
-  nothing is listening on.
-- **A profile says which it is.** `mcp: true` is a promise that the agent gets
-  an address and can be messaged; nothing should set it before that is true on
-  the machine in front of you.
-- **The brief has to arrive somehow.** Claude Code takes
-  `--append-system-prompt-file`; an agent with no equivalent needs its brief
-  typed in at startup, which is the same wait `spawn_agent` already uses.
+**What was settled, so it is not re-litigated.**
+
+- Codex is not resumable and Gemini is not either — Codex mints a session id it
+  will not accept from us, and Gemini accepts one via `--session-id` but
+  resumes by list index rather than by that id. Both restart clean, and the
+  hub types their brief again when they do.
+- Codex's bearer token goes in the environment, named by
+  `bearer_token_env_var`, never in `-c`: config overrides land in the command
+  line where any other user on the machine can read them.
+- Gemini refuses to start MCP servers in an untrusted folder and reports it as
+  a warning, so the agent comes up looking fine with no tools. `--skip-trust`
+  is the answer and it writes nothing; disabling folder trust in the settings
+  file would have been the wrong one.
 
 **Where it lives.**
 
-- `packages/hub/src/agents/profiles.ts` — `BUILTIN_PROFILES`, where the three
-  currently sit as `mcp: false` with a description saying so.
-- `packages/hub/src/agents/wiring.ts` — how a session's MCP config, settings
-  and brief are generated for Claude Code today.
-- `README.md`, "Agent profiles" — which states plainly that only `claude` is
-  wired, and is the sentence this entry would rewrite.
+- `packages/hub/src/agents/profiles.ts` — `BUILTIN_PROFILES.opencode`, still
+  `mcp: false` with a description saying so.
+- `packages/hub/src/agents/wiring.ts` — what is generated per session, and
+  where an opencode config would be written from.
+- `README.md`, "Agent profiles" — the table of how each agent reaches the hub,
+  which is the paragraph this entry would extend.

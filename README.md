@@ -184,9 +184,35 @@ text arriving as `[from <address>] ...` is a colleague rather than the human.
 ## Agent profiles
 
 An agent CLI is configuration, not code. Built-ins are `claude`, `codex`,
-`gemini`, `opencode` and `shell`. Only `claude` is wired to the hub's MCP
-endpoint; the other three run as plain terminals on the canvas, because each
-configures MCP servers its own way and none of those ways is verified here yet.
+`gemini`, `opencode` and `shell`.
+
+`claude`, `codex` and `gemini` are wired to the hub's MCP endpoint: each gets an
+address, a brief and the `send_message` tool set. They arrive there by three
+different routes, because no two of these CLIs configure an MCP server the same
+way — and none of the three writes to a file you own, so there is nothing left
+behind when a session ends or when the hub is killed rather than stopped.
+
+| agent | how it reaches the hub | brief | resume |
+| --- | --- | --- | --- |
+| `claude` | `--mcp-config` on a generated file | `--append-system-prompt-file` | `--resume <uuid>` |
+| `codex` | `-c mcp_servers.…` overrides, one run only | typed in at startup | restarts clean |
+| `gemini` | `GEMINI_CLI_SYSTEM_SETTINGS_PATH` at a generated file | typed in at startup | restarts clean |
+
+Codex and Gemini are typed at rather than handed a brief because neither can
+*append* to its system prompt — Codex's `base_instructions` and Gemini's
+`GEMINI_SYSTEM_MD` each replace the whole thing, which would cost the agent its
+own tool instructions. Neither is resumable: Codex mints a session id it will
+not accept from us, and Gemini accepts one but resumes by list index instead.
+
+`opencode` and `shell` are plain terminals on the canvas. `opencode mcp add`
+mutates its own config and there is no per-run equivalent, so wiring it means
+writing to a file you own and undoing that reliably afterwards — a decision that
+has not been made rather than one that has been skipped.
+
+Codex's bearer token is passed through the environment, never `-c`: config
+overrides land in the command line, where any other user on the machine can
+read them.
+
 Override or add profiles in `~/.termscape/agents.toml`:
 
 ```toml
@@ -196,6 +222,7 @@ args = ["--mcp-config", "{{mcp_config_path}}"]
 status = "heuristic"          # or "hooks", for exact turn boundaries
 ready_hint = "[$#>%] ?$"      # prompt regex, for the idle indicator
 inject = "bracketed"          # bracketed paste, or "raw"
+brief = "typed"               # when it has no flag to append a system prompt
 version_args = ["--version"]  # how to ask its version, for the panel
 models_args = ["models"]      # optional: one model per line on stdout
 models = ["opus", "sonnet"]   # the answer when it has no listing command
@@ -226,8 +253,9 @@ instance with an address and a window.
 
 - **A template holds values, not arguments.** Claude Code takes `--model` and
   `--effort`; opencode takes `-m provider/model` and has no effort setting on
-  its TUI at all. So the template says *which* model, and the agent declares
-  how to spell it. An agent that declares nothing takes nothing, and a template
+  its TUI at all; Codex takes `-m` but spells effort as a config override,
+  `-c model_reasoning_effort=…`, because it has no `--effort` flag. So the
+  template says *which* model, and the agent declares how to spell it. An agent that declares nothing takes nothing, and a template
   asking for a model or an effort it cannot spell is a configuration error
   reported when the file loads — visible in the dialog, not a flag silently
   dropped at launch.
@@ -255,7 +283,12 @@ where the error reads like the hub is broken.
 - Models are enumerated where the CLI can be asked (`opencode models` returns
   a few hundred) and declared in the profile where it cannot. Claude Code has
   no listing command; its `--help` documents the aliases instead, and it takes
-  a full model name as readily as an alias.
+  a full model name as readily as an alias. Codex is declared too, for a
+  different reason: `codex debug models` does render the real catalog, but it
+  is a debug command answering with half a megabyte of JSON rather than the
+  one-per-line stdout the profile reads, so the profile carries the slugs that
+  catalog marks visible. In every case a full model name outside the list is
+  still accepted — the list is what the dropdown suggests, never a limit.
 - Probing runs after the hub is already serving and never blocks it. The first
   page load usually shows *checking…*, and fills in a moment later. **check
   again** in the start-an-agent dialog re-probes every machine.

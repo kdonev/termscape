@@ -454,7 +454,7 @@ export async function serve(opts: ServeOptions): Promise<ServeResult> {
           await remote.peer.request({ t: 'resumeSession', id: randomUUID(), address: msg.sessionId });
           return;
         }
-        await hub.sessions.resume(msg.sessionId);
+        await hub.resumeSession(msg.sessionId);
         return;
       }
 

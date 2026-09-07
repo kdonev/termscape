@@ -81,8 +81,11 @@ describe('what is refused, and refused at load', () => {
     expect(load().list().map((x) => x.id)).toContain('deep');
   });
 
-  it('rejects a model on an agent whose flags are not established', () => {
-    writeConfig('[template.scout]\nagent = "codex"\nmodel = "gpt-5-codex"\n');
+  it('rejects a model on an agent that takes none on the command line', () => {
+    // A shell is the honest example now that Codex and Gemini both declare a
+    // --model: it is whatever COMSPEC or SHELL points at, and there is no
+    // model to give it.
+    writeConfig('[template.scout]\nagent = "shell"\nmodel = "gpt-6-astra"\n');
     expect(load().get('scout')?.error).toMatch(/does not take a model/);
   });
 

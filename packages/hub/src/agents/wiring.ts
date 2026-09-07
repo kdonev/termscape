@@ -26,6 +26,23 @@ export interface WiringOutput {
   mcpConfigPath: string;
   settingsPath: string;
   briefPath: string;
+  /**
+   * Gemini CLI reads no `--mcp-config`; the only per-run way in is
+   * GEMINI_CLI_SYSTEM_SETTINGS_PATH, which points its *system* settings layer
+   * at a file of our choosing. Written for every wired session rather than
+   * only for gemini, so a profile stays a config entry naming a path and not
+   * a special case in this file.
+   */
+  geminiSettingsPath: string;
+}
+
+/**
+ * Where a session's brief is written. Exported because an agent with no
+ * `--append-system-prompt-file` has its brief typed into the terminal
+ * instead, and the hub needs to read back what was written here.
+ */
+export function briefFileFor(sessionId: string): string {
+  return join(paths.sessionDir(sessionId), 'brief.md');
 }
 
 /** Written with 0600: it carries the agent's bearer token. */
@@ -39,7 +56,9 @@ export function writeWiring(input: WiringInput): WiringOutput {
 
   const mcpConfigPath = join(dir, 'mcp.json');
   const settingsPath = join(dir, 'settings.json');
-  const briefPath = join(dir, 'brief.md');
+  const briefPath = briefFileFor(input.sessionId);
+  const geminiSettingsPath = join(dir, 'gemini-settings.json');
+  const mcpUrl = `${input.hubOrigin}/mcp`;
 
   // One streamable-HTTP MCP server. The bearer token is what identifies this
   // agent to the hub, so this file is secret.
@@ -50,7 +69,7 @@ export function writeWiring(input: WiringInput): WiringOutput {
         mcpServers: {
           termscape: {
             type: 'http',
-            url: `${input.hubOrigin}/mcp`,
+            url: mcpUrl,
             headers: { Authorization: `Bearer ${input.token}` },
           },
         },
@@ -100,9 +119,55 @@ export function writeWiring(input: WiringInput): WiringOutput {
     ),
   );
 
+  /*
+   * The server entry is written in the shape `gemini mcp add --transport http`
+   * produces, which happens to be the same `url` + `type: 'http'` Claude Code
+   * uses. It still gets its own file: this is Gemini's *settings*, not an MCP
+   * config, and the two are only interchangeable by coincidence today.
+   *
+   * This is the system settings layer, which is normally a machine-wide file
+   * under ProgramData or /etc. Pointing it at a per-session file is what keeps
+   * the hub out of ~/.gemini/settings.json entirely: nothing the user owns is
+   * edited, so there is nothing to undo when the session ends or when the hub
+   * is killed rather than stopped.
+   *
+   * Folder trust is *not* switched off here. Gemini refuses to start MCP
+   * servers in an untrusted folder, and the answer to that is `--skip-trust`
+   * on the profile's argv - which grants trust for the one session and writes
+   * nothing - rather than disabling the check for everything the agent
+   * touches.
+   */
+  writePrivate(
+    geminiSettingsPath,
+    JSON.stringify(
+      {
+        mcpServers: {
+          termscape: {
+            url: mcpUrl,
+            type: 'http',
+            headers: { Authorization: `Bearer ${input.token}` },
+            /*
+             * Stated rather than left to the default, and generous. A server
+             * Gemini gives up on is reported as merely "Disconnected", which
+             * is not distinguishable from a hub that is not running - the
+             * agent comes up looking fine with no tools and nothing says why.
+             * The hub answers in single-digit milliseconds when it is idle, so
+             * this bound is only ever reached by a hub that is busy, and
+             * waiting for a busy hub is what we want.
+             */
+            timeout: 30_000,
+            description: 'Termscape canvas: your address, your peers, messaging.',
+          },
+        },
+      },
+      null,
+      2,
+    ),
+  );
+
   writeFileSync(briefPath, renderBrief(input), { mode: 0o600 });
 
-  return { dir, mcpConfigPath, settingsPath, briefPath };
+  return { dir, mcpConfigPath, settingsPath, briefPath, geminiSettingsPath };
 }
 
 /**

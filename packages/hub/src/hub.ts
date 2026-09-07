@@ -1,6 +1,6 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { basename, resolve } from 'node:path';
 import {
   encodeInjection,
@@ -24,6 +24,7 @@ import { TemplateRegistry } from './agents/templates.js';
 import { TokenRegistry } from './agents/tokens.js';
 import { MessageRouter } from './agents/router.js';
 import { SessionManager } from './session/manager.js';
+import { briefFileFor } from './agents/wiring.js';
 import type { AgentApi } from './mcp/server.js';
 import { PeerRegistry } from './remote/registry.js';
 import type { Uplink } from './remote/peer-serve.js';
@@ -572,12 +573,59 @@ export class Hub extends EventEmitter implements AgentApi {
       spawnedBy: opts.spawnedBy ?? null,
     });
 
-    // Typed in once the CLI is up rather than written into argv, where it
-    // would be a different thing entirely - and not immediately, because it
-    // would land before the program is reading. Not awaited: the window
-    // should appear now, and the instruction arrives when the agent is ready.
-    if (opts.prompt) void this.deliverOpeningInstruction(session.id, opts.prompt);
+    /*
+     * Typed in once the CLI is up rather than written into argv, where it
+     * would be a different thing entirely - and not immediately, because it
+     * would land before the program is reading. Not awaited: the window
+     * should appear now, and the instruction arrives when the agent is ready.
+     *
+     * For an agent whose brief has no flag to ride in on, the brief goes
+     * first, in the same injection rather than a separate one. Two would be
+     * two turns - the agent would answer the brief before being told what to
+     * do, and the second would have to wait out the first.
+     */
+    const opening = [this.typedBrief(session), opts.prompt]
+      .filter((part): part is string => !!part)
+      .join('\n\n');
+    if (opening) void this.deliverOpeningInstruction(session.id, opening);
 
+    return session;
+  }
+
+  /**
+   * The brief for an agent that cannot be handed one, or null.
+   *
+   * Read back off disk rather than re-rendered: the wiring wrote exactly this
+   * text a moment ago, and rendering it twice is two chances to render it
+   * differently. A profile with `brief: 'flag'` returns null here because its
+   * argv already carries the path.
+   */
+  private typedBrief(session: Session): string | null {
+    const profile = this.profiles.get(session.profile);
+    if (!profile?.mcp || profile.brief !== 'typed') return null;
+    try {
+      return readFileSync(briefFileFor(session.id), 'utf8');
+    } catch {
+      // The brief is context, not the task. An agent that came up without it
+      // is worse off, not broken, and refusing to start it would be worse.
+      return null;
+    }
+  }
+
+  /**
+   * Bring a stopped session back, and re-brief it if its brief was typed.
+   *
+   * The re-brief is why this exists rather than callers reaching for
+   * `sessions.resume` directly. A CLI that had to be told where it is by
+   * having text typed at it remembers none of that across a restart, and
+   * neither of the two in that position is resumable in the first place - so
+   * what comes back is a fresh conversation that has never been told it has an
+   * address or any peers.
+   */
+  async resumeSession(sessionId: string): Promise<Session> {
+    const session = await this.sessions.resume(sessionId);
+    const brief = this.typedBrief(session);
+    if (brief) void this.deliverOpeningInstruction(session.id, brief);
     return session;
   }
 
@@ -587,7 +635,7 @@ export class Hub extends EventEmitter implements AgentApi {
       if (s.workspaceId !== workspaceId) continue;
       if (s.state === 'running' || s.state === 'starting') continue;
       try {
-        out.push(await this.sessions.resume(s.id));
+        out.push(await this.resumeSession(s.id));
       } catch (err) {
         this.emit('error', new Error(`resume ${s.address}: ${(err as Error).message}`));
       }

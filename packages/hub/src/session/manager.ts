@@ -155,6 +155,17 @@ export class SessionManager extends EventEmitter {
         mcp_config_path: w.mcpConfigPath,
         settings_path: w.settingsPath,
         brief_path: w.briefPath,
+        gemini_settings_path: w.geminiSettingsPath,
+        mcp_url: `${this.hubOrigin}/mcp`,
+        /*
+         * Only ever expanded into a profile's `env`, never its `args`. A CLI
+         * that wants the token on the command line would be putting it where
+         * any other user on the machine can read it out of a process listing,
+         * so the ones that take a bearer token are pointed at the environment
+         * instead - which is exactly what Codex's `bearer_token_env_var` is
+         * for.
+         */
+        token,
       };
     }
 

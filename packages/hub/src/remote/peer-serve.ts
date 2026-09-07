@@ -235,7 +235,7 @@ export function createPeerServer(hub: Hub, clientToken: string): PeerServer {
           case 'resumeSession': {
             const t = hub.sessions.getByAddress(req.address);
             if (!t) return err(`no agent at address "${req.address}"`);
-            return ok(await hub.sessions.resume(t.id));
+            return ok(await hub.resumeSession(t.id));
           }
 
           case 'attach': {

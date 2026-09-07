@@ -22,6 +22,25 @@ export interface AgentProfile {
   readyHint?: string;
   inject: InjectMode;
   /**
+   * How the brief reaches the agent.
+   *
+   * `flag` - the profile's own args point at `{{brief_path}}`, the way Claude
+   * Code's `--append-system-prompt-file` does. The brief is part of the
+   * system prompt and the agent never sees it as a turn.
+   *
+   * `typed` - the CLI has no way to *append* to its system prompt, so the
+   * brief is typed into the terminal once the CLI is up, ahead of any opening
+   * instruction. Both of the other wired CLIs are in this position, and for
+   * the same reason: Codex's `base_instructions` and Gemini's
+   * `GEMINI_SYSTEM_MD` each *replace* the whole system prompt rather than add
+   * to it, so using either would cost the agent its own tool instructions -
+   * a far worse trade than a first turn that arrives as text.
+   *
+   * Only meaningful when `mcp` is true; a terminal has no brief. Defaults to
+   * `flag`, which is what every profile written before this did.
+   */
+  brief?: 'flag' | 'typed';
+  /**
    * Argument template used to bring a session back with its prior
    * conversation. `{{uuid}}` is replaced with agent_session_uuid. When absent,
    * the profile is not resumable and restarts clean.
@@ -81,12 +100,26 @@ function defaultShell(): string {
  * --mcp-config, --strict-mcp-config, --session-id, --settings,
  * --append-system-prompt-file, --resume.
  *
- * The other three are deliberately `mcp: false` - a terminal on the canvas
- * running that CLI, with no hub wiring. Each of them configures MCP servers
- * its own way and none of those ways has been verified here, and a profile
- * that claims agent wiring it does not have is worse than one that says
- * plainly it is a terminal. Detection still finds them, reports their version
- * and lists their models, which is what this file is mostly for.
+ * Codex and Gemini are wired too, and every flag and key below was verified
+ * against the CLI actually installed - codex-cli 0.153.4 and gemini 0.58.0 -
+ * rather than written from memory. Both reach the hub the same way Claude
+ * Code does, over one streamable-HTTP MCP server carrying a bearer token, and
+ * neither needs a byte written to config the user owns:
+ *
+ * - **Codex** takes `-c <dotted.key>=<toml>` on any invocation, so the server
+ *   is declared in argv for the one run. The token is *not* in argv - it goes
+ *   in the environment, and `bearer_token_env_var` names the variable to read
+ *   it from, which keeps it out of every process listing on the machine.
+ * - **Gemini** has no per-run config flag, but
+ *   `GEMINI_CLI_SYSTEM_SETTINGS_PATH` repoints its system settings layer at a
+ *   file of our choosing, which the hub generates per session.
+ *
+ * opencode stays `mcp: false`. It has neither: `opencode mcp add` mutates its
+ * own config and its `--help` lists no per-run equivalent, so wiring it means
+ * writing to a file the user owns and undoing that afterwards even when the
+ * hub was killed rather than stopped. That is a different decision from this
+ * one and it has not been made. A profile that claims agent wiring it does
+ * not have is worse than one that says plainly it is a terminal.
  */
 export const BUILTIN_PROFILES: Record<string, AgentProfile> = {
   claude: {
@@ -160,25 +193,108 @@ export const BUILTIN_PROFILES: Record<string, AgentProfile> = {
   },
   codex: {
     id: 'codex',
-    description: 'Codex CLI — no hub wiring yet; its flags are unverified',
+    description: 'Codex CLI, wired to the hub MCP endpoint',
     command: 'codex',
-    args: [],
-    env: {},
-    mcp: false,
+    /*
+     * Bare, which starts the interactive TUI - `exec` is the one-shot form and
+     * is not what a window on the canvas wants.
+     *
+     * The two `-c` overrides are exactly the table `codex mcp add --url` would
+     * have written into ~/.codex/config.toml, except they live for one run and
+     * touch nothing. The value after `=` is parsed as TOML, which is why the
+     * URL is quoted.
+     */
+    args: [
+      '-c',
+      'mcp_servers.termscape.url="{{mcp_url}}"',
+      '-c',
+      'mcp_servers.termscape.bearer_token_env_var="TERMSCAPE_TOKEN"',
+    ],
+    // The token is named here rather than written into argv: `-c` values land
+    // in the process command line, where every other user on the machine can
+    // read them.
+    env: { TERMSCAPE_TOKEN: '{{token}}' },
+    mcp: true,
+    brief: 'typed',
     status: 'heuristic',
     inject: 'bracketed',
     versionArgs: ['--version'],
+    /*
+     * `codex debug models` does render the real catalog, but it is a debug
+     * command by its own description and it answers with 500KB of JSON that
+     * also carries every model's system prompt - not the one-per-line stdout
+     * `modelsArgs` reads. So this is the declared half of "ask where you can,
+     * declare where you cannot": the slugs that catalog marks
+     * `visibility: "list"`. A full name not in this list is still accepted,
+     * which is why a template must not be limited to it.
+     */
+    models: ['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.2'],
+    modelArgs: ['-m', '{{model}}'],
+    /*
+     * Codex has no `--effort`; reasoning depth is a config key, and it takes
+     * the same `-c` route as the MCP server above. Verified by reading it back
+     * off the `reasoning effort:` line of the session header.
+     *
+     * The levels are the union of `supported_reasoning_levels` across the
+     * listed models. They are per model in the catalog and Codex forwards
+     * whatever it is given without checking, so this list is what the dialog
+     * offers and never a limit the hub enforces.
+     */
+    effortArgs: ['-c', 'model_reasoning_effort="{{effort}}"'],
+    efforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+    /*
+     * No resumeArgs, and not an oversight. `codex resume` takes a session id,
+     * but Codex mints that id itself and offers no way to be handed one, so
+     * the hub cannot record up front what it would have to ask for later.
+     * `--last` is the alternative and it resolves to "the most recent session
+     * in this cwd", which is the wrong agent as soon as a workspace holds two
+     * of them. Better to say plainly it restarts clean.
+     */
   },
   gemini: {
     id: 'gemini',
-    description: 'Gemini CLI — no hub wiring yet; its flags are unverified',
+    description: 'Gemini CLI, wired to the hub MCP endpoint',
     command: 'gemini',
-    args: [],
-    env: {},
-    mcp: false,
+    /*
+     * Gemini refuses to start MCP servers in a folder it does not trust, and
+     * says so only as a warning on stderr - the agent would come up looking
+     * fine with no tools. `--skip-trust` trusts the workspace for this session
+     * and writes nothing; the alternative, turning folder trust off in the
+     * settings file below, would disable the check for everything else too.
+     */
+    args: ['--skip-trust'],
+    // No `--mcp-config` equivalent exists. This repoints the *system* settings
+    // layer - normally a machine-wide file - at the per-session one the hub
+    // generates, so ~/.gemini/settings.json is never opened, let alone written.
+    env: { GEMINI_CLI_SYSTEM_SETTINGS_PATH: '{{gemini_settings_path}}' },
+    mcp: true,
+    brief: 'typed',
     status: 'heuristic',
     inject: 'bracketed',
     versionArgs: ['--version'],
+    // Declared: there is no `gemini models`. These are the model constants the
+    // CLI itself names, minus the ones it uses internally for embeddings and
+    // its visual agent, which are not things to point an agent window at.
+    models: [
+      'gemini-3.1-pro-preview',
+      'gemini-3-pro-preview',
+      'gemini-3.5-flash',
+      'gemini-3-flash',
+      'gemini-3.1-flash-lite',
+      'gemini-2.5-pro',
+      'gemini-2.5-flash',
+    ],
+    modelArgs: ['-m', '{{model}}'],
+    /*
+     * No effortArgs: `gemini --help` documents no reasoning-effort option, so
+     * a template naming one for this agent is refused at load rather than
+     * dropped at launch.
+     *
+     * No resumeArgs either, for a narrower reason than Codex's. `--session-id`
+     * does accept a UUID of our choosing, but `--resume` takes "latest" or an
+     * index into a list - never that UUID - so the id the hub could record is
+     * not an id it could resume by.
+     */
   },
   shell: {
     id: 'shell',
@@ -226,6 +342,7 @@ export class ProfileRegistry {
             status: v.status ?? base?.status ?? 'heuristic',
             readyHint: v.ready_hint ?? v.readyHint ?? base?.readyHint,
             inject: v.inject ?? base?.inject ?? 'bracketed',
+            brief: v.brief ?? base?.brief,
             resumeArgs: v.resume_args ?? v.resumeArgs ?? base?.resumeArgs,
             versionArgs: v.version_args ?? v.versionArgs ?? base?.versionArgs,
             modelsArgs: v.models_args ?? v.modelsArgs ?? base?.modelsArgs,
