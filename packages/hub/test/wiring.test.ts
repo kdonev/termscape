@@ -180,6 +180,13 @@ describe('opencode', () => {
     expect(opencode.mcp).toBe(true);
     expect(opencode.brief).toBe('typed');
   });
+
+  it('probes without leaving a config file in the user’s home', () => {
+    // `opencode models` writes ~/.config/opencode/opencode.jsonc when it finds
+    // no config at all, and detection runs on machines whose owner may never
+    // have run opencode by hand. An empty config is still a config.
+    expect(opencode.probeEnv).toEqual({ OPENCODE_CONFIG_CONTENT: '{}' });
+  });
 });
 
 describe('what stays a plain terminal', () => {

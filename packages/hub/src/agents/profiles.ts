@@ -60,6 +60,16 @@ export interface AgentProfile {
   /* ------------------------------------------------------ detection */
 
   /**
+   * Environment for the *detection* probes only, not for a session.
+   *
+   * Detection runs these CLIs on a machine whose owner may never have run them
+   * by hand, so a probe that leaves something behind is the hub writing to
+   * somebody's home directory uninvited. `opencode models` does exactly that -
+   * it creates ~/.config/opencode/opencode.jsonc - and this is how it is told
+   * not to.
+   */
+  probeEnv?: Record<string, string>;
+  /**
    * How to ask this CLI its version. Its stdout is shown to the user and is
    * also the cache key for the model list, so a CLI that updates underneath
    * us re-lists rather than serving last week's answer.
@@ -205,6 +215,11 @@ export const BUILTIN_PROFILES: Record<string, AgentProfile> = {
      * file on start, so a session leaves nothing behind at all.
      */
     env: { OPENCODE_CONFIG_CONTENT: '{{opencode_config}}' },
+    // `opencode models` writes ~/.config/opencode/opencode.jsonc when it finds
+    // no config at all, and detection runs on machines whose owner may never
+    // have run opencode by hand. An empty config is still a config, so this
+    // suppresses that without changing what the probe reports.
+    probeEnv: { OPENCODE_CONFIG_CONTENT: '{}' },
     mcp: true,
     brief: 'typed',
     status: 'heuristic',
@@ -389,6 +404,7 @@ export class ProfileRegistry {
             inject: v.inject ?? base?.inject ?? 'bracketed',
             brief: v.brief ?? base?.brief,
             resumeArgs: v.resume_args ?? v.resumeArgs ?? base?.resumeArgs,
+            probeEnv: v.probe_env ?? v.probeEnv ?? base?.probeEnv,
             versionArgs: v.version_args ?? v.versionArgs ?? base?.versionArgs,
             modelsArgs: v.models_args ?? v.modelsArgs ?? base?.modelsArgs,
             models: v.models ?? base?.models,

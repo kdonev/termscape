@@ -24,15 +24,19 @@ import type { AgentProfile, ProfileRegistry } from './profiles.js';
 /**
  * How long any one probe gets before it is killed.
  *
- * Generous on purpose, and measured rather than guessed: `opencode --version`
- * takes about 13 seconds on Windows through the .cmd shim npm installs, and
- * `opencode models` about 16. A tighter bound does not make anything faster,
- * it just turns a working CLI into one that reports no version and no models.
- * Nothing waits on detection - it starts after the hub is already serving and
- * the browser is told when each answer lands - so the only thing a long
- * timeout costs is a late answer from a CLI that was never going to reply.
+ * Generous on purpose, and measured rather than guessed. `opencode models` was
+ * about 16 seconds on Windows through the .cmd shim npm installs when this was
+ * written; on opencode 1.18.29 it is nearer 38, which is how the old 30-second
+ * bound came to report a CLI with no models at all rather than its 367.
+ *
+ * That is the argument for erring long, not for chasing the number: a tighter
+ * bound does not make anything faster, it just turns a working CLI into one
+ * that reports no version and no models. Nothing waits on detection - it
+ * starts after the hub is already serving and the browser is told when each
+ * answer lands - so the only thing a long timeout costs is a late answer from
+ * a CLI that was never going to reply.
  */
-const PROBE_TIMEOUT_MS = 30_000;
+const PROBE_TIMEOUT_MS = 90_000;
 
 /** Nobody scrolls a dropdown past this, and 395 lines is a real answer. */
 const MAX_MODELS = 500;
@@ -109,7 +113,7 @@ export class AgentDetector extends EventEmitter {
     }
 
     const version = profile.versionArgs
-      ? await run(path, profile.versionArgs).catch(() => null)
+      ? await run(path, profile.versionArgs, profile.probeEnv).catch(() => null)
       : null;
 
     const key = `${path}|${version ?? ''}`;
@@ -126,7 +130,7 @@ export class AgentDetector extends EventEmitter {
     }
 
     const listed = profile.modelsArgs
-      ? await run(path, profile.modelsArgs).catch(() => null)
+      ? await run(path, profile.modelsArgs, profile.probeEnv).catch(() => null)
       : null;
 
     let models: string[] = [];
@@ -194,7 +198,7 @@ function unprobed(p: AgentProfile): AgentProfileInfo {
  * does - `shell: true` would be the short version and would also hand the
  * command line to a shell that reinterprets it.
  */
-function run(path: string, args: string[]): Promise<string> {
+function run(path: string, args: string[], env?: Record<string, string>): Promise<string> {
   const ext = extname(path).toLowerCase();
   const viaCmd = platform === 'win32' && (ext === '.cmd' || ext === '.bat');
   const file = viaCmd ? (process.env.COMSPEC ?? 'cmd.exe') : path;
@@ -204,7 +208,14 @@ function run(path: string, args: string[]): Promise<string> {
     execFile(
       file,
       argv,
-      { timeout: PROBE_TIMEOUT_MS, windowsHide: true, maxBuffer: 4 * 1024 * 1024 },
+      {
+        timeout: PROBE_TIMEOUT_MS,
+        windowsHide: true,
+        maxBuffer: 4 * 1024 * 1024,
+        // Inherited and then overlaid: a probe still needs PATH and HOME to
+        // find and run anything at all.
+        env: env ? { ...process.env, ...env } : process.env,
+      },
       (err, stdout) => {
         // Some CLIs print their version and exit non-zero, or write it to
         // stderr and nothing to stdout. Stdout with content wins over the
