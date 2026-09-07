@@ -4,6 +4,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { basename, resolve } from 'node:path';
 import {
   encodeInjection,
+  MAX_PENDING_PROPOSALS,
   parseAddress,
   slugify,
   type AgentProfileInfo,
@@ -13,6 +14,7 @@ import {
   type PeerAgent,
   type PeerRelayAsk,
   type Session,
+  type TemplateProposal,
   type Viewport,
   type WindowRect,
   type Workspace,
@@ -92,6 +94,18 @@ export class Hub extends EventEmitter implements AgentApi {
   /** Live SSH tunnels, keyed by host id. Not persisted: they die with the hub. */
   private readonly tunnels = new Map<string, DeployResult>();
   private readonly spawnCap: number;
+  /**
+   * Proposals waiting on a human, newest last. In memory on purpose: the agent
+   * waiting for the answer dies with the hub, so a proposal that outlived both
+   * would be a dialog nobody could be told the outcome of.
+   */
+  private readonly proposals = new Map<string, TemplateProposal>();
+  /**
+   * How many browsers are looking. The hub cannot see its own sockets - the
+   * server owns those - so it is told, and it only uses this to answer an
+   * agent honestly about whether anyone is there to decide.
+   */
+  private viewers = 0;
 
   constructor(opts: HubOptions = {}) {
     super();
@@ -353,6 +367,43 @@ export class Hub extends EventEmitter implements AgentApi {
     effort?: string | null;
     prompt?: string | null;
   }): AgentTemplateInfo {
+    const candidate = this.candidateTemplate(input);
+    this.store.upsertTemplate({
+      id: candidate.id,
+      description: candidate.description,
+      agent: candidate.agent,
+      model: candidate.model ?? null,
+      effort: candidate.effort ?? null,
+      prompt: candidate.prompt ?? null,
+    });
+    this.reloadTemplates();
+    return this.templates.info().find((t) => t.id === candidate.id)!;
+  }
+
+  /**
+   * Everything that can say no about a template, in one place.
+   *
+   * Shared by the panel and by an agent's proposal so the two cannot drift:
+   * an agent should be refused by exactly the rule a human would be, and a
+   * proposal that would fail on accept must fail while the agent is still
+   * there to be told why.
+   */
+  private candidateTemplate(input: {
+    id: string;
+    agent: string;
+    description?: string | null;
+    model?: string | null;
+    effort?: string | null;
+    prompt?: string | null;
+  }): {
+    id: string;
+    description: string;
+    agent: string;
+    model?: string;
+    effort?: string;
+    prompt?: string;
+    source: 'stored';
+  } {
     const id = slugify(input.id);
     if (!id) throw new Error('a template needs a name');
     // `[template.reviewer]` parses as one table called `template`, which is
@@ -383,17 +434,7 @@ export class Hub extends EventEmitter implements AgentApi {
 
     const problem = validateTemplate(candidate, this.profiles);
     if (problem) throw new Error(problem);
-
-    this.store.upsertTemplate({
-      id: candidate.id,
-      description: candidate.description,
-      agent: candidate.agent,
-      model: candidate.model ?? null,
-      effort: candidate.effort ?? null,
-      prompt: candidate.prompt ?? null,
-    });
-    this.reloadTemplates();
-    return this.templates.info().find((t) => t.id === id)!;
+    return candidate;
   }
 
   /**
@@ -428,6 +469,152 @@ export class Hub extends EventEmitter implements AgentApi {
   private reloadTemplates(): void {
     this.templates = TemplateRegistry.load(this.profiles, this.store);
     this.emit('templates', this.templates.info());
+  }
+
+  /* -------------------------------------------------- template proposals */
+
+  /** Told by the server, which owns the sockets. */
+  setViewers(n: number): void {
+    this.viewers = n;
+  }
+
+  pendingProposals(): TemplateProposal[] {
+    return [...this.proposals.values()];
+  }
+
+  /**
+   * An agent asking for a template.
+   *
+   * Everything that can be refused is refused here, before a human is shown
+   * anything: nobody should be asked to approve a template that cannot load.
+   * What survives is put in front of whoever is watching, and the tool returns
+   * at once - a call that blocked until somebody wandered back to the canvas
+   * would be a stalled agent, and MCP clients time out.
+   */
+  async proposeTemplate(
+    sessionId: string,
+    input: {
+      id: string;
+      agent: string;
+      description?: string;
+      model?: string;
+      effort?: string;
+      prompt?: string;
+    },
+  ): Promise<{ proposalId: string; status: string; anyoneWatching: boolean; note: string }> {
+    const me = this.requireSession(sessionId);
+
+    const mine = [...this.proposals.values()].filter((p) => p.fromAddr === me.address);
+    if (mine.length >= MAX_PENDING_PROPOSALS) {
+      throw new Error(
+        `you already have ${mine.length} proposals waiting on a human; ` +
+          'wait for those to be answered before making another',
+      );
+    }
+
+    // The same checks saveTemplate makes, run now rather than at accept time,
+    // so a refusal reaches the agent that can do something about it instead of
+    // the human who cannot.
+    const candidate = this.candidateTemplate(input);
+
+    const proposal: TemplateProposal = {
+      id: randomUUID(),
+      fromAddr: me.address,
+      proposedAt: Date.now(),
+      template: {
+        id: candidate.id,
+        agent: candidate.agent,
+        description: candidate.description ?? null,
+        model: candidate.model ?? null,
+        effort: candidate.effort ?? null,
+        prompt: candidate.prompt ?? null,
+      },
+    };
+    this.proposals.set(proposal.id, proposal);
+    this.emit('templateProposed', proposal);
+
+    return {
+      proposalId: proposal.id,
+      status: 'awaiting review',
+      anyoneWatching: this.viewers > 0,
+      note:
+        (this.viewers > 0
+          ? 'A human has been shown this and can accept, edit or reject it.'
+          : 'Nobody has the canvas open right now, so nobody has seen it yet; ' +
+            'it will be shown when someone opens it.') +
+        ` The template "${candidate.id}" does not exist until it is accepted, so do not` +
+        ' try to start an agent from it yet. The answer will be typed into your terminal.',
+    };
+  }
+
+  /**
+   * A human's answer.
+   *
+   * What is accepted is what the dialog showed rather than what the agent
+   * asked for, because this is a proposal and editing it is the likely path -
+   * so the fields come back with the answer.
+   */
+  resolveTemplateProposal(
+    proposalId: string,
+    accept: boolean,
+    edits: {
+      id?: string;
+      agent?: string;
+      description?: string | null;
+      model?: string | null;
+      effort?: string | null;
+      prompt?: string | null;
+    } = {},
+  ): void {
+    const proposal = this.proposals.get(proposalId);
+    if (!proposal) throw new Error('that proposal is no longer waiting');
+
+    if (accept) {
+      // Before removing it: a refusal here - a name the file claimed since,
+      // say - should leave the dialog open with the proposal still live.
+      const saved = this.saveTemplate({ ...proposal.template, ...edits });
+      this.proposals.delete(proposalId);
+      this.emit('templateProposalResolved', proposalId);
+      this.tellAgent(
+        proposal.fromAddr,
+        `Your proposed template was accepted and saved as "${saved.id}"` +
+          (saved.id === proposal.template.id ? '' : ` (you asked for "${proposal.template.id}")`) +
+          `. It launches ${saved.agent}` +
+          [saved.model && `on ${saved.model}`, saved.effort && `at ${saved.effort} effort`]
+            .filter(Boolean)
+            .join(' ')
+            .replace(/^(.)/, ' $1') +
+          '. You can start an agent from it now.',
+      );
+      return;
+    }
+
+    this.proposals.delete(proposalId);
+    this.emit('templateProposalResolved', proposalId);
+    this.tellAgent(
+      proposal.fromAddr,
+      `Your proposed template "${proposal.template.id}" was declined. Do not` +
+        ' propose it again unless you are asked to; carry on with what you were doing.',
+    );
+  }
+
+  /**
+   * A notice from the hub itself, typed into an agent's terminal.
+   *
+   * Its own prefix, deliberately neither `[from <address>]` nor bare text: it
+   * is not a peer talking and it is not the human either, and an agent that
+   * mistook it for one of those would either reply into the void or treat it
+   * as an instruction.
+   */
+  private tellAgent(address: string, text: string): void {
+    const target = this.sessions.getByAddress(address);
+    if (!target) return;
+    const mode = this.profiles.get(target.profile)?.inject ?? 'bracketed';
+    try {
+      this.sessions.write(target.id, encodeInjection(`[termscape] ${text}`, mode));
+    } catch {
+      // The agent is gone. Nothing to tell and nothing to fix.
+    }
   }
 
   /* --------------------------------------------------------------- hosts */

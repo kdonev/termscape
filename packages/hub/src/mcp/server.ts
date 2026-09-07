@@ -5,6 +5,7 @@ import {
   ReadScreenInput,
   SendMessageInput,
   SetStatusInput,
+  ProposeTemplateInput,
   SpawnAgentInput,
   StopAgentInput,
   WhoamiInput,
@@ -25,6 +26,7 @@ export interface AgentApi {
   readScreen(sessionId: string, address: string, lines?: number): Promise<unknown>;
   setStatus(sessionId: string, text: string): Promise<unknown>;
   stopAgent(sessionId: string, address: string): Promise<unknown>;
+  proposeTemplate(sessionId: string, input: ProposeTemplateInput): Promise<unknown>;
 }
 
 function ok(value: unknown) {
@@ -118,6 +120,21 @@ export function buildMcpServer(callerSessionId: string, api: AgentApi): McpServe
       inputSchema: SetStatusInput.shape,
     },
     ({ text }) => guard(() => api.setStatus(callerSessionId, text)),
+  );
+
+  server.registerTool(
+    'propose_template',
+    {
+      description:
+        'Ask a human to save a template: an agent plus a model, an effort and a first ' +
+        'instruction, picked by name whenever an agent is started. This asks rather than ' +
+        'does - a template changes how future agents are launched, so a human reviews it ' +
+        'and may edit it first. Returns as soon as they have been shown it, not when they ' +
+        'answer; the answer is typed into your terminal. Do not start an agent from the ' +
+        'name until you are told it was accepted.',
+      inputSchema: ProposeTemplateInput.shape,
+    },
+    (input) => guard(() => api.proposeTemplate(callerSessionId, input)),
   );
 
   server.registerTool(

@@ -204,10 +204,17 @@ function MachineNode({ machine }: { machine: TreeMachine }) {
  * knows, because it joins the two lists at the point it matters.
  */
 function TemplatesNode() {
-  const { templates, openDialog } = useStore(
-    useShallow((s) => ({ templates: s.templates, openDialog: s.openDialog })),
+  const { templates, proposals, openDialog } = useStore(
+    useShallow((s) => ({
+      templates: s.templates,
+      proposals: s.templateProposals,
+      openDialog: s.openDialog,
+    })),
   );
+  // Opened when an agent is waiting on an answer: a proposal that arrived
+  // while another dialog was up is otherwise only visible in here.
   const [collapsed, setCollapsed] = useState(true);
+  const open = !collapsed || proposals.length > 0;
 
   // Made ones first: a list that opens with the whole built-in set before the
   // three you wrote is a list you have to read past.
@@ -224,7 +231,11 @@ function TemplatesNode() {
         <Twisty collapsed={collapsed} onClick={() => setCollapsed((v) => !v)} />
         <span className="node-label">templates</span>
         <span className="node-sub">
-          {made > 0 ? `${made} of your own` : 'one per agent'}
+          {proposals.length > 0
+            ? `${proposals.length} waiting on you`
+            : made > 0
+              ? `${made} of your own`
+              : 'one per agent'}
         </span>
         <span className="spacer" />
         <button
@@ -239,8 +250,24 @@ function TemplatesNode() {
         </button>
       </div>
 
-      {!collapsed && (
+      {open && (
         <div className="node-children">
+          {proposals.map((p) => (
+            <div className="node-group" key={p.id}>
+              <div className="node template">
+                <span className="node-label">{p.template.id}</span>
+                <span className="node-sub">proposed by {p.fromAddr}</span>
+                <span className="spacer" />
+                <button
+                  className="btn"
+                  title={`Review the template ${p.fromAddr} asked for`}
+                  onClick={() => openDialog({ kind: 'reviewTemplate', proposalId: p.id })}
+                >
+                  review
+                </button>
+              </div>
+            </div>
+          ))}
           {ordered.map((t) => (
             <TemplateNode key={t.id} template={t} />
           ))}

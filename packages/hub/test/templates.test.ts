@@ -286,3 +286,113 @@ describe('templates made from the panel', () => {
     expect(hub.sessions.get(s.id)?.state).not.toBe('failed');
   }, 30_000);
 });
+
+/*
+ * An agent asking for a template.
+ *
+ * The tool asks rather than does, so what matters is that a refusal reaches
+ * the agent while it is still there to be told, that nothing is stored until a
+ * human says so, and that what gets stored is what the human saw rather than
+ * what the agent asked for.
+ */
+describe('templates an agent proposes', () => {
+  let hub: Hub;
+  let workspaceId: string;
+  let sessionId: string;
+
+  const folder = (name: string): string => {
+    const p = join(dir, name);
+    mkdirSync(p, { recursive: true });
+    return p;
+  };
+
+  beforeEach(async () => {
+    hub = new Hub({ dbPath: join(dir, 'state.db') });
+    workspaceId = hub.createWorkspace('crew', folder('crew')).id;
+    // `shell` is the only profile a test can launch on every platform.
+    sessionId = (await hub.startSession({ workspaceId, profile: 'shell' })).id;
+  }, 30_000);
+  afterEach(() => hub.shutdown());
+
+  const propose = (input: Record<string, string>) =>
+    hub.proposeTemplate(sessionId, input as any);
+
+  it('stores nothing until a human answers', async () => {
+    const r = await propose({ id: 'reviewer', agent: 'claude', model: 'opus' });
+    expect(r.status).toBe('awaiting review');
+    expect(hub.pendingProposals()).toHaveLength(1);
+    // The whole point: the name does not resolve yet.
+    expect(hub.templates.get('reviewer')).toBeNull();
+  });
+
+  it('says whether anyone is actually there to decide', async () => {
+    // A hub with no browser attached is normal and transient, but an agent
+    // told "awaiting review" with nobody watching would sit expecting one.
+    expect((await propose({ id: 'a', agent: 'claude' })).anyoneWatching).toBe(false);
+    hub.setViewers(1);
+    expect((await propose({ id: 'b', agent: 'claude' })).anyoneWatching).toBe(true);
+  });
+
+  it('refuses the agent, not the human, when the values cannot work', async () => {
+    // The same rule the panel is held to, run while the agent can still be
+    // told why. Nobody should be asked to approve something that cannot load.
+    await expect(propose({ id: 'deep', agent: 'opencode', effort: 'high' })).rejects.toThrow(
+      /no effort setting/,
+    );
+    expect(hub.pendingProposals()).toHaveLength(0);
+  });
+
+  it('refuses a name agents.toml has claimed', async () => {
+    writeConfig('[template.reviewer]\nagent = "claude"\n');
+    hub.shutdown();
+    hub = new Hub({ dbPath: join(dir, 'state2.db') });
+    workspaceId = hub.createWorkspace('crew2', folder('crew2')).id;
+    sessionId = (await hub.startSession({ workspaceId, profile: 'shell' })).id;
+    await expect(propose({ id: 'reviewer', agent: 'claude' })).rejects.toThrow(/agents\.toml/);
+  }, 30_000);
+
+  it('caps how many one agent may have waiting', async () => {
+    // Bounded for the reason send_message is: one confused agent must not be
+    // able to bury the canvas in dialogs.
+    for (const id of ['one', 'two', 'three']) await propose({ id, agent: 'claude' });
+    await expect(propose({ id: 'four', agent: 'claude' })).rejects.toThrow(/already have/);
+    expect(hub.pendingProposals()).toHaveLength(3);
+  });
+
+  it('saves what the human saw, not what the agent asked for', async () => {
+    const { proposalId } = await propose({ id: 'reviewer', agent: 'claude', model: 'opus' });
+    // The likeliest outcome is a human who keeps the idea and changes a field.
+    hub.resolveTemplateProposal(proposalId, true, { id: 'critic', model: 'sonnet' });
+
+    expect(hub.templates.get('reviewer')).toBeNull();
+    expect(hub.templates.info().find((t) => t.id === 'critic')).toMatchObject({
+      agent: 'claude',
+      model: 'sonnet',
+      source: 'stored',
+    });
+    expect(hub.pendingProposals()).toHaveLength(0);
+  });
+
+  it('stores nothing when it is declined', async () => {
+    const { proposalId } = await propose({ id: 'reviewer', agent: 'claude' });
+    hub.resolveTemplateProposal(proposalId, false);
+    expect(hub.templates.get('reviewer')).toBeNull();
+    expect(hub.pendingProposals()).toHaveLength(0);
+  });
+
+  it('refuses to answer a proposal twice', async () => {
+    // Two browsers can have the same dialog open.
+    const { proposalId } = await propose({ id: 'reviewer', agent: 'claude' });
+    hub.resolveTemplateProposal(proposalId, true);
+    expect(() => hub.resolveTemplateProposal(proposalId, true)).toThrow(/no longer waiting/);
+  });
+
+  it('keeps the proposal alive when accepting it fails', async () => {
+    const { proposalId } = await propose({ id: 'reviewer', agent: 'claude' });
+    // An edit that cannot work must not silently discard what was proposed.
+    expect(() =>
+      hub.resolveTemplateProposal(proposalId, true, { agent: 'shell', model: 'opus' }),
+    ).toThrow(/does not take a model/);
+    expect(hub.pendingProposals()).toHaveLength(1);
+  });
+});

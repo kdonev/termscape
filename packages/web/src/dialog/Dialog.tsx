@@ -90,12 +90,21 @@ export function DialogForm({
   submitLabel,
   canSubmit = true,
   danger = false,
+  secondary,
   onSubmit,
   children,
 }: {
   submitLabel: string;
   canSubmit?: boolean;
   danger?: boolean;
+  /**
+   * A third answer, for a dialog where cancel is not a decision.
+   *
+   * Reviewing an agent's proposal is the case: accepting and declining are
+   * both answers somebody is waiting on, and closing the dialog is neither -
+   * it leaves the question open.
+   */
+  secondary?: { label: string; onClick: () => Promise<void> };
   onSubmit: () => Promise<void>;
   children: React.ReactNode;
 }) {
@@ -138,6 +147,27 @@ export function DialogForm({
         <button className="btn" type="button" onClick={closeDialog}>
           cancel
         </button>
+        {secondary && (
+          <button
+            className="btn"
+            type="button"
+            disabled={busy}
+            onClick={() => {
+              setBusy(true);
+              setError(null);
+              secondary.onClick().then(
+                () => alive.current && closeDialog(),
+                (err: Error) => {
+                  if (!alive.current) return;
+                  setError(err.message);
+                  setBusy(false);
+                },
+              );
+            }}
+          >
+            {secondary.label}
+          </button>
+        )}
         <button
           className={`btn ${danger ? 'danger-solid' : 'primary'}`}
           type="submit"

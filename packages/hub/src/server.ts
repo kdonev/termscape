@@ -228,6 +228,9 @@ export async function serve(opts: ServeOptions): Promise<ServeResult> {
     // purpose, so nothing about spawning CLIs can delay a page.
     profiles: hub.agents.snapshot(),
     templates: hub.templates.info(),
+    // A browser that was closed when a proposal arrived would otherwise never
+    // see it, and the agent that asked is still waiting on an answer.
+    templateProposals: hub.pendingProposals(),
     hostProfiles: hub.peers.agentsByHost(),
   });
 
@@ -236,6 +239,10 @@ export async function serve(opts: ServeOptions): Promise<ServeResult> {
   hub.on('workspace', (w) => broadcast({ t: 'workspaceUpserted', workspace: w }));
   hub.on('workspaceRemoved', (id) => broadcast({ t: 'workspaceRemoved', workspaceId: id }));
   hub.on('templates', (templates) => broadcast({ t: 'templatesChanged', templates }));
+  hub.on('templateProposed', (proposal) => broadcast({ t: 'templateProposed', proposal }));
+  hub.on('templateProposalResolved', (proposalId) =>
+    broadcast({ t: 'templateProposalResolved', proposalId }),
+  );
   hub.on('message', (m) => broadcast({ t: 'messageSent', message: m }));
   hub.on('host', (h) => broadcast({ t: 'hostUpserted', host: h }));
   hub.on('hostRemoved', (id) => broadcast({ t: 'hostRemoved', hostId: id }));
@@ -271,6 +278,8 @@ export async function serve(opts: ServeOptions): Promise<ServeResult> {
   app.get('/ws', { websocket: true }, (socket) => {
     let authed = false;
     clients.add(socket);
+    // So an agent can be told honestly whether anybody is there to answer it.
+    hub.setViewers(clients.size);
     attached.set(socket, new Set());
 
     socket.on('message', (raw: Buffer, isBinary: boolean) => {
@@ -324,6 +333,7 @@ export async function serve(opts: ServeOptions): Promise<ServeResult> {
 
     socket.on('close', () => {
       clients.delete(socket);
+      hub.setViewers(clients.size);
       attached.delete(socket);
     });
   });
@@ -432,6 +442,17 @@ export async function serve(opts: ServeOptions): Promise<ServeResult> {
 
       case 'removeTemplate':
         hub.removeTemplate(msg.id);
+        return;
+
+      case 'resolveTemplateProposal':
+        hub.resolveTemplateProposal(msg.proposalId, msg.accept, {
+          id: msg.id,
+          agent: msg.agent,
+          description: msg.description,
+          model: msg.model,
+          effort: msg.effort,
+          prompt: msg.prompt,
+        });
         return;
 
       case 'startSession':

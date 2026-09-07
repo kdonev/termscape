@@ -178,6 +178,31 @@ export const AgentTemplateInfo = z.object({
 });
 export type AgentTemplateInfo = z.infer<typeof AgentTemplateInfo>;
 
+/**
+ * A template an agent has asked for and a human has not yet answered.
+ *
+ * Live rather than durable: it is held in memory and dies with the hub, which
+ * is right because the agent waiting on the answer dies with the hub too. A
+ * proposal that outlived both would be a dialog about a template nobody can be
+ * told the outcome of.
+ */
+export const TemplateProposal = z.object({
+  /** The proposal, not the template. */
+  id: z.string(),
+  /** Which agent is asking. Nobody can judge "an agent wants a template". */
+  fromAddr: z.string(),
+  proposedAt: z.number(),
+  template: z.object({
+    id: z.string(),
+    agent: z.string(),
+    description: z.string().nullable(),
+    model: z.string().nullable(),
+    effort: z.string().nullable(),
+    prompt: z.string().nullable(),
+  }),
+});
+export type TemplateProposal = z.infer<typeof TemplateProposal>;
+
 export const AgentProfileInfo = z.object({
   id: z.string(),
   description: z.string(),

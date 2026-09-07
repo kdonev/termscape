@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import type {
+  TemplateProposal,
   AckableMsg,
   AgentProfileInfo,
   AgentTemplateInfo,
@@ -37,6 +38,8 @@ function keyOf(spec: DialogSpec): string {
       return `startAgent:${spec.workspaceId}`;
     case 'saveTemplate':
       return `saveTemplate:${spec.id ?? '(new)'}`;
+    case 'reviewTemplate':
+      return `reviewTemplate:${spec.proposalId}`;
     case 'addMachine':
       return 'addMachine';
     case 'editMachine':
@@ -56,6 +59,8 @@ function Body({ spec }: { spec: DialogSpec }) {
       return <StartAgentDialog workspaceId={spec.workspaceId} />;
     case 'saveTemplate':
       return <TemplateDialog id={spec.id} />;
+    case 'reviewTemplate':
+      return <ReviewTemplateDialog proposalId={spec.proposalId} />;
     case 'addMachine':
       return <AddMachineDialog />;
     case 'editMachine':
@@ -389,20 +394,32 @@ function templateHint(
  * dialog that cannot express the mistake is better than one that explains it
  * afterwards.
  */
-function TemplateDialog({ id }: { id: string | null }) {
+function TemplateDialog({
+  id,
+  proposal,
+}: {
+  id: string | null;
+  /**
+   * Set when an agent asked for this one. The form is the same because the
+   * decision is the same, and because the likeliest answer to a proposal is
+   * not yes or no but "yes, with a different name".
+   */
+  proposal?: TemplateProposal;
+}) {
   const request = useRequest();
   const { templates, profiles } = useStore(
     useShallow((s) => ({ templates: s.templates, profiles: s.profiles })),
   );
 
   const editing = id ? (templates.find((t) => t.id === id) ?? null) : null;
+  const seed = proposal?.template ?? editing;
 
-  const [name, setName] = useState(editing?.id ?? '');
-  const [agentId, setAgentId] = useState(editing?.agent ?? profiles[0]?.id ?? 'claude');
-  const [description, setDescription] = useState(editing?.description ?? '');
-  const [model, setModel] = useState(editing?.model ?? '');
-  const [effort, setEffort] = useState(editing?.effort ?? '');
-  const [prompt, setPrompt] = useState(editing?.prompt ?? '');
+  const [name, setName] = useState(seed?.id ?? '');
+  const [agentId, setAgentId] = useState(seed?.agent ?? profiles[0]?.id ?? 'claude');
+  const [description, setDescription] = useState(seed?.description ?? '');
+  const [model, setModel] = useState(seed?.model ?? '');
+  const [effort, setEffort] = useState(seed?.effort ?? '');
+  const [prompt, setPrompt] = useState(seed?.prompt ?? '');
 
   const agent = profiles.find((p) => p.id === agentId);
 
@@ -412,27 +429,67 @@ function TemplateDialog({ id }: { id: string | null }) {
    * given machine has it is that machine's answer, and the picker already
    * joins the two lists at the point it matters.
    */
+  const fields = {
+    id: name.trim(),
+    agent: agentId,
+    description: description.trim() || null,
+    model: model.trim() || null,
+    effort: effort.trim() || null,
+    prompt: prompt.trim() || null,
+  };
+
   return (
-    <Dialog title={editing ? `Edit ${editing.id}` : 'New template'}>
+    <Dialog
+      title={
+        proposal
+          ? `${proposal.fromAddr} proposes a template`
+          : editing
+            ? `Edit ${editing.id}`
+            : 'New template'
+      }
+    >
       <DialogForm
-        submitLabel={editing ? 'save template' : 'add template'}
+        submitLabel={proposal ? 'add template' : editing ? 'save template' : 'add template'}
         canSubmit={name.trim().length > 0 && !!agent}
+        // Declining is an answer somebody is waiting on. Closing the dialog is
+        // not one: it leaves the proposal where it was.
+        secondary={
+          proposal
+            ? {
+                label: 'decline',
+                onClick: () =>
+                  request({
+                    t: 'resolveTemplateProposal',
+                    proposalId: proposal.id,
+                    accept: false,
+                  }),
+              }
+            : undefined
+        }
         onSubmit={() =>
-          request({
-            t: 'saveTemplate',
-            id: name.trim(),
-            agent: agentId,
-            description: description.trim() || null,
-            model: model.trim() || null,
-            effort: effort.trim() || null,
-            prompt: prompt.trim() || null,
-          })
+          proposal
+            ? request({
+                t: 'resolveTemplateProposal',
+                proposalId: proposal.id,
+                accept: true,
+                ...fields,
+              })
+            : request({ t: 'saveTemplate', ...fields })
         }
       >
+        {proposal && (
+          <p className="dialog-note">
+            An agent asked for this. Nothing has been saved yet, and you can change any
+            of it first — it is a suggestion, not a request to rubber-stamp. Agents
+            already running are unaffected either way.
+          </p>
+        )}
         <Field
           label="name"
           hint={
-            editing
+            proposal
+              ? 'Rename it if you would rather it were called something else.'
+              : editing
               ? editing.source === 'derived'
                 ? `Saving makes a stored template that shadows ${editing.agent}'s own.`
                 : 'The name is how it is picked; to rename one, make a new one and remove this.'
@@ -443,7 +500,7 @@ function TemplateDialog({ id }: { id: string | null }) {
             className="input"
             placeholder="reviewer"
             value={name}
-            readOnly={!!editing}
+            readOnly={!!editing && !proposal}
             onChange={(e) => setName(e.target.value)}
           />
         </Field>
@@ -532,6 +589,38 @@ function TemplateDialog({ id }: { id: string | null }) {
       </DialogForm>
     </Dialog>
   );
+}
+
+/**
+ * An agent's proposal, looked up rather than passed in.
+ *
+ * Looked up because it can be answered from another browser while this one has
+ * it open, and the store drops it when that happens - which has to read as
+ * "somebody dealt with it", not as a dialog full of stale fields.
+ */
+function ReviewTemplateDialog({ proposalId }: { proposalId: string }) {
+  const proposal = useStore((s) => s.templateProposals.find((p) => p.id === proposalId));
+  const closeDialog = useStore((s) => s.closeDialog);
+
+  if (!proposal) {
+    return (
+      <Dialog title="Already answered">
+        <div className="dialog-body">
+          <p className="dialog-note">
+            That proposal is no longer waiting — it was accepted or declined somewhere
+            else.
+          </p>
+          <footer className="dialog-actions">
+            <button className="btn primary" type="button" onClick={closeDialog}>
+              close
+            </button>
+          </footer>
+        </div>
+      </Dialog>
+    );
+  }
+
+  return <TemplateDialog id={null} proposal={proposal} />;
 }
 
 /* --------------------------------------------------------------- machines */

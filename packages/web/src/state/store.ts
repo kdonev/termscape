@@ -3,6 +3,7 @@ import type {
   AckableMsg,
   AgentProfileInfo,
   AgentTemplateInfo,
+  TemplateProposal,
   Host,
   Message,
   Session,
@@ -42,6 +43,8 @@ export type DialogSpec =
    * saving creates a stored one that shadows it.
    */
   | { kind: 'saveTemplate'; id: string | null }
+  /** An agent's proposal, waiting on a human to accept, edit or decline it. */
+  | { kind: 'reviewTemplate'; proposalId: string }
   | { kind: 'addMachine' }
   | { kind: 'editMachine'; hostId: string }
   /**
@@ -74,6 +77,7 @@ interface AppState {
   profiles: AgentProfileInfo[];
   /** What the picker offers: an agent plus what has already been chosen for it. */
   templates: AgentTemplateInfo[];
+  templateProposals: TemplateProposal[];
   /**
    * What each attached machine has, by host id. Per machine because a host
    * has its own PATH: starting an agent on a workspace over there sends a
@@ -135,6 +139,7 @@ export const useStore = create<AppState>((set, get) => ({
   messages: [],
   profiles: [],
   templates: [],
+  templateProposals: [],
   hostProfiles: {},
   viewport: { panX: 0, panY: 0, zoom: 1 },
   flashes: [],
@@ -162,6 +167,7 @@ export const useStore = create<AppState>((set, get) => ({
           messages: m.state.messages,
           profiles: m.state.profiles,
           templates: m.state.templates,
+          templateProposals: m.state.templateProposals,
           hostProfiles: m.state.hostProfiles,
           viewport: m.state.viewport,
           // This arrives on every reconnect, not only the first, so it can
@@ -197,6 +203,32 @@ export const useStore = create<AppState>((set, get) => ({
         // The whole list, because one write can change a row nobody touched:
         // removing a stored template reveals the derived one underneath it.
         set({ templates: m.templates });
+        return;
+
+      case 'templateProposed':
+        /*
+         * Opened in front of whoever is looking, because that is the whole
+         * point - an agent is waiting on an answer. Not if a dialog is already
+         * open though: replacing one mid-edit would throw away what somebody
+         * was typing, and the proposal is listed under the templates root
+         * until it is answered.
+         */
+        set((s) => ({
+          templateProposals: [...s.templateProposals, m.proposal],
+          dialog: s.dialog ?? { kind: 'reviewTemplate', proposalId: m.proposal.id },
+        }));
+        return;
+
+      case 'templateProposalResolved':
+        set((s) => ({
+          templateProposals: s.templateProposals.filter((p) => p.id !== m.proposalId),
+          // Answered elsewhere - another browser, or this one. Either way the
+          // dialog is about something that is no longer waiting.
+          dialog:
+            s.dialog?.kind === 'reviewTemplate' && s.dialog.proposalId === m.proposalId
+              ? null
+              : s.dialog,
+        }));
         return;
 
       case 'hostUpserted':

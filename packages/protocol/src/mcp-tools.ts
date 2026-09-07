@@ -48,6 +48,42 @@ export const StopAgentInput = z.object({
   address: z.string().describe('Agent to stop. You may only stop agents you spawned.'),
 });
 
+/**
+ * Note the verb. This asks; it does not do. A template changes how *future*
+ * agents are launched, on every machine, with nobody necessarily watching, so
+ * a human confirms it before it exists. The tool returns as soon as the
+ * proposal is put in front of them, and the answer arrives in your terminal.
+ */
+export const ProposeTemplateInput = z.object({
+  id: z
+    .string()
+    .min(1)
+    .max(60)
+    .describe('Name for the template, as it will appear in the picker, e.g. "reviewer".'),
+  agent: z
+    .string()
+    .min(1)
+    .describe('Agent profile id it launches, e.g. "claude". Use list_agents to see what exists.'),
+  description: z
+    .string()
+    .max(200)
+    .optional()
+    .describe('One line shown beside the name in the picker.'),
+  model: z
+    .string()
+    .optional()
+    .describe('Model to launch on. Refused if that agent takes no model on the command line.'),
+  effort: z
+    .string()
+    .optional()
+    .describe('Reasoning effort. Refused if that agent has no effort setting.'),
+  prompt: z
+    .string()
+    .max(4000)
+    .optional()
+    .describe('First instruction, typed in once the agent is up.'),
+});
+
 export type WhoamiInput = z.infer<typeof WhoamiInput>;
 export type ListAgentsInput = z.infer<typeof ListAgentsInput>;
 export type SendMessageInput = z.infer<typeof SendMessageInput>;
@@ -55,8 +91,17 @@ export type SpawnAgentInput = z.infer<typeof SpawnAgentInput>;
 export type ReadScreenInput = z.infer<typeof ReadScreenInput>;
 export type SetStatusInput = z.infer<typeof SetStatusInput>;
 export type StopAgentInput = z.infer<typeof StopAgentInput>;
+export type ProposeTemplateInput = z.infer<typeof ProposeTemplateInput>;
 
 /** Max bytes accepted in a single send_message body (mirrors the zod cap). */
 export const MAX_MESSAGE_BYTES = 8000;
 /** Per-sender delivery budget, enforced by the router. */
 export const MESSAGE_RATE_LIMIT = { windowMs: 10_000, max: 20 } as const;
+/**
+ * How many proposals one agent may have waiting at once.
+ *
+ * Bounded for the reason send_message is: a confused agent must not be able to
+ * bury the canvas in dialogs. Small, because a human answers these one at a
+ * time and an agent with three unanswered questions does not need a fourth.
+ */
+export const MAX_PENDING_PROPOSALS = 3;

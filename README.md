@@ -177,6 +177,14 @@ tunnel. Same protocol, opposite direction.
 | `read_screen` | look at another agent's terminal without interrupting it |
 | `set_status` | label your own window so the human can see what you are doing |
 | `stop_agent` | stop an agent you spawned |
+| `propose_template` | ask the human to save a way of starting an agent, under a name |
+
+`propose_template` is the only one that asks rather than does. A template
+changes how *future* agents are launched, on every machine, with nobody
+necessarily watching — so the canvas shows it to a human, who can edit it
+before accepting or decline it outright. The tool returns as soon as they have
+been shown it rather than blocking until they answer, and the decision is typed
+back into the agent's terminal. Nothing is stored unless someone says yes.
 
 Every agent is also given a brief explaining its address, its peers, and that
 text arriving as `[from <address>] ...` is a colleague rather than the human.

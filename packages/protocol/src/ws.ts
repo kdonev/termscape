@@ -8,6 +8,7 @@ import {
   WindowRect,
   AgentProfileInfo,
   AgentTemplateInfo,
+  TemplateProposal,
 } from './domain.js';
 
 /* ------------------------------------------------------------------ *
@@ -122,6 +123,26 @@ export const ClientMsg = z.discriminatedUnion('t', [
     prompt: z.string().nullable().optional(),
   }),
   z.object({ t: z.literal('removeTemplate'), requestId, id: z.string() }),
+  /**
+   * Answer an agent's proposal.
+   *
+   * The fields ride along because this is a proposal rather than a yes/no
+   * question: the likeliest outcome is a human who keeps the idea and changes
+   * the name or the model, so what is accepted is what the dialog shows, not
+   * what the agent asked for. Omitted on a rejection.
+   */
+  z.object({
+    t: z.literal('resolveTemplateProposal'),
+    requestId,
+    proposalId: z.string(),
+    accept: z.boolean(),
+    id: z.string().min(1).optional(),
+    agent: z.string().min(1).optional(),
+    description: z.string().nullable().optional(),
+    model: z.string().nullable().optional(),
+    effort: z.string().nullable().optional(),
+    prompt: z.string().nullable().optional(),
+  }),
 
   // sessions
   z.object({
@@ -201,6 +222,7 @@ export type AckableMsg = Extract<
       | 'removeWorkspace'
       | 'saveTemplate'
       | 'removeTemplate'
+      | 'resolveTemplateProposal'
       | 'startSession'
       | 'removeSession'
       | 'addHost'
@@ -232,6 +254,12 @@ export const HubState = z.object({
   /** What the picker offers: agents plus the models and efforts already chosen. */
   templates: z.array(AgentTemplateInfo),
   /**
+   * Proposals waiting on a human. Sent with the rest of the state because a
+   * browser that was closed when one arrived would otherwise never see it, and
+   * the agent that asked is still waiting.
+   */
+  templateProposals: z.array(TemplateProposal),
+  /**
    * What each attached machine has, by host id. Separate from `profiles`
    * because the answer is per machine: a host has its own PATH, and the
    * picker for a workspace over there has to offer that machine's agents
@@ -257,6 +285,8 @@ export const ServerMsg = z.discriminatedUnion('t', [
    * that can express the result.
    */
   z.object({ t: z.literal('templatesChanged'), templates: z.array(AgentTemplateInfo) }),
+  z.object({ t: z.literal('templateProposed'), proposal: TemplateProposal }),
+  z.object({ t: z.literal('templateProposalResolved'), proposalId: z.string() }),
   z.object({ t: z.literal('workspaceRemoved'), workspaceId: z.string() }),
   z.object({ t: z.literal('hostUpserted'), host: Host }),
   z.object({ t: z.literal('hostRemoved'), hostId: z.string() }),

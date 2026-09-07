@@ -272,6 +272,11 @@ The \`termscape\` MCP server gives you these tools:
 - \`set_status\` — set a short label shown on your window, so the human
   watching the canvas can see what you are doing.
 - \`stop_agent\` — stop an agent you spawned.
+- \`propose_template\` — ask the human to save a way of starting an agent (a
+  CLI, a model, an effort, a first instruction) under a name, so it can be
+  picked again later. It asks rather than does: they review it, may edit it,
+  and the answer is typed back to you. Do not start an agent from the name
+  until you are told it was accepted.
 
 ## Messages you receive
 
