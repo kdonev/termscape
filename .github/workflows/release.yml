@@ -34,6 +34,10 @@ jobs:
       - run: npm run typecheck
       - run: npm test
 
+      # A release bumps two versions: packages/hub/package.json and HUB_VERSION
+      # in packages/hub/src/hub.ts, which peer compatibility is gated on. The
+      # drift between those two is caught by version.test.ts in the step above;
+      # this one catches the tag disagreeing with either.
       - name: Refuse a tag that disagrees with package.json
         shell: bash
         run: |
