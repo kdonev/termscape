@@ -437,7 +437,15 @@ export class PeerRegistry extends EventEmitter {
     const peer = this.peers.get(hostId);
     if (!peer) throw new Error(`host ${hostId} is not connected`);
     if (!peer.connected) throw new Error(`host ${hostId} is not connected`);
-    return peer.request<Session>({ t: 'startSession', id: randomUUID(), ...req });
+    const s = await peer.request<Session>({ t: 'startSession', id: randomUUID(), ...req });
+    // The reply carries the peer's internal uuid, which means nothing here:
+    // every session crossing this boundary is re-keyed to its address, the id
+    // the canvas, the router and the ack back to the start dialog all agree
+    // on. The window's local layout is minted now, so the sessionUpserted
+    // broadcast that lands moments later resolves this same rect rather than
+    // minting a rival one.
+    this.notePeerId(hostId, s);
+    return this.withLocalLayout(hostId, s);
   }
 
   /**

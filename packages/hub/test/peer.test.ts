@@ -169,6 +169,25 @@ describe('peer link', () => {
     // ...and B knows nothing about it, because layout is not B's business.
     expect(hubB.store.getRemoteWindows().size).toBe(0);
   });
+
+  it('answers a canvas-initiated remote start with a canvas-keyed session', async () => {
+    // The dialog's ack names what it created, and the canvas flies to it. A
+    // reply still carrying the peer's internal uuid would send the selection
+    // to an id no window answers to.
+    const host = hubA.store.listHosts()[0]!;
+    const ws = hubA.createWorkspace('remote-start', homeB, host.id);
+    const s = await hubA.startSession({
+      workspaceId: ws.id,
+      profile: 'shell',
+      name: 'spawned',
+    });
+
+    expect(s.address).toBe('remote-start/spawned');
+    expect(s.id).toBe(s.address);
+    // Its layout was minted locally on arrival, so the sessionUpserted
+    // broadcast that follows resolves this same rect rather than a rival one.
+    expect(hubA.store.getRemoteWindows().get(s.address)).toBeDefined();
+  });
 });
 
 describe('cross-host messaging', () => {

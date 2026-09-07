@@ -1150,29 +1150,25 @@ export class Hub extends EventEmitter implements AgentApi {
       opts.profile ??
       (me.template && this.templates.get(me.template) ? me.template : me.profile);
 
+    /*
+     * One injection, delivered once, by the hub that owns the child's PTY: the
+     * template's opening instruction first, then what the spawning agent asked
+     * for, attributed. Delivering them separately would race two injections on
+     * the same ready-signal, landing back to back in undefined order, so the
+     * opening merges here and rides to the child through startSession — which
+     * also means the remote path needs no delivery of its own.
+     */
+    const templatePrompt = inherit ? (this.templates.get(inherit)?.prompt ?? null) : null;
+    const instruction = opts.prompt ? `[from ${me.address}] ${opts.prompt}` : null;
+    const opening = [templatePrompt, instruction].filter(Boolean).join('\n\n') || undefined;
+
     const child = await this.startSession({
       workspaceId: ws.id,
       profile: inherit,
       name: opts.name,
       spawnedBy: me.id,
+      prompt: opening,
     });
-
-    if (opts.prompt) {
-      // The child's CLI is not listening yet; wait for it to come up before
-      // typing, otherwise the first instruction is written into the void.
-      if (ws.hostId) {
-        // The child's PTY is on the peer, so the readiness wait belongs there
-        // too; a plain delivery is the only thing this side can do.
-        void this.peers
-          .deliver(me.address, child.address, opts.prompt)
-          .catch(() => {
-            // Recorded by the message log on the owning hub; a spawn that
-            // succeeded should not fail because the greeting did not land.
-          });
-      } else {
-        void this.deliverInitialPrompt(child.id, me.address, opts.prompt);
-      }
-    }
 
     return {
       address: child.address,
@@ -1183,28 +1179,13 @@ export class Hub extends EventEmitter implements AgentApi {
   }
 
   /**
-   * Wait for a freshly spawned agent to produce output (its prompt) before
-   * injecting the first instruction. Bounded so a CLI that never prints
-   * cannot leave this hanging.
-   */
-  private async deliverInitialPrompt(
-    sessionId: string,
-    fromAddr: string,
-    prompt: string,
-  ): Promise<void> {
-    // A spawned agent's first task came from another agent, so it is attributed
-    // exactly as any other message from that agent would be.
-    await this.typeWhenReady(sessionId, `[from ${fromAddr}] ${prompt}`);
-  }
-
-  /**
    * A template's opening instruction, typed in plainly.
    *
-   * Deliberately not through deliverInitialPrompt: that prefixes
-   * `[from <address>]`, which is right for a message from a peer and wrong
-   * for an instruction from the human sitting in front of the canvas. The
-   * agent's brief tells it that a `[from ...]` line is a colleague rather than
-   * the human, so wearing that prefix here would be a lie about who is asking.
+   * Deliberately without the `[from <address>]` prefix: that is right for a
+   * message from a peer and wrong for an instruction from the human sitting in
+   * front of the canvas. The agent's brief tells it that a `[from ...]` line is
+   * a colleague rather than the human, so wearing that prefix here would be a
+   * lie about who is asking.
    */
   private async deliverOpeningInstruction(
     sessionId: string,

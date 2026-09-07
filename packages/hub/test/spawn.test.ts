@@ -25,6 +25,19 @@ const folder = (name: string): string => {
 const writeConfig = (toml: string): void =>
   writeFileSync(join(dir, 'agents.toml'), toml);
 
+/** Poll a window's output until it says something, or say so. */
+const waitForText = async (read: () => string, needle: string): Promise<string> => {
+  const deadline = Date.now() + 25_000;
+  for (;;) {
+    const text = read();
+    if (text.includes(needle)) return text;
+    if (Date.now() > deadline) throw new Error(`timed out waiting for "${needle}"`);
+    await new Promise((r) => setTimeout(r, 100));
+  }
+};
+
+const count = (text: string, needle: string): number => text.split(needle).length - 1;
+
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'termscape-spawn-'));
   process.env.TERMSCAPE_HOME = dir;
@@ -75,6 +88,53 @@ describe('spawn_agent', () => {
       const child = seen.find((s) => s.id !== parent.id);
       expect(child).toBeDefined();
       expect(child?.spawnedBy).toBe(parent.id);
+    },
+    60_000,
+  );
+
+  it(
+    'merges the template opening and the spawn instruction into one injection',
+    async () => {
+      // A prompt without a model: a shell carrying --model would be a session
+      // that exits before the readiness wait can ever see it type.
+      hub.saveTemplate({ id: 'reviewer', agent: 'shell', prompt: 'TEMPLATE OPENING' });
+      const ws = hub.createWorkspace('crew2', folder('crew2'));
+      const parent = await hub.startSession({ workspaceId: ws.id, profile: 'reviewer' });
+
+      const out = new Map<string, string>();
+      hub.on('data', (id: string, chunk: string) => out.set(id, (out.get(id) ?? '') + chunk));
+
+      await hub.spawnAgent(parent.id, { prompt: 'run the tests' });
+      const child = hub.sessions.list().find((s) => s.spawnedBy === parent.id)!;
+      expect(child).toBeDefined();
+
+      // Both halves of the instruction arrive, each exactly once — a second
+      // delivery would wake the child twice on the same ready-signal.
+      const text = await waitForText(() => out.get(child.id) ?? '', 'run the tests');
+      expect(count(text, 'TEMPLATE OPENING')).toBe(1);
+      expect(count(text, 'run the tests')).toBe(1);
+      expect(count(text, '[from ')).toBe(1);
+    },
+    60_000,
+  );
+
+  it(
+    'delivers the template opening alone when the spawn carries no instruction',
+    async () => {
+      hub.saveTemplate({ id: 'reviewer', agent: 'shell', prompt: 'TEMPLATE OPENING' });
+      const ws = hub.createWorkspace('crew3', folder('crew3'));
+      const parent = await hub.startSession({ workspaceId: ws.id, profile: 'reviewer' });
+
+      const out = new Map<string, string>();
+      hub.on('data', (id: string, chunk: string) => out.set(id, (out.get(id) ?? '') + chunk));
+
+      await hub.spawnAgent(parent.id, {});
+      const child = hub.sessions.list().find((s) => s.spawnedBy === parent.id)!;
+      expect(child).toBeDefined();
+
+      const text = await waitForText(() => out.get(child.id) ?? '', 'TEMPLATE OPENING');
+      expect(count(text, 'TEMPLATE OPENING')).toBe(1);
+      expect(text).not.toContain('[from ');
     },
     60_000,
   );
