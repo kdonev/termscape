@@ -7,6 +7,7 @@ import {
   parseAddress,
   slugify,
   type AgentProfileInfo,
+  type AgentTemplateInfo,
   type Message,
   type Host,
   type PeerAgent,
@@ -20,7 +21,7 @@ import { openDb, type Db } from './db/index.js';
 import { Store } from './db/store.js';
 import { ProfileRegistry } from './agents/profiles.js';
 import { AgentDetector } from './agents/detect.js';
-import { TemplateRegistry } from './agents/templates.js';
+import { TemplateRegistry, validate as validateTemplate } from './agents/templates.js';
 import { TokenRegistry } from './agents/tokens.js';
 import { MessageRouter } from './agents/router.js';
 import { SessionManager } from './session/manager.js';
@@ -67,8 +68,14 @@ export class Hub extends EventEmitter implements AgentApi {
   readonly db: Db;
   readonly store: Store;
   readonly profiles: ProfileRegistry;
-  /** What the picker offers: an agent plus a model, an effort and a first task. */
-  readonly templates: TemplateRegistry;
+  /**
+   * What the picker offers: an agent plus a model, an effort and a first task.
+   *
+   * Reassigned rather than mutated when a template is saved or removed: the
+   * list is a merge of three sources and one write can change a row nobody
+   * touched, so the answer is a fresh load rather than a patched one.
+   */
+  templates: TemplateRegistry;
   /** What of those profiles this machine actually has installed. */
   readonly agents: AgentDetector;
   readonly tokens: TokenRegistry;
@@ -91,7 +98,7 @@ export class Hub extends EventEmitter implements AgentApi {
     this.db = openDb(opts.dbPath ?? paths.db());
     this.store = new Store(this.db);
     this.profiles = ProfileRegistry.load();
-    this.templates = TemplateRegistry.load(this.profiles);
+    this.templates = TemplateRegistry.load(this.profiles, this.store);
     this.agents = new AgentDetector(this.profiles);
     // A joined hub is the only thing that knows its own PATH, so it says so
     // rather than waiting to be asked again; peer-serve forwards this to the
@@ -321,6 +328,106 @@ export class Hub extends EventEmitter implements AgentApi {
 
     this.store.removeWorkspace(id);
     this.emit('workspaceRemoved', id);
+  }
+
+  /* ----------------------------------------------------------- templates */
+
+  /**
+   * Create a template or replace one, from the panel.
+   *
+   * Refusals happen here, on the values, before anything is written - which is
+   * the whole reason this carries a requestId. The rules are the loader's own,
+   * called rather than restated: an agent that declares no way to spell a
+   * model or an effort cannot be given one.
+   *
+   * An id `agents.toml` has claimed is refused outright instead of being
+   * stored and then silently losing to the file at load. Storing it would
+   * leave a row in the database that never appears in the list, which is a
+   * worse thing to explain than a dialog that says no.
+   */
+  saveTemplate(input: {
+    id: string;
+    agent: string;
+    description?: string | null;
+    model?: string | null;
+    effort?: string | null;
+    prompt?: string | null;
+  }): AgentTemplateInfo {
+    const id = slugify(input.id);
+    if (!id) throw new Error('a template needs a name');
+    // `[template.reviewer]` parses as one table called `template`, which is
+    // why that word cannot be a template id any more than it can be an agent.
+    if (id === 'template') throw new Error('"template" is not usable as a name');
+
+    const existing = this.templates.get(id);
+    if (existing?.source === 'file') {
+      throw new Error(
+        `"${id}" is declared in agents.toml; edit it there, or pick another name`,
+      );
+    }
+
+    const blank = (v: string | null | undefined): string | undefined => {
+      const t = v?.trim();
+      return t ? t : undefined;
+    };
+
+    const candidate = {
+      id,
+      description: blank(input.description) ?? this.profiles.get(input.agent)?.description ?? id,
+      agent: input.agent,
+      model: blank(input.model),
+      effort: blank(input.effort),
+      prompt: blank(input.prompt),
+      source: 'stored' as const,
+    };
+
+    const problem = validateTemplate(candidate, this.profiles);
+    if (problem) throw new Error(problem);
+
+    this.store.upsertTemplate({
+      id: candidate.id,
+      description: candidate.description,
+      agent: candidate.agent,
+      model: candidate.model ?? null,
+      effort: candidate.effort ?? null,
+      prompt: candidate.prompt ?? null,
+    });
+    this.reloadTemplates();
+    return this.templates.info().find((t) => t.id === id)!;
+  }
+
+  /**
+   * Remove a stored template.
+   *
+   * Nothing running is disturbed, and nothing pretends otherwise: a session
+   * records what its template resolved to precisely so resume cannot drift, so
+   * the agents this one started keep their model, their effort and their
+   * ability to come back. Removing one that shadowed an agent's bare template
+   * reveals that bare one again rather than emptying a row.
+   */
+  removeTemplate(id: string): void {
+    const t = this.templates.get(id);
+    if (!t) throw new Error(`unknown template "${id}"`);
+    if (t.source === 'file') {
+      throw new Error(`"${id}" is declared in agents.toml; remove it there`);
+    }
+    if (t.source === 'derived') {
+      throw new Error(`"${id}" is ${t.agent}'s own template and is not stored`);
+    }
+    this.store.removeTemplate(id);
+    this.reloadTemplates();
+  }
+
+  /**
+   * Rebuild the merged list and tell everyone.
+   *
+   * Rebuilt rather than patched because the merge is what changed: one write
+   * can alter a row nobody touched - removing a stored template reveals the
+   * derived one under it - and only a fresh load knows that.
+   */
+  private reloadTemplates(): void {
+    this.templates = TemplateRegistry.load(this.profiles, this.store);
+    this.emit('templates', this.templates.info());
   }
 
   /* --------------------------------------------------------------- hosts */

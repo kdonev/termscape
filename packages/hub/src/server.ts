@@ -235,6 +235,7 @@ export async function serve(opts: ServeOptions): Promise<ServeResult> {
   hub.on('removed', (id) => broadcast({ t: 'sessionRemoved', sessionId: id }));
   hub.on('workspace', (w) => broadcast({ t: 'workspaceUpserted', workspace: w }));
   hub.on('workspaceRemoved', (id) => broadcast({ t: 'workspaceRemoved', workspaceId: id }));
+  hub.on('templates', (templates) => broadcast({ t: 'templatesChanged', templates }));
   hub.on('message', (m) => broadcast({ t: 'messageSent', message: m }));
   hub.on('host', (h) => broadcast({ t: 'hostUpserted', host: h }));
   hub.on('hostRemoved', (id) => broadcast({ t: 'hostRemoved', hostId: id }));
@@ -416,6 +417,21 @@ export async function serve(opts: ServeOptions): Promise<ServeResult> {
 
       case 'removeWorkspace':
         await hub.removeWorkspace(msg.workspaceId);
+        return;
+
+      case 'saveTemplate':
+        hub.saveTemplate({
+          id: msg.id,
+          agent: msg.agent,
+          description: msg.description,
+          model: msg.model,
+          effort: msg.effort,
+          prompt: msg.prompt,
+        });
+        return;
+
+      case 'removeTemplate':
+        hub.removeTemplate(msg.id);
         return;
 
       case 'startSession':

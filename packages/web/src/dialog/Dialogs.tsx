@@ -35,6 +35,8 @@ function keyOf(spec: DialogSpec): string {
       return `editWorkspace:${spec.workspaceId}`;
     case 'startAgent':
       return `startAgent:${spec.workspaceId}`;
+    case 'saveTemplate':
+      return `saveTemplate:${spec.id ?? '(new)'}`;
     case 'addMachine':
       return 'addMachine';
     case 'editMachine':
@@ -52,6 +54,8 @@ function Body({ spec }: { spec: DialogSpec }) {
       return <EditWorkspaceDialog workspaceId={spec.workspaceId} />;
     case 'startAgent':
       return <StartAgentDialog workspaceId={spec.workspaceId} />;
+    case 'saveTemplate':
+      return <TemplateDialog id={spec.id} />;
     case 'addMachine':
       return <AddMachineDialog />;
     case 'editMachine':
@@ -371,6 +375,163 @@ function templateHint(
   const parts = [template.id === template.agent ? null : `Runs ${template.agent}.`];
   if (agent) parts.push(agentDetail(agent));
   return parts.filter(Boolean).join(' ') || undefined;
+}
+
+/* --------------------------------------------------------------- templates */
+
+/**
+ * Make a template, or edit one.
+ *
+ * The same four fields the picker reads back, and the same rule about which of
+ * them exist: an agent that declares no way to spell a model or an effort does
+ * not get the field at all. The start-an-agent dialog already hides them that
+ * way, and hiding beats reporting — the rule still runs on the hub, but a
+ * dialog that cannot express the mistake is better than one that explains it
+ * afterwards.
+ */
+function TemplateDialog({ id }: { id: string | null }) {
+  const request = useRequest();
+  const { templates, profiles } = useStore(
+    useShallow((s) => ({ templates: s.templates, profiles: s.profiles })),
+  );
+
+  const editing = id ? (templates.find((t) => t.id === id) ?? null) : null;
+
+  const [name, setName] = useState(editing?.id ?? '');
+  const [agentId, setAgentId] = useState(editing?.agent ?? profiles[0]?.id ?? 'claude');
+  const [description, setDescription] = useState(editing?.description ?? '');
+  const [model, setModel] = useState(editing?.model ?? '');
+  const [effort, setEffort] = useState(editing?.effort ?? '');
+  const [prompt, setPrompt] = useState(editing?.prompt ?? '');
+
+  const agent = profiles.find((p) => p.id === agentId);
+
+  /*
+   * A template is one thing used on every machine, so the list here is every
+   * agent this hub knows about rather than only the ones installed. Whether a
+   * given machine has it is that machine's answer, and the picker already
+   * joins the two lists at the point it matters.
+   */
+  return (
+    <Dialog title={editing ? `Edit ${editing.id}` : 'New template'}>
+      <DialogForm
+        submitLabel={editing ? 'save template' : 'add template'}
+        canSubmit={name.trim().length > 0 && !!agent}
+        onSubmit={() =>
+          request({
+            t: 'saveTemplate',
+            id: name.trim(),
+            agent: agentId,
+            description: description.trim() || null,
+            model: model.trim() || null,
+            effort: effort.trim() || null,
+            prompt: prompt.trim() || null,
+          })
+        }
+      >
+        <Field
+          label="name"
+          hint={
+            editing
+              ? editing.source === 'derived'
+                ? `Saving makes a stored template that shadows ${editing.agent}'s own.`
+                : 'The name is how it is picked; to rename one, make a new one and remove this.'
+              : 'What you will pick from the list when starting an agent.'
+          }
+        >
+          <input
+            className="input"
+            placeholder="reviewer"
+            value={name}
+            readOnly={!!editing}
+            onChange={(e) => setName(e.target.value)}
+          />
+        </Field>
+
+        <Field label="agent" hint={agent ? agent.description : undefined}>
+          <select
+            className="input"
+            value={agentId}
+            onChange={(e) => setAgentId(e.target.value)}
+          >
+            {profiles.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.id}
+              </option>
+            ))}
+          </select>
+        </Field>
+
+        {/* Only for an agent that declares how to spell it — the same rule the
+            start-an-agent dialog applies, and the same one the hub enforces. */}
+        {agent && (agent.takesModel || agent.takesEffort) && (
+          <div className="dialog-row">
+            {agent.takesModel && (
+              <Field
+                label="model"
+                hint={
+                  agent.modelSource === 'listed'
+                    ? `${agent.models.length} to choose from.`
+                    : 'Or a full model name.'
+                }
+              >
+                <input
+                  className="input"
+                  list={`tpl-models-${agent.id}`}
+                  placeholder="the agent's default"
+                  value={model}
+                  onChange={(e) => setModel(e.target.value)}
+                />
+                <datalist id={`tpl-models-${agent.id}`}>
+                  {agent.models.map((m) => (
+                    <option key={m} value={m} />
+                  ))}
+                </datalist>
+              </Field>
+            )}
+            {agent.takesEffort && (
+              <Field label="effort">
+                <input
+                  className="input"
+                  list={`tpl-efforts-${agent.id}`}
+                  placeholder="default"
+                  value={effort}
+                  onChange={(e) => setEffort(e.target.value)}
+                />
+                <datalist id={`tpl-efforts-${agent.id}`}>
+                  {agent.efforts.map((e) => (
+                    <option key={e} value={e} />
+                  ))}
+                </datalist>
+              </Field>
+            )}
+          </div>
+        )}
+
+        <Field label="description" hint="Shown beside the name in the picker.">
+          <input
+            className="input"
+            placeholder={agent?.description ?? 'optional'}
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+          />
+        </Field>
+
+        <Field
+          label="first instruction"
+          hint="Typed into the terminal once the CLI is up. It does not repeat when a session is resumed."
+        >
+          <textarea
+            className="input"
+            rows={3}
+            placeholder="optional"
+            value={prompt}
+            onChange={(e) => setPrompt(e.target.value)}
+          />
+        </Field>
+      </DialogForm>
+    </Dialog>
+  );
 }
 
 /* --------------------------------------------------------------- machines */

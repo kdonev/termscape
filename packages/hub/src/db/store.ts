@@ -57,6 +57,32 @@ export interface SessionLaunchSpec {
   env: Record<string, string>;
 }
 
+/**
+ * A template the user made from the panel, as stored.
+ *
+ * Deliberately not `AgentTemplate`: that one carries a resolved description
+ * and the reason it cannot be used, both of which are worked out against the
+ * profiles at load. This is only what was typed.
+ */
+export interface StoredTemplate {
+  id: string;
+  description: string | null;
+  agent: string;
+  model: string | null;
+  effort: string | null;
+  prompt: string | null;
+}
+
+interface StoredTemplateRow {
+  id: string;
+  description: string | null;
+  agent: string;
+  model: string | null;
+  effort: string | null;
+  prompt: string | null;
+  created_at: number;
+}
+
 export class Store {
   constructor(private readonly db: Db) {}
 
@@ -185,6 +211,66 @@ export class Store {
 
   removeWorkspace(id: string): void {
     this.db.prepare('DELETE FROM workspace WHERE id = ?').run(id);
+  }
+
+  /* ------------------------------------------------------------ templates */
+
+  /**
+   * Templates made from the panel. `agents.toml` is a second source and is
+   * merged over these by TemplateRegistry, not here: this is only the half
+   * that can be written.
+   */
+  listStoredTemplates(): StoredTemplate[] {
+    return (
+      this.db
+        .prepare('SELECT * FROM template ORDER BY id')
+        .all() as StoredTemplateRow[]
+    ).map((r) => ({
+      id: r.id,
+      description: r.description,
+      agent: r.agent,
+      model: r.model,
+      effort: r.effort,
+      prompt: r.prompt,
+    }));
+  }
+
+  getStoredTemplate(id: string): StoredTemplate | null {
+    return this.listStoredTemplates().find((t) => t.id === id) ?? null;
+  }
+
+  /**
+   * Create or replace one, wholesale.
+   *
+   * Replace rather than patch because the dialog sends the whole form, and a
+   * template is four fields: a patch API here would only be a way to make
+   * clearing a model harder to express than setting one.
+   */
+  upsertTemplate(t: StoredTemplate): void {
+    this.db
+      .prepare(
+        `INSERT INTO template (id, description, agent, model, effort, prompt, created_at)
+         VALUES (@id, @description, @agent, @model, @effort, @prompt, @createdAt)
+         ON CONFLICT(id) DO UPDATE SET
+           description = excluded.description,
+           agent       = excluded.agent,
+           model       = excluded.model,
+           effort      = excluded.effort,
+           prompt      = excluded.prompt`,
+      )
+      .run({
+        id: t.id,
+        description: t.description ?? null,
+        agent: t.agent,
+        model: t.model ?? null,
+        effort: t.effort ?? null,
+        prompt: t.prompt ?? null,
+        createdAt: Date.now(),
+      });
+  }
+
+  removeTemplate(id: string): void {
+    this.db.prepare('DELETE FROM template WHERE id = ?').run(id);
   }
 
   /* ------------------------------------------------------------- sessions */

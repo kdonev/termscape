@@ -239,6 +239,14 @@ instead of typed every time. Every agent gets a bare template under its own
 name, so `claude` and `shell` are still there and nothing that worked stops
 working.
 
+Templates are a root of their own in the panel, next to the machines — they are
+config rather than a place, and one template is used on every machine, so it
+does not live under one. **+ template** makes one, `edit` changes it, `×`
+removes it. The list sits below the machines and starts collapsed: machines are
+what you work in every day, templates are what you set up once and then forget.
+
+They can also be written by hand, and a hand-written one wins:
+
 ```toml
 [template.reviewer]
 agent  = "claude"
@@ -246,6 +254,20 @@ model  = "opus"
 effort = "high"
 prompt = "Review the diff on this branch for correctness bugs. Report, do not fix."
 ```
+
+- Templates made in the panel are stored in `state.db`, the same place
+  workspaces and hosts already live. `agents.toml` is a second, read-only
+  source: the hub never writes it, so a formatter cannot eat the comments and
+  ordering of a file you edit by hand.
+- When both declare the same name **the file wins**, and the dialog refuses the
+  name rather than storing a row that would never appear. Someone who wrote a
+  template by hand meant it.
+- An agent's own bare template is derived, not stored. Editing one makes a
+  stored template that shadows it; removing that reveals the bare one again
+  rather than leaving a gap.
+- Removing a template takes nothing from the agents it already started. They
+  keep their model, their effort and their ability to resume, because a session
+  records what its template resolved to rather than looking it up again.
 
 Three words, kept apart deliberately: an **agent** is the CLI program, a
 **template** is what you pick from the list, and a **session** is one running

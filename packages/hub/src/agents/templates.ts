@@ -1,7 +1,8 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { parse as parseToml } from 'smol-toml';
-import type { AgentTemplateInfo } from '@termscape/protocol';
+import type { AgentTemplateInfo, TemplateSource } from '@termscape/protocol';
 import { paths } from '../paths.js';
+import type { Store, StoredTemplate } from '../db/store.js';
 import type { AgentProfile, ProfileRegistry } from './profiles.js';
 
 /**
@@ -46,11 +47,41 @@ export interface AgentTemplate {
    * quietly dropped at launch.
    */
   error?: string;
+  /**
+   * Where this one came from, which is what decides whether the panel may
+   * edit it.
+   *
+   * - `derived` — the free template every agent gets under its own name.
+   *   Nothing is stored for it, so editing one means creating a stored
+   *   template that shadows it, and there is nothing to remove.
+   * - `stored` — made from the panel, in `state.db`. Editable and removable.
+   * - `file` — declared in `~/.termscape/agents.toml`. Read-only here: it is
+   *   the user's file and the hub does not write it.
+   */
+  source: TemplateSource;
 }
 
 /** The trivial template for a profile: this agent, nothing else specified. */
 function bare(profile: AgentProfile): AgentTemplate {
-  return { id: profile.id, description: profile.description, agent: profile.id };
+  return {
+    id: profile.id,
+    description: profile.description,
+    agent: profile.id,
+    source: 'derived',
+  };
+}
+
+/** One the user made from the panel, as it comes out of the database. */
+function fromStored(t: StoredTemplate, profiles: ProfileRegistry): AgentTemplate {
+  return {
+    id: t.id,
+    description: t.description ?? profiles.get(t.agent)?.description ?? t.id,
+    agent: t.agent,
+    model: t.model ?? undefined,
+    effort: t.effort ?? undefined,
+    prompt: t.prompt ?? undefined,
+    source: 'stored',
+  };
 }
 
 /**
@@ -91,10 +122,26 @@ export class TemplateRegistry {
    * exactly as the profile loader does - the two live in the same file, and
    * failing differently for the two halves of it would be its own surprise.
    */
-  static load(profiles: ProfileRegistry): TemplateRegistry {
+  static load(profiles: ProfileRegistry, store?: Store): TemplateRegistry {
     const merged: Record<string, AgentTemplate> = Object.fromEntries(
       profiles.list().map((p) => [p.id, bare(p)]),
     );
+
+    /*
+     * Stored over derived, file over stored.
+     *
+     * Stored beats derived because a bare template is only a default: making
+     * one called `claude` with a model on it is exactly how you say "when I
+     * pick claude, I mean this". File beats stored because someone who wrote a
+     * template by hand meant it, and a UI silently overriding their file is
+     * worse than a UI refusing an id the file has claimed - which is what the
+     * hub does on create.
+     */
+    if (store) {
+      for (const t of store.listStoredTemplates()) {
+        merged[t.id] = fromStored(t, profiles);
+      }
+    }
 
     const file = paths.profiles();
     if (existsSync(file)) {
@@ -118,6 +165,7 @@ export class TemplateRegistry {
               model: typeof t.model === 'string' ? t.model : undefined,
               effort: typeof t.effort === 'string' ? t.effort : undefined,
               prompt: typeof t.prompt === 'string' ? t.prompt : undefined,
+              source: 'file',
             };
           }
         }
@@ -151,6 +199,7 @@ export class TemplateRegistry {
       effort: t.effort ?? null,
       prompt: t.prompt ?? null,
       error: t.error ?? null,
+      source: t.source,
     }));
   }
 }

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
-import type { Session } from '@termscape/protocol';
+import type { AgentTemplateInfo, Session } from '@termscape/protocol';
 import { useStore } from '../state/store.js';
 import { buildTree, type TreeMachine, type TreeWorkspace } from '../state/tree.js';
 import { statusColor, statusLabel } from '../window/status.js';
@@ -10,6 +10,10 @@ import { agentDetail, agentsOn } from '../state/agents.js';
  * The index to the canvas: every machine, the workspaces on it, and the agents
  * in each workspace — with adding and removing done on the node it belongs to
  * rather than in one strip of unrelated controls along the top.
+ *
+ * Two roots, not one. Machines are places; a template is config, used on every
+ * machine and belonging to none of them, so it sits beside the machines rather
+ * than under one. That is also why the panel is no longer called "machines".
  *
  * It overlays the canvas rather than sitting beside it, so opening it never
  * relayouts what you were looking at.
@@ -39,7 +43,7 @@ export function Panel() {
   return (
     <aside className={`panel ${open ? 'open' : ''}`} aria-hidden={!open}>
       <header className="panel-head">
-        <span className="panel-title">machines</span>
+        <span className="panel-title">canvas</span>
         <span className="spacer" />
         <button className="btn" title="Close" onClick={() => setOpen(false)}>
           ›
@@ -56,6 +60,7 @@ export function Panel() {
         >
           + machine
         </button>
+        <TemplatesNode />
       </div>
     </aside>
   );
@@ -182,6 +187,126 @@ function MachineNode({ machine }: { machine: TreeMachine }) {
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * Templates: the second root, below the machines and collapsed.
+ *
+ * Machines are what you work in every day and templates are what you set up
+ * once and then forget, so opening the panel to reach a terminal should not
+ * mean scrolling past a list of templates.
+ *
+ * No availability here on purpose. A template names an agent; whether that
+ * agent is installed is each machine's own answer, and a row that went red
+ * because one of four machines lacked a CLI would be noise. The picker already
+ * knows, because it joins the two lists at the point it matters.
+ */
+function TemplatesNode() {
+  const { templates, openDialog } = useStore(
+    useShallow((s) => ({ templates: s.templates, openDialog: s.openDialog })),
+  );
+  const [collapsed, setCollapsed] = useState(true);
+
+  // Made ones first: a list that opens with the whole built-in set before the
+  // three you wrote is a list you have to read past.
+  const ordered = [...templates].sort((a, b) => {
+    const rank = (t: AgentTemplateInfo) =>
+      t.source === 'derived' ? 1 : 0;
+    return rank(a) - rank(b) || a.id.localeCompare(b.id);
+  });
+  const made = templates.filter((t) => t.source !== 'derived').length;
+
+  return (
+    <div className="node-group">
+      <div className="node root">
+        <Twisty collapsed={collapsed} onClick={() => setCollapsed((v) => !v)} />
+        <span className="node-label">templates</span>
+        <span className="node-sub">
+          {made > 0 ? `${made} of your own` : 'one per agent'}
+        </span>
+        <span className="spacer" />
+        <button
+          className="btn"
+          title="Make a template: an agent plus a model, an effort and a first task"
+          onClick={() => {
+            setCollapsed(false);
+            openDialog({ kind: 'saveTemplate', id: null });
+          }}
+        >
+          + template
+        </button>
+      </div>
+
+      {!collapsed && (
+        <div className="node-children">
+          {ordered.map((t) => (
+            <TemplateNode key={t.id} template={t} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TemplateNode({ template }: { template: AgentTemplateInfo }) {
+  const openDialog = useStore((s) => s.openDialog);
+  const chose = [template.model, template.effort].filter(Boolean).join(', ');
+  const fromFile = template.source === 'file';
+
+  return (
+    <div className="node-group">
+      <div className="node template">
+        <span className="node-label">{template.id}</span>
+        <span className="node-sub">
+          {template.agent}
+          {chose && ` · ${chose}`}
+          {template.source === 'derived' && ' · built in'}
+          {fromFile && ' · agents.toml'}
+        </span>
+        <span className="spacer" />
+        {/* A template in agents.toml is the user's file and the hub does not
+            write it, so there is nothing honest to offer here. Editing a
+            built-in one is offered, and means making a stored template that
+            shadows it. */}
+        {!fromFile && (
+          <button
+            className="btn"
+            title={
+              template.source === 'derived'
+                ? `Make a template based on ${template.agent}`
+                : `Edit ${template.id}`
+            }
+            onClick={() => openDialog({ kind: 'saveTemplate', id: template.id })}
+          >
+            edit
+          </button>
+        )}
+        {template.source === 'stored' && (
+          <button
+            className="btn danger"
+            title={`Remove ${template.id}`}
+            onClick={() =>
+              openDialog({
+                kind: 'confirm',
+                title: `Remove ${template.id}?`,
+                // Both halves of this are already true, and neither needs a
+                // confirmation that pretends otherwise: a session records what
+                // its template resolved to precisely so resume cannot drift.
+                body:
+                  'Agents already started from it keep their model, their effort and ' +
+                  'their ability to resume. Only the next agent is affected.',
+                confirmLabel: 'remove template',
+                send: { t: 'removeTemplate', id: template.id },
+              })
+            }
+          >
+            ×
+          </button>
+        )}
+      </div>
+      {template.error && <div className="node-error">{template.error}</div>}
     </div>
   );
 }

@@ -150,6 +150,16 @@ export type ModelSource = z.infer<typeof ModelSource>;
  * The picker offers these rather than CLIs. One that names only an agent is
  * exactly the old behaviour, which is why every agent gets one for free.
  */
+/**
+ * Where a template came from, which is what decides whether it can be edited.
+ *
+ * `derived` is the free one every agent gets under its own name; `stored` was
+ * made from the panel; `file` was declared in `~/.termscape/agents.toml` and
+ * is read-only, because the hub does not write that file.
+ */
+export const TemplateSource = z.enum(['derived', 'stored', 'file']);
+export type TemplateSource = z.infer<typeof TemplateSource>;
+
 export const AgentTemplateInfo = z.object({
   id: z.string(),
   description: z.string(),
@@ -164,6 +174,7 @@ export const AgentTemplateInfo = z.object({
    * saying so rather than vanishing as if the config had been ignored.
    */
   error: z.string().nullable(),
+  source: TemplateSource,
 });
 export type AgentTemplateInfo = z.infer<typeof AgentTemplateInfo>;
 

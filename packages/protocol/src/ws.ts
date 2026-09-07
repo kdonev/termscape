@@ -97,6 +97,32 @@ export const ClientMsg = z.discriminatedUnion('t', [
   }),
   z.object({ t: z.literal('removeWorkspace'), requestId, workspaceId: z.string() }),
 
+  // templates
+  /**
+   * Make a template, or edit one.
+   *
+   * One message for both, because a template is identified by the name a
+   * person picked and there is no separate id to rename around: saving the
+   * dialog means "let `id` be this". The hub refuses an id `agents.toml` has
+   * claimed rather than shadowing it, and refuses a model or an effort the
+   * named agent cannot spell - the same rule the loader applies, so the
+   * dialog gets the refusal instead of the list quietly gaining a broken row.
+   *
+   * The whole form is sent every time. A template is four fields, and a patch
+   * API would only make clearing a model harder to say than setting one.
+   */
+  z.object({
+    t: z.literal('saveTemplate'),
+    requestId,
+    id: z.string().min(1),
+    agent: z.string().min(1),
+    description: z.string().nullable().optional(),
+    model: z.string().nullable().optional(),
+    effort: z.string().nullable().optional(),
+    prompt: z.string().nullable().optional(),
+  }),
+  z.object({ t: z.literal('removeTemplate'), requestId, id: z.string() }),
+
   // sessions
   z.object({
     t: z.literal('startSession'),
@@ -173,6 +199,8 @@ export type AckableMsg = Extract<
       | 'createWorkspace'
       | 'updateWorkspace'
       | 'removeWorkspace'
+      | 'saveTemplate'
+      | 'removeTemplate'
       | 'startSession'
       | 'removeSession'
       | 'addHost'
@@ -218,6 +246,17 @@ export const ServerMsg = z.discriminatedUnion('t', [
   z.object({ t: z.literal('sessionUpserted'), session: Session }),
   z.object({ t: z.literal('sessionRemoved'), sessionId: z.string() }),
   z.object({ t: z.literal('workspaceUpserted'), workspace: Workspace }),
+  /**
+   * The whole list, not one row.
+   *
+   * A per-row upsert cannot say what actually happens here: removing a stored
+   * template that shadowed a bare one does not remove a row, it reveals the
+   * derived one underneath, and adding one to `agents.toml` changes an
+   * existing row's source. The list is a handful of small records and is
+   * recomputed anyway, so sending it whole is both simpler and the only shape
+   * that can express the result.
+   */
+  z.object({ t: z.literal('templatesChanged'), templates: z.array(AgentTemplateInfo) }),
   z.object({ t: z.literal('workspaceRemoved'), workspaceId: z.string() }),
   z.object({ t: z.literal('hostUpserted'), host: Host }),
   z.object({ t: z.literal('hostRemoved'), hostId: z.string() }),

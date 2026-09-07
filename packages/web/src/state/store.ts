@@ -36,6 +36,12 @@ export type DialogSpec =
   | { kind: 'addWorkspace'; hostId: string | null }
   | { kind: 'editWorkspace'; workspaceId: string }
   | { kind: 'startAgent'; workspaceId: string }
+  /**
+   * Make a template, or edit one. `id` is absent for a new one and present
+   * for an edit — including editing an agent's own derived template, where
+   * saving creates a stored one that shadows it.
+   */
+  | { kind: 'saveTemplate'; id: string | null }
   | { kind: 'addMachine' }
   | { kind: 'editMachine'; hostId: string }
   /**
@@ -185,6 +191,12 @@ export const useStore = create<AppState>((set, get) => ({
 
       case 'workspaceRemoved':
         set((s) => ({ workspaces: s.workspaces.filter((x) => x.id !== m.workspaceId) }));
+        return;
+
+      case 'templatesChanged':
+        // The whole list, because one write can change a row nobody touched:
+        // removing a stored template reveals the derived one underneath it.
+        set({ templates: m.templates });
         return;
 
       case 'hostUpserted':

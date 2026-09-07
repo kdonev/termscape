@@ -356,7 +356,13 @@ body {
   flex: 0 1 auto;
   min-width: 0;
 }
-.node.machine { background: var(--panel-2); margin-top: 6px; }
+/* Both roots, machines and templates, are set off the same way. */
+.node.machine,
+.node.root { background: var(--panel-2); margin-top: 6px; }
+/* A template row is not clickable - there is no window to select - so it gets
+   the hover without the pointer that would promise one. */
+.node.template:hover { background: var(--panel-2); }
+.node.template .node-label { font-weight: 500; }
 .node.session { cursor: pointer; }
 .node.session:hover { background: var(--panel-2); }
 .node.session.on { background: #1b2540; box-shadow: inset 0 0 0 1px var(--accent); }

@@ -189,6 +189,38 @@ export const MIGRATIONS: Migration[] = [
       ALTER TABLE session ADD COLUMN template TEXT;
     `,
   },
+  {
+    version: 6,
+    name: 'stored_templates',
+    up: `
+      -- Templates made from the panel.
+      --
+      -- Kept here rather than round-tripped into ~/.termscape/agents.toml,
+      -- which is the one real decision this table represents. That file is
+      -- written by hand: a formatter that ate somebody's comments and ordering
+      -- the first time they used the dialog would be a bad trade for a config
+      -- file, and there is no TOML writer here to do it with anyway. So the
+      -- file stays a read-only second source and this is the writable one,
+      -- which is also how workspaces and hosts already work.
+      --
+      -- When both declare the same id the file wins. Someone who wrote a
+      -- template by hand meant it, and a UI silently overriding their file is
+      -- worse than a UI refusing an id the file has claimed.
+      --
+      -- The id is the primary key because it is the name a person picks from
+      -- a list; there is no separate uuid to be the "real" identity and then
+      -- explain.
+      CREATE TABLE template (
+        id          TEXT PRIMARY KEY,
+        description TEXT,
+        agent       TEXT NOT NULL,
+        model       TEXT,
+        effort      TEXT,
+        prompt      TEXT,
+        created_at  INTEGER NOT NULL
+      );
+    `,
+  },
 ];
 
 export function runMigrations(db: Database): number {

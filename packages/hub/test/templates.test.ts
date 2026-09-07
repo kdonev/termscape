@@ -177,3 +177,112 @@ describe('turning values into argv', () => {
     ).rejects.toThrow(/no effort setting/);
   }, 30_000);
 });
+
+/*
+ * Templates made from the panel.
+ *
+ * The rule that needs pinning down is precedence, because it is the one thing
+ * a person could be surprised by: a template can come from three places and
+ * only one of them is writable.
+ */
+describe('templates made from the panel', () => {
+  let hub: Hub;
+
+  const reload = (): Hub => {
+    hub?.shutdown();
+    hub = new Hub({ dbPath: join(dir, 'state.db') });
+    return hub;
+  };
+  const info = (id: string) => hub.templates.info().find((t) => t.id === id);
+
+  beforeEach(() => {
+    hub = new Hub({ dbPath: join(dir, 'state.db') });
+  });
+  afterEach(() => hub.shutdown());
+
+  it('stores one and offers it, saying where it came from', () => {
+    hub.saveTemplate({ id: 'reviewer', agent: 'claude', model: 'opus', effort: 'high' });
+    expect(info('reviewer')).toMatchObject({
+      id: 'reviewer',
+      agent: 'claude',
+      model: 'opus',
+      effort: 'high',
+      source: 'stored',
+      error: null,
+    });
+  });
+
+  it('survives a restart, because it is in the database and not in memory', () => {
+    hub.saveTemplate({ id: 'reviewer', agent: 'claude', model: 'opus' });
+    reload();
+    expect(info('reviewer')?.model).toBe('opus');
+  });
+
+  it('shadows an agent\u2019s own bare template', () => {
+    // A bare template is only a default. Making one called `claude` with a
+    // model on it is exactly how you say "when I pick claude, I mean this".
+    expect(info('claude')?.source).toBe('derived');
+    hub.saveTemplate({ id: 'claude', agent: 'claude', model: 'opus' });
+    expect(info('claude')).toMatchObject({ source: 'stored', model: 'opus' });
+  });
+
+  it('reveals the bare one again when the stored one is removed', () => {
+    hub.saveTemplate({ id: 'claude', agent: 'claude', model: 'opus' });
+    hub.removeTemplate('claude');
+    // Not an empty row and not a missing one: `claude` still starts claude.
+    expect(info('claude')).toMatchObject({ source: 'derived', model: null });
+  });
+
+  it('lets agents.toml win, and says so rather than shadowing it', () => {
+    writeConfig('[template.reviewer]\nagent = "claude"\nmodel = "sonnet"\n');
+    reload();
+    expect(info('reviewer')).toMatchObject({ source: 'file', model: 'sonnet' });
+    // Someone who wrote a template by hand meant it. Refusing the name is a
+    // better answer than storing a row that never appears in the list.
+    expect(() => hub.saveTemplate({ id: 'reviewer', agent: 'claude' })).toThrow(
+      /agents\.toml/,
+    );
+    expect(info('reviewer')?.model).toBe('sonnet');
+  });
+
+  it('refuses a value the named agent cannot spell, before storing it', () => {
+    // The loader's own rule, called rather than restated - so the dialog gets
+    // the refusal instead of the list quietly gaining a broken row.
+    expect(() => hub.saveTemplate({ id: 'deep', agent: 'opencode', effort: 'high' })).toThrow(
+      /no effort setting/,
+    );
+    expect(info('deep')).toBeUndefined();
+  });
+
+  it('refuses to remove what it does not own', () => {
+    writeConfig('[template.fromfile]\nagent = "claude"\n');
+    reload();
+    expect(() => hub.removeTemplate('fromfile')).toThrow(/agents\.toml/);
+    // A bare template is derived, not stored; there is nothing to delete.
+    expect(() => hub.removeTemplate('shell')).toThrow(/not stored/);
+  });
+
+  it('announces the whole list, because one write can change another row', () => {
+    const seen: string[][] = [];
+    hub.on('templates', (list: { id: string; source: string }[]) =>
+      seen.push(list.filter((t) => t.source === 'stored').map((t) => t.id)),
+    );
+    hub.saveTemplate({ id: 'reviewer', agent: 'claude' });
+    hub.removeTemplate('reviewer');
+    expect(seen).toEqual([['reviewer'], []]);
+  });
+
+  it('does not disturb a session it already started', async () => {
+    const folder = join(dir, 'made');
+    mkdirSync(folder, { recursive: true });
+    hub.saveTemplate({ id: 'sh', agent: 'shell', prompt: 'hello' });
+    const ws = hub.createWorkspace('made', folder);
+    const s = await hub.startSession({ workspaceId: ws.id, profile: 'sh' });
+
+    hub.removeTemplate('sh');
+    // The session recorded what its template resolved to precisely so resume
+    // cannot drift, so removing the template takes nothing away from it.
+    expect(hub.sessions.get(s.id)?.template).toBe('sh');
+    expect(hub.sessions.get(s.id)?.state).not.toBe('failed');
+  }, 30_000);
+});
