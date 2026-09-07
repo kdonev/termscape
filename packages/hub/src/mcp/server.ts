@@ -86,7 +86,12 @@ export function buildMcpServer(callerSessionId: string, api: AgentApi): McpServe
     'send_message',
     {
       description:
-        'Send a message to another agent. It is typed directly into their terminal, immediately, even if they are mid-task. Your address is attached automatically and cannot be forged.',
+        'Send a message to another agent, and the only way to reply to one. It is typed ' +
+        'directly into their terminal, immediately, even if they are mid-task. Your ' +
+        'address is attached automatically and cannot be forged. Answering in your own ' +
+        'output does not reach anyone: if a `[from <address>]` message asked you ' +
+        'something, call this with `to` set to that address, or the asker is still ' +
+        'waiting.',
       inputSchema: SendMessageInput.shape,
     },
     ({ to, text }) => guard(() => api.sendMessage(callerSessionId, to, text)),

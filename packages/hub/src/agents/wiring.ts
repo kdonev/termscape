@@ -121,110 +121,110 @@ function writeWiredFiles(
 ): void {
   const { mcpConfigPath, settingsPath, geminiSettingsPath, mcpUrl } = paths;
 
-    // One streamable-HTTP MCP server. The bearer token is what identifies this
-    // agent to the hub, so this file is secret.
-    writePrivate(
-      mcpConfigPath,
-      JSON.stringify(
-        {
-          mcpServers: {
-            termscape: {
-              type: 'http',
-              url: mcpUrl,
-              headers: { Authorization: `Bearer ${input.token}` },
-            },
+  // One streamable-HTTP MCP server. The bearer token is what identifies this
+  // agent to the hub, so this file is secret.
+  writePrivate(
+    mcpConfigPath,
+    JSON.stringify(
+      {
+        mcpServers: {
+          termscape: {
+            type: 'http',
+            url: mcpUrl,
+            headers: { Authorization: `Bearer ${input.token}` },
           },
         },
-        null,
-        2,
-      ),
-    );
+      },
+      null,
+      2,
+    ),
+  );
 
-    // Hooks give exact turn boundaries instead of guessing busy/idle from
-    // output. Claude Code runs these as shell commands; we POST the session
-    // token back so the hub knows which window changed state.
-    const hookUrl = `${input.hubOrigin}/hook/${input.token}`;
-    const hookCmd = (event: string) =>
-      process.platform === 'win32'
-        ? `powershell -NoProfile -Command "try { Invoke-WebRequest -UseBasicParsing -Method POST -Uri '${hookUrl}?event=${event}' -TimeoutSec 2 | Out-Null } catch {}"`
-        : `curl -s -m 2 -X POST '${hookUrl}?event=${event}' >/dev/null 2>&1 || true`;
+  // Hooks give exact turn boundaries instead of guessing busy/idle from
+  // output. Claude Code runs these as shell commands; we POST the session
+  // token back so the hub knows which window changed state.
+  const hookUrl = `${input.hubOrigin}/hook/${input.token}`;
+  const hookCmd = (event: string) =>
+    process.platform === 'win32'
+      ? `powershell -NoProfile -Command "try { Invoke-WebRequest -UseBasicParsing -Method POST -Uri '${hookUrl}?event=${event}' -TimeoutSec 2 | Out-Null } catch {}"`
+      : `curl -s -m 2 -X POST '${hookUrl}?event=${event}' >/dev/null 2>&1 || true`;
 
-    writePrivate(
-      settingsPath,
-      JSON.stringify(
-        input.profile.status === 'hooks'
-          ? {
-              hooks: {
-                // Both edges of a turn, and both from the agent rather than
-                // from reading its output. PreToolUse is the one that saves a
-                // window stuck on idle: work that began without a prompt of its
-                // own - a resumed turn, a message typed in by a peer - still
-                // reaches a tool call.
-                UserPromptSubmit: [
-                  { hooks: [{ type: 'command', command: hookCmd('busy') }] },
-                ],
-                PreToolUse: [
-                  { matcher: '*', hooks: [{ type: 'command', command: hookCmd('busy') }] },
-                ],
-                // Waiting on a permission prompt is waiting on the human, which
-                // is the same thing to whoever is looking at the dot.
-                Notification: [
-                  { hooks: [{ type: 'command', command: hookCmd('idle') }] },
-                ],
-                Stop: [{ hooks: [{ type: 'command', command: hookCmd('idle') }] }],
-              },
-            }
-          : {},
-        null,
-        2,
-      ),
-    );
-
-    /*
-     * The server entry is written in the shape `gemini mcp add --transport http`
-     * produces, which happens to be the same `url` + `type: 'http'` Claude Code
-     * uses. It still gets its own file: this is Gemini's *settings*, not an MCP
-     * config, and the two are only interchangeable by coincidence today.
-     *
-     * This is the system settings layer, which is normally a machine-wide file
-     * under ProgramData or /etc. Pointing it at a per-session file is what keeps
-     * the hub out of ~/.gemini/settings.json entirely: nothing the user owns is
-     * edited, so there is nothing to undo when the session ends or when the hub
-     * is killed rather than stopped.
-     *
-     * Folder trust is *not* switched off here. Gemini refuses to start MCP
-     * servers in an untrusted folder, and the answer to that is `--skip-trust`
-     * on the profile's argv - which grants trust for the one session and writes
-     * nothing - rather than disabling the check for everything the agent
-     * touches.
-     */
-    writePrivate(
-      geminiSettingsPath,
-      JSON.stringify(
-        {
-          mcpServers: {
-            termscape: {
-              url: mcpUrl,
-              type: 'http',
-              headers: { Authorization: `Bearer ${input.token}` },
-              /*
-               * Stated rather than left to the default, and generous. A server
-               * Gemini gives up on is reported as merely "Disconnected", which
-               * is not distinguishable from a hub that is not running - the
-               * agent comes up looking fine with no tools and nothing says why.
-               * The hub answers in single-digit milliseconds when it is idle, so
-               * this bound is only ever reached by a hub that is busy, and
-               * waiting for a busy hub is what we want.
-               */
-              timeout: 30_000,
-              description: 'Termscape canvas: your address, your peers, messaging.',
+  writePrivate(
+    settingsPath,
+    JSON.stringify(
+      input.profile.status === 'hooks'
+        ? {
+            hooks: {
+              // Both edges of a turn, and both from the agent rather than
+              // from reading its output. PreToolUse is the one that saves a
+              // window stuck on idle: work that began without a prompt of its
+              // own - a resumed turn, a message typed in by a peer - still
+              // reaches a tool call.
+              UserPromptSubmit: [
+                { hooks: [{ type: 'command', command: hookCmd('busy') }] },
+              ],
+              PreToolUse: [
+                { matcher: '*', hooks: [{ type: 'command', command: hookCmd('busy') }] },
+              ],
+              // Waiting on a permission prompt is waiting on the human, which
+              // is the same thing to whoever is looking at the dot.
+              Notification: [
+                { hooks: [{ type: 'command', command: hookCmd('idle') }] },
+              ],
+              Stop: [{ hooks: [{ type: 'command', command: hookCmd('idle') }] }],
             },
+          }
+        : {},
+      null,
+      2,
+    ),
+  );
+
+  /*
+   * The server entry is written in the shape `gemini mcp add --transport http`
+   * produces, which happens to be the same `url` + `type: 'http'` Claude Code
+   * uses. It still gets its own file: this is Gemini's *settings*, not an MCP
+   * config, and the two are only interchangeable by coincidence today.
+   *
+   * This is the system settings layer, which is normally a machine-wide file
+   * under ProgramData or /etc. Pointing it at a per-session file is what keeps
+   * the hub out of ~/.gemini/settings.json entirely: nothing the user owns is
+   * edited, so there is nothing to undo when the session ends or when the hub
+   * is killed rather than stopped.
+   *
+   * Folder trust is *not* switched off here. Gemini refuses to start MCP
+   * servers in an untrusted folder, and the answer to that is `--skip-trust`
+   * on the profile's argv - which grants trust for the one session and writes
+   * nothing - rather than disabling the check for everything the agent
+   * touches.
+   */
+  writePrivate(
+    geminiSettingsPath,
+    JSON.stringify(
+      {
+        mcpServers: {
+          termscape: {
+            url: mcpUrl,
+            type: 'http',
+            headers: { Authorization: `Bearer ${input.token}` },
+            /*
+             * Stated rather than left to the default, and generous. A server
+             * Gemini gives up on is reported as merely "Disconnected", which
+             * is not distinguishable from a hub that is not running - the
+             * agent comes up looking fine with no tools and nothing says why.
+             * The hub answers in single-digit milliseconds when it is idle, so
+             * this bound is only ever reached by a hub that is busy, and
+             * waiting for a busy hub is what we want.
+             */
+            timeout: 30_000,
+            description: 'Termscape canvas: your address, your peers, messaging.',
           },
         },
-        null,
-        2,
-      ),
-    );
+      },
+      null,
+      2,
+    ),
+  );
 }
 
 /**
@@ -259,7 +259,10 @@ ${peerList}
 
 ## Talking to other agents
 
-The \`termscape\` MCP server gives you these tools:
+The \`termscape\` MCP server gives you these tools. Your CLI probably shows
+them under a prefix — \`termscape_send_message\` or
+\`mcp__termscape__send_message\` rather than plain \`send_message\` — so match
+on the ending rather than looking for the exact name below:
 
 - \`whoami\` — your own address and workspace.
 - \`list_agents\` — who else exists, and whether they are idle or busy.
@@ -288,9 +291,15 @@ The \`termscape\` MCP server gives you these tools:
 
 Text arriving in your terminal prefixed with \`[from <address>]\` is a message
 from another agent, not from the human. Treat it as a request from a
-colleague: act on it if it makes sense, and reply with \`send_message\` to the
-address it came from. That prefix is added by the hub and cannot be forged by
-the sender.
+colleague: act on it if it makes sense. That prefix is added by the hub and
+cannot be forged by the sender, so it is safe to reply to.
+
+**Writing the answer in your own output does not reply.** Nobody is reading
+this terminal but the human, and the agent that asked cannot see it. The only
+thing that reaches them is calling \`send_message\` with \`to\` set to the
+address the message came from. If you have answered a question in your own
+output and not called that tool, the question is still unanswered as far as
+the asker is concerned — send it.
 
 Messages are delivered immediately, so one may arrive while you are mid-task.
 Finish your current thought before acting on it.

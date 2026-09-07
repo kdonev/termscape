@@ -269,6 +269,23 @@ describe('the brief', () => {
     expect(BUILTIN_PROFILES.claude!.brief).toBeUndefined();
   });
 
+  it('says answering in your own output does not reach the asker', () => {
+    /*
+     * An opencode agent was messaged, called termscape_whoami, then wrote the
+     * answer into its own terminal and stopped. It had the tool and the
+     * connection; nothing had told it that the terminal it was writing into is
+     * read by the human and by nobody else, so it believed it had replied.
+     */
+    const brief = readFileSync(wire().briefPath, 'utf8');
+    expect(brief).toMatch(/does not reply/);
+    expect(brief).toMatch(/still unanswered/);
+    // And the tool is not called `send_message` in any client that shows it:
+    // opencode prefixes it, Claude Code mangles it differently again.
+    expect(brief).toMatch(/termscape_send_message/);
+    expect(brief).toMatch(/mcp__termscape__send_message/);
+    expect(brief).toMatch(/on the ending rather than looking for the exact name/);
+  });
+
   it('says a template is made with the tool, not by editing a checkout', () => {
     /*
      * Asked "can you add templates to termscape", an agent that had the tool
