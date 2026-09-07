@@ -351,12 +351,32 @@ describe('templates an agent proposes', () => {
     await expect(propose({ id: 'reviewer', agent: 'claude' })).rejects.toThrow(/agents\.toml/);
   }, 30_000);
 
-  it('caps how many one agent may have waiting', async () => {
+  it('caps how many one agent may have waiting, and names them', async () => {
     // Bounded for the reason send_message is: one confused agent must not be
     // able to bury the canvas in dialogs.
     for (const id of ['one', 'two', 'three']) await propose({ id, agent: 'claude' });
-    await expect(propose({ id: 'four', agent: 'claude' })).rejects.toThrow(/already have/);
+    const err = await propose({ id: 'four', agent: 'claude' }).catch((e: Error) => e.message);
+
+    /*
+     * The way this limit is actually reached is a human closing the dialog
+     * without deciding - which is not a refusal, so the proposal stays and the
+     * agent is blocked. An agent told only a number can say nothing useful;
+     * one told which templates are stuck, and where to answer them, can.
+     */
+    expect(err).toContain('"one"');
+    expect(err).toContain('"three"');
+    expect(err).toMatch(/under templates/);
     expect(hub.pendingProposals()).toHaveLength(3);
+  });
+
+  it('leaves a proposal waiting when the human only closes the dialog', async () => {
+    // Closing is not an answer, which is the whole hazard: nothing is stored,
+    // nothing is refused, and the agent stays blocked until somebody decides.
+    const { proposalId } = await propose({ id: 'reviewer', agent: 'claude' });
+    expect(hub.pendingProposals()).toHaveLength(1);
+    // Declining from the panel is the way out that does not need the dialog.
+    hub.resolveTemplateProposal(proposalId, false);
+    expect(hub.pendingProposals()).toHaveLength(0);
   });
 
   it('saves what the human saw, not what the agent asked for', async () => {

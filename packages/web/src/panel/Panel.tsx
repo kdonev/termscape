@@ -204,11 +204,12 @@ function MachineNode({ machine }: { machine: TreeMachine }) {
  * knows, because it joins the two lists at the point it matters.
  */
 function TemplatesNode() {
-  const { templates, proposals, openDialog } = useStore(
+  const { templates, proposals, openDialog, client } = useStore(
     useShallow((s) => ({
       templates: s.templates,
       proposals: s.templateProposals,
       openDialog: s.openDialog,
+      client: s.client,
     })),
   );
   // Opened when an agent is waiting on an answer: a proposal that arrived
@@ -264,6 +265,23 @@ function TemplatesNode() {
                   onClick={() => openDialog({ kind: 'reviewTemplate', proposalId: p.id })}
                 >
                   review
+                </button>
+                {/* Here as well as in the dialog, because the way a proposal
+                    gets stuck is somebody closing the dialog without deciding:
+                    the agent is then blocked on an answer and the only place
+                    that says so is this row. */}
+                <button
+                  className="btn danger"
+                  title={`Tell ${p.fromAddr} no`}
+                  onClick={() =>
+                    client?.send({
+                      t: 'resolveTemplateProposal',
+                      proposalId: p.id,
+                      accept: false,
+                    })
+                  }
+                >
+                  ×
                 </button>
               </div>
             </div>

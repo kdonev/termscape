@@ -88,6 +88,7 @@ export function Dialog({
  */
 export function DialogForm({
   submitLabel,
+  cancelLabel = 'cancel',
   canSubmit = true,
   danger = false,
   secondary,
@@ -95,6 +96,15 @@ export function DialogForm({
   children,
 }: {
   submitLabel: string;
+  /**
+   * What dismissing the dialog is called.
+   *
+   * Worth overriding wherever closing is not the same as saying no. On a
+   * dialog asking about an agent's proposal it means "leave it waiting", and
+   * a button called "cancel" was read as a refusal - which left the agent
+   * blocked on an answer nobody had given.
+   */
+  cancelLabel?: string;
   canSubmit?: boolean;
   danger?: boolean;
   /**
@@ -145,7 +155,7 @@ export function DialogForm({
       )}
       <footer className="dialog-actions">
         <button className="btn" type="button" onClick={closeDialog}>
-          cancel
+          {cancelLabel}
         </button>
         {secondary && (
           <button

@@ -450,6 +450,9 @@ function TemplateDialog({
     >
       <DialogForm
         submitLabel={proposal ? 'add template' : editing ? 'save template' : 'add template'}
+        // Not "cancel": closing this is not a refusal, and calling it one left
+        // agents blocked on an answer nobody had given.
+        cancelLabel={proposal ? 'decide later' : 'cancel'}
         canSubmit={name.trim().length > 0 && !!agent}
         // Declining is an answer somebody is waiting on. Closing the dialog is
         // not one: it leaves the proposal where it was.
@@ -479,9 +482,13 @@ function TemplateDialog({
       >
         {proposal && (
           <p className="dialog-note">
-            An agent asked for this. Nothing has been saved yet, and you can change any
-            of it first — it is a suggestion, not a request to rubber-stamp. Agents
-            already running are unaffected either way.
+            <code>{proposal.fromAddr}</code> asked for this. Nothing has been saved yet,
+            and you can change any of it first — it is a suggestion, not a request to
+            rubber-stamp. Agents already running are unaffected either way.
+            <br />
+            <strong>decline</strong> tells the agent no. <strong>decide later</strong>{' '}
+            just closes this — the proposal stays in the panel under <em>templates</em>,
+            and the agent cannot propose anything else while it waits.
           </p>
         )}
         <Field

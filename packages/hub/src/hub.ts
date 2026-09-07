@@ -506,9 +506,19 @@ export class Hub extends EventEmitter implements AgentApi {
 
     const mine = [...this.proposals.values()].filter((p) => p.fromAddr === me.address);
     if (mine.length >= MAX_PENDING_PROPOSALS) {
+      /*
+       * Name them. The way this limit is actually reached is a human closing
+       * the dialog without deciding, which leaves the proposal waiting and the
+       * agent blocked - and an agent that can say *which* templates are stuck
+       * lets them go and answer those, rather than reporting a number nobody
+       * can act on.
+       */
       throw new Error(
-        `you already have ${mine.length} proposals waiting on a human; ` +
-          'wait for those to be answered before making another',
+        `you have ${mine.length} template proposals still waiting on a human: ` +
+          mine.map((p) => `"${p.template.id}"`).join(', ') +
+          '. Tell them those are waiting in the panel, under templates, and that each ' +
+          'can be added or declined there; you cannot propose another until one is ' +
+          'answered.',
       );
     }
 
