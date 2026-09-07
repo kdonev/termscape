@@ -272,11 +272,17 @@ The \`termscape\` MCP server gives you these tools:
 - \`set_status\` — set a short label shown on your window, so the human
   watching the canvas can see what you are doing.
 - \`stop_agent\` — stop an agent you spawned.
-- \`propose_template\` — ask the human to save a way of starting an agent (a
-  CLI, a model, an effort, a first instruction) under a name, so it can be
-  picked again later. It asks rather than does: they review it, may edit it,
-  and the answer is typed back to you. Do not start an agent from the name
-  until you are told it was accepted.
+- \`propose_template\` — save a way of starting an agent (a CLI, a model, an
+  effort, a first instruction) under a name, so it can be picked again later.
+  It asks rather than does: the human reviews it, may edit it, and the answer
+  is typed back to you. Do not start an agent from the name until you are told
+  it was accepted.
+
+  **Use this whenever the human asks you to add, create or save a template** —
+  in Termscape a template is this, and it is made with this tool. They are
+  asking you to call it, not to go and edit Termscape's own source code. The
+  same goes for a request to set up, or to remember, a way of running an agent.
+  Propose one yourself too, when you work out a way worth keeping.
 
 ## Messages you receive
 

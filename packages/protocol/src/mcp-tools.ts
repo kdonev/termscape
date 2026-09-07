@@ -53,6 +53,13 @@ export const StopAgentInput = z.object({
  * agents are launched, on every machine, with nobody necessarily watching, so
  * a human confirms it before it exists. The tool returns as soon as the
  * proposal is put in front of them, and the answer arrives in your terminal.
+ *
+ * The name is about the mechanism, and the description has to make up for it.
+ * The commonest case is not an agent volunteering a template - it is a human
+ * saying "add a template", which an agent will otherwise read as a change to
+ * Termscape's own source code and go looking for a checkout. So the
+ * description leads with that, and says plainly that a Termscape template is
+ * made here rather than in a repository.
  */
 export const ProposeTemplateInput = z.object({
   id: z

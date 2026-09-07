@@ -268,4 +268,18 @@ describe('the brief', () => {
     expect(BUILTIN_PROFILES.claude!.args).toContain('{{brief_path}}');
     expect(BUILTIN_PROFILES.claude!.brief).toBeUndefined();
   });
+
+  it('says a template is made with the tool, not by editing a checkout', () => {
+    /*
+     * Asked "can you add templates to termscape", an agent that had the tool
+     * went looking for the source code instead - a fair reading of "add X to
+     * Y", and the brief did nothing to correct it because it described the
+     * tool as something the agent offers rather than something a human asks
+     * for. The commonest case is the human asking.
+     */
+    const brief = readFileSync(wire().briefPath, 'utf8');
+    expect(brief).toContain('propose_template');
+    expect(brief).toMatch(/asks you to add, create or save a template/);
+    expect(brief).toMatch(/not to go and edit Termscape's own source code/);
+  });
 });
