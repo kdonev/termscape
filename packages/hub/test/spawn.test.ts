@@ -93,6 +93,32 @@ describe('spawn_agent', () => {
   );
 
   it(
+    'falls back to the bare agent when the inherited template has become invalid',
+    async () => {
+      hub.saveTemplate({ id: 'tester', agent: 'shell', model: 'gpt-test' });
+      const ws = hub.createWorkspace('crew4', folder('crew4'));
+      const parent = await hub.startSession({ workspaceId: ws.id, profile: 'tester' });
+
+      // The template breaks on disk; the next boot loads the error with it.
+      hub.shutdown();
+      writeConfig(
+        '[shell]\nmodel_args = ["--model", "{{model}}"]\n\n[template.tester]\nagent = "nope"\n',
+      );
+      hub = new Hub({ dbPath: join(dir, 'state.db') });
+      expect(hub.templates.info().find((t) => t.id === 'tester')?.error).toBeTruthy();
+
+      // A spawn must not die because config changed under a running parent.
+      await hub.spawnAgent(parent.id, {});
+      const child = hub.sessions.list().find((s) => s.spawnedBy === parent.id)!;
+      expect(child).toBeDefined();
+      expect(child.profile).toBe('shell');
+      expect(child.template).toBe('shell');
+      expect(child.model).toBeNull();
+    },
+    60_000,
+  );
+
+  it(
     'merges the template opening and the spawn instruction into one injection',
     async () => {
       // A prompt without a model: a shell carrying --model would be a session

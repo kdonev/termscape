@@ -19,19 +19,19 @@ import { PeerConnection } from './peer.js';
  * The peer's internal session id means nothing here and could collide with a
  * local one, whereas the address is already globally unique and is what every
  * cross-hub call uses — so the id becomes the address. The lineage is dragged
- * across with it: `spawnedBy` names the parent in the peer's id space, and
- * once the parent window here answers to its address, a canvas that cannot
- * tell who spawned a window cannot frame parent and child together. A parent
- * the translator does not know is left as it arrived.
+ * across with it: `spawnedBy` names the parent in whatever id space the
+ * reference arrived in, and once the parent window here answers to its canvas
+ * id, a canvas that cannot tell who spawned a window cannot frame parent and
+ * child together. A parent the translator does not know is left as it arrived.
  */
 export function localizeRemoteSession(
   s: Session,
-  parentAddress: (peerSessionId: string) => string | null,
+  parentIdFor: (reference: string) => string | null,
 ): Session {
   return {
     ...s,
     id: s.address,
-    spawnedBy: s.spawnedBy ? (parentAddress(s.spawnedBy) ?? s.spawnedBy) : null,
+    spawnedBy: s.spawnedBy ? (parentIdFor(s.spawnedBy) ?? s.spawnedBy) : null,
   };
 }
 
@@ -61,10 +61,24 @@ export class PeerRegistry extends EventEmitter {
    * be translated when the session is re-keyed by address.
    */
   private readonly peerIds = new Map<string, Map<string, string>>();
+  /**
+   * hostId -> a child's address -> the canvas id of the parent that spawned
+   * it from here. The peer cannot hold this lineage — its session table's
+   * foreign key would reject a parent that is not one of its own — so the
+   * canvas keeps it and stamps it onto every upsert for that child.
+   */
+  private readonly lineage = new Map<string, Map<string, string>>();
 
   constructor(
     private readonly store: Store,
     private readonly hubVersion: string,
+    /**
+     * Resolves a local session's address to its id. Lineage can arrive as an
+     * address when the spawner lives on this canvas and the child on a peer —
+     * the address is the one id both hubs agree on, but the canvas knows the
+     * parent window by its local id.
+     */
+    private readonly localIdForAddress: (address: string) => string | null = () => null,
   ) {
     super();
   }
@@ -143,7 +157,7 @@ export class PeerRegistry extends EventEmitter {
       for (const s of sessions) if (!pending.has(s.address)) this.notePeerId(host.id, s);
       for (const s of sessions) {
         if (pending.has(s.address)) continue;
-        map.set(s.address, this.withLocalLayout(host.id, s));
+        map.set(s.address, this.withLineage(host.id, this.withLocalLayout(host.id, s)));
       }
       this.remote.set(host.id, map);
       this.emit('peerSessionsChanged', host.id);
@@ -158,9 +172,10 @@ export class PeerRegistry extends EventEmitter {
       if (this.isPendingRemoval(host.id, s.address)) return;
       this.notePeerId(host.id, s);
       const map = this.remote.get(host.id) ?? new Map<string, Session>();
-      map.set(s.address, this.withLocalLayout(host.id, s));
+      const localized = this.withLineage(host.id, this.withLocalLayout(host.id, s));
+      map.set(s.address, localized);
       this.remote.set(host.id, map);
-      this.emit('peerSession', this.withLocalLayout(host.id, s));
+      this.emit('peerSession', localized);
     });
 
     peer.on('sessionRemoved', (address: string) => {
@@ -208,6 +223,7 @@ export class PeerRegistry extends EventEmitter {
     this.remote.delete(hostId);
     this.remoteAgents.delete(hostId);
     this.peerIds.delete(hostId);
+    this.lineage.delete(hostId);
     this.emit('peerSessionsChanged', hostId);
   }
 
@@ -236,7 +252,12 @@ export class PeerRegistry extends EventEmitter {
    * user put its window, and should not: layout is a local concern.
    */
   private withLocalLayout(hostId: string, s: Session): Session {
-    const base = localizeRemoteSession(s, (id) => this.peerIds.get(hostId)?.get(id) ?? null);
+    // Lineage speaks two id spaces: the peer's own session ids, and — when
+    // the spawner lived on this canvas — an address. Both resolve to the id
+    // the parent window answers to here; anything else is left as it came.
+    const base = localizeRemoteSession(s, (ref) =>
+      this.peerIds.get(hostId)?.get(ref) ?? this.localIdForAddress(ref),
+    );
     const saved = this.store.getRemoteWindows().get(s.address);
     if (saved) return { ...base, window: saved };
     const placed = this.placeRemote(hostId);
@@ -252,6 +273,17 @@ export class PeerRegistry extends EventEmitter {
       this.peerIds.set(hostId, ids);
     }
     ids.set(s.id, s.address);
+  }
+
+  /**
+   * Stamp canvas-side lineage onto a child the canvas hub itself spawned into
+   * a peer. Pre-registered under the address the child will answer to, because
+   * its first upsert races this request's reply — and that first upsert is
+   * what the canvas uses to frame parent and child together.
+   */
+  private withLineage(hostId: string, s: Session): Session {
+    const parentId = this.lineage.get(hostId)?.get(s.address);
+    return parentId ? { ...s, spawnedBy: parentId } : s;
   }
 
   /** Remote hosts get their own band of canvas, well clear of local windows. */
@@ -437,6 +469,24 @@ export class PeerRegistry extends EventEmitter {
     const peer = this.peers.get(hostId);
     if (!peer) throw new Error(`host ${hostId} is not connected`);
     if (!peer.connected) throw new Error(`host ${hostId} is not connected`);
+
+    // Lineage is ours to keep, not the peer's (its session table would reject
+    // a parent id it has never seen). Pre-register under the address the child
+    // will mint if the requested name is free on the peer — the child's first
+    // upsert races this request's reply, and it is the one that has to carry
+    // the lineage for the canvas to frame parent and child together.
+    const parentId = req.spawnedByAddress
+      ? this.localIdForAddress(req.spawnedByAddress)
+      : null;
+    if (parentId && req.name) {
+      let byAddress = this.lineage.get(hostId);
+      if (!byAddress) {
+        byAddress = new Map<string, string>();
+        this.lineage.set(hostId, byAddress);
+      }
+      byAddress.set(`${req.workspaceName}/${req.name}`, parentId);
+    }
+
     const s = await peer.request<Session>({ t: 'startSession', id: randomUUID(), ...req });
     // The reply carries the peer's internal uuid, which means nothing here:
     // every session crossing this boundary is re-keyed to its address, the id
@@ -445,7 +495,12 @@ export class PeerRegistry extends EventEmitter {
     // broadcast that lands moments later resolves this same rect rather than
     // minting a rival one.
     this.notePeerId(hostId, s);
-    return this.withLocalLayout(hostId, s);
+    const localized = this.withLocalLayout(hostId, s);
+    if (parentId) {
+      // The actual address, in case the peer had to uniquify the name.
+      this.lineage.get(hostId)?.set(localized.address, parentId);
+    }
+    return this.withLineage(hostId, localized);
   }
 
   /**

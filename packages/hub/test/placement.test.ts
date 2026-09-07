@@ -102,4 +102,50 @@ describe('choosePlacement', () => {
       sessions = [...sessions, session('ws', r)];
     }
   });
+
+  it('keeps the cascade clear of peer windows sharing the canvas', () => {
+    // A peer's windows sit in their own band, but "never on top of anything"
+    // cannot know about bands: they arrive as extra occupied rects.
+    const remote = { x: 0, y: 900, w: 720, h: 460 };
+    const parent = session('ws', { x: 0, y: 0 });
+    let sessions: Session[] = [parent];
+    for (let i = 0; i < 4; i++) {
+      const r = choosePlacement({
+        workspaceId: 'ws',
+        parentId: parent.id,
+        sessions,
+        extraOccupied: [remote],
+      });
+      for (const s of sessions) expect(overlaps(r, s.window)).toBe(false);
+      expect(overlaps(r, remote)).toBe(false);
+      sessions = [...sessions, session('ws', r)];
+    }
+  });
+
+  it('anchors on the dense part of the group, not a window parked far away', () => {
+    const sessions = [
+      session('ws', { x: 0, y: 0 }),
+      session('ws', { x: 760, y: 0 }),
+      session('ws', { x: 40000, y: 0 }),
+    ];
+    const r = choosePlacement({ workspaceId: 'ws', parentId: null, sessions });
+    for (const s of sessions) expect(overlaps(r, s.window)).toBe(false);
+    // The outlier must not define where the next window lands.
+    expect(r.x).toBeLessThan(40000);
+    expect(r.x).toBeGreaterThan(0);
+  });
+
+  it('wraps to a fresh row instead of growing an unbounded line', () => {
+    const sessions = [
+      session('ws', { x: 0, y: 0 }),
+      session('ws', { x: 760, y: 0 }),
+      session('ws', { x: 1520, y: 0 }),
+    ];
+    const r = choosePlacement({ workspaceId: 'ws', parentId: null, sessions });
+    for (const s of sessions) expect(overlaps(r, s.window)).toBe(false);
+    // Three across is the block: the next window starts a row below, not a
+    // fourth column.
+    expect(r.y).toBeGreaterThan(0);
+    expect(r.x).toBeLessThan(1520);
+  });
 });

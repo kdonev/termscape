@@ -54,23 +54,29 @@ function bounds(rects: WindowRect[]): WindowRect | null {
  *
  * The anchor choice is the "near" in the promise this makes: below-right of
  * the parent when it was spawned by an agent, otherwise in the first clear
- * slot beside its own workspace's group — or, when that workspace is still
- * empty, beside the rightmost group already on the canvas rather than at the
- * origin, where it would sit on top of the first workspace's windows. From
- * the anchor, candidates are scanned outward in rings and checked against
- * every occupied rect, so a window the user dragged across the grid no longer
- * silently receives the next "free" slot, and a second child of the same
- * parent no longer stacks exactly on the first.
+ * slot of a 3-wide lattice laid over its own workspace's dense part — or, when
+ * that workspace is still empty, beside the rightmost group already on the
+ * canvas rather than at the origin, where it would sit on top of the first
+ * workspace's windows. Candidates are checked against every occupied rect —
+ * the caller folds peer windows in, because those share the canvas too — so a
+ * window the user dragged across the grid no longer silently receives the
+ * next "free" slot, and a second child of the same parent no longer stacks
+ * exactly on the first.
  */
 export function choosePlacement(opts: {
   workspaceId: string;
   parentId: string | null;
   sessions: Pick<Session, 'id' | 'workspaceId' | 'window'>[];
+  /** Windows that share the canvas but are not local sessions — peers'. */
+  extraOccupied?: Pick<WindowRect, 'x' | 'y' | 'w' | 'h'>[];
 }): WindowRect {
   const { workspaceId, parentId, sessions } = opts;
   const siblings = sessions.filter((s) => s.workspaceId === workspaceId);
   const parent = parentId ? (sessions.find((s) => s.id === parentId) ?? null) : null;
-  const occupied = sessions.map((s) => s.window);
+  const occupied: Pick<WindowRect, 'x' | 'y' | 'w' | 'h'>[] = [
+    ...sessions.map((s) => s.window),
+    ...(opts.extraOccupied ?? []),
+  ];
   const pitchX = DEFAULT_WINDOW.w + WINDOW_GAP;
   const pitchY = DEFAULT_WINDOW.h + WINDOW_GAP;
   const overlaps = (r: WindowRect) =>
@@ -87,8 +93,14 @@ export function choosePlacement(opts: {
       };
     }
     if (siblings.length > 0) {
-      const b = bounds(siblings.map((s) => s.window))!;
-      return { x: b.x + b.w + WINDOW_GAP, y: b.y, z: siblings.length };
+      // The left edge of the group's dense part, by order statistics rather
+      // than the bounding box: one window parked far away must not drag every
+      // later placement past it, and a lower quantile keeps the lattice
+      // left-aligned with where the group actually lives.
+      const q = Math.floor((siblings.length - 1) / 4);
+      const xs = siblings.map((s) => s.window.x).sort((a, b) => a - b);
+      const ys = siblings.map((s) => s.window.y).sort((a, b) => a - b);
+      return { x: xs[q]!, y: ys[q]!, z: siblings.length };
     }
     // An empty workspace: group the rest of the canvas by workspace and go
     // beside the rightmost group, so the new workspace extends the row
@@ -109,23 +121,25 @@ export function choosePlacement(opts: {
       : { x: 0, y: 0, z: 0 };
   })();
 
-  // Ring scan: straight right first, then a fresh row below, outward until a
-  // slot overlaps nothing. Bounded so the scan always terminates; each
-  // occupied window can only ever block a handful of candidates, so the bound
-  // is never reached in practice.
-  for (let ring = 0; ring <= occupied.length + 1; ring++) {
-    for (let col = ring; col >= 0; col--) {
-      const row = ring - col;
-      const r: WindowRect = {
-        ...DEFAULT_WINDOW,
-        x: anchor.x + col * pitchX,
-        y: anchor.y + row * pitchY,
-        z: anchor.z,
-      };
-      if (!overlaps(r)) return r;
-    }
+  // Lattice scan: three columns wide, wrapping to a fresh row below every
+  // third step, until a slot overlaps nothing. The wrap is what keeps a
+  // workspace a block that grows downward instead of an unbounded single
+  // line, and keeps a spawn cascade a block rather than a diagonal. Bounded
+  // so the scan always terminates; each occupied window can only ever block
+  // a handful of candidates, so the bound is never reached in practice.
+  const steps = (occupied.length + 1) * 3;
+  for (let step = 0; step <= steps; step++) {
+    const col = step % 3;
+    const row = Math.floor(step / 3);
+    const r: WindowRect = {
+      ...DEFAULT_WINDOW,
+      x: anchor.x + col * pitchX,
+      y: anchor.y + row * pitchY,
+      z: anchor.z,
+    };
+    if (!overlaps(r)) return r;
   }
-  // Exhausted only on a canvas packed far beyond what the ring bound allows;
+  // Exhausted only on a canvas packed far beyond what the step bound allows;
   // returning the anchor at least keeps the window near its group.
   return { ...DEFAULT_WINDOW, x: anchor.x, y: anchor.y, z: anchor.z };
 }
@@ -174,6 +188,12 @@ export class SessionManager extends EventEmitter {
   /** Latest title per session, waiting for the coalescing window to close. */
   private readonly pendingTitles = new Map<string, string>();
   private titleTimer: NodeJS.Timeout | null = null;
+  /**
+   * Windows that share this canvas but are not local sessions — a peer's are.
+   * The manager cannot see the peer registry, so the hub hands it this view;
+   * placement checks it, because "never on top of anything" means anything.
+   */
+  remoteWindows: () => WindowRect[] = () => [];
 
   constructor(
     private readonly store: Store,
@@ -586,6 +606,7 @@ export class SessionManager extends EventEmitter {
       workspaceId,
       parentId,
       sessions: this.list(),
+      extraOccupied: this.remoteWindows(),
     });
   }
 

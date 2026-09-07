@@ -202,6 +202,10 @@ export function createPeerServer(hub: Hub, clientToken: string): PeerServer {
               effort: req.effort,
               prompt: req.prompt,
               name: req.name,
+              // Deliberately no `spawnedBy` here even though the request
+              // carries one: the spawner lives on the canvas hub, its id
+              // would break this table's foreign key, and lineage is the
+              // canvas's concern anyway — the registry stamps it there.
             });
             return ok(s);
           }

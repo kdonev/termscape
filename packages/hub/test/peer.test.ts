@@ -188,6 +188,28 @@ describe('peer link', () => {
     // broadcast that follows resolves this same rect rather than a rival one.
     expect(hubA.store.getRemoteWindows().get(s.address)).toBeDefined();
   });
+
+  it('keeps lineage when a canvas-hub agent spawns into a remote workspace', async () => {
+    // The spawner lives here, the child's PTY lands on the peer; the only id
+    // both hubs agree on is the spawner's address, and the registry has to
+    // translate it back — otherwise the canvas cannot frame the pair.
+    const host = hubA.store.listHosts()[0]!;
+    const ws = hubA.createWorkspace('spawn-remote', homeB, host.id);
+    const parent = await hubA.startSession({
+      workspaceId: wsA,
+      profile: 'shell',
+      name: 'spawner',
+    });
+
+    await hubA.spawnAgent(parent.id, { workspace: ws.name, name: 'far-child' });
+    await waitFor(
+      () =>
+        hubA.peers.sessions().find((s) => s.address === 'spawn-remote/far-child')
+          ?.spawnedBy === parent.id,
+      15_000,
+      'remote child carrying its local parent id',
+    );
+  });
 });
 
 describe('cross-host messaging', () => {

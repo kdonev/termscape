@@ -139,7 +139,12 @@ export class Hub extends EventEmitter implements AgentApi {
     );
     this.sessions.on('data', (id: string, chunk: string) => this.emit('data', id, chunk));
 
-    this.peers = new PeerRegistry(this.store, HUB_VERSION);
+    this.peers = new PeerRegistry(this.store, HUB_VERSION, (address) =>
+      this.sessions.getByAddress(address)?.id ?? null,
+    );
+    // Peer windows share the canvas, so a new local window must not land on
+    // one. The manager cannot see the registry; this is the view it needs.
+    this.sessions.remoteWindows = () => this.peers.sessions().map((s) => s.window);
     this.peers.on('host', (h) => this.emit('host', h));
     this.peers.on('peerAgents', (hostId: string, found: AgentProfileInfo[]) =>
       this.emit('hostAgents', hostId, found),
@@ -1143,12 +1148,13 @@ export class Hub extends EventEmitter implements AgentApi {
 
     // The child starts the way its parent did: from the same template, so the
     // model and effort the template chose are not silently dropped in favour
-    // of the bare agent's defaults. A template deleted since the parent
-    // started falls back to the agent itself; a profile the spawning agent
-    // named explicitly always wins.
+    // of the bare agent's defaults. A template that has been deleted or has
+    // since failed to load falls back to the agent itself — a spawn must not
+    // die because config changed under a running parent; a profile the
+    // spawning agent named explicitly always wins.
+    const inherited = me.template ? this.templates.get(me.template) : null;
     const inherit =
-      opts.profile ??
-      (me.template && this.templates.get(me.template) ? me.template : me.profile);
+      opts.profile ?? (inherited && !inherited.error ? me.template! : me.profile);
 
     /*
      * One injection, delivered once, by the hub that owns the child's PTY: the
