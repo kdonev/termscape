@@ -19,7 +19,7 @@ import {
 } from '@termscape/protocol';
 import { openDb, type Db } from './db/index.js';
 import { Store } from './db/store.js';
-import { ProfileRegistry } from './agents/profiles.js';
+import { briefMode, ProfileRegistry } from './agents/profiles.js';
 import { AgentDetector } from './agents/detect.js';
 import { TemplateRegistry, validate as validateTemplate } from './agents/templates.js';
 import { TokenRegistry } from './agents/tokens.js';
@@ -709,7 +709,7 @@ export class Hub extends EventEmitter implements AgentApi {
    */
   private typedBrief(session: Session): string | null {
     const profile = this.profiles.get(session.profile);
-    if (!profile?.mcp || profile.brief !== 'typed') return null;
+    if (!profile || briefMode(profile) !== 'typed') return null;
     try {
       return readFileSync(briefFileFor(session.id), 'utf8');
     } catch {

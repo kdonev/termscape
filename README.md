@@ -186,10 +186,10 @@ text arriving as `[from <address>] ...` is a colleague rather than the human.
 An agent CLI is configuration, not code. Built-ins are `claude`, `codex`,
 `gemini`, `opencode` and `shell`.
 
-`claude`, `codex` and `gemini` are wired to the hub's MCP endpoint: each gets an
-address, a brief and the `send_message` tool set. They arrive there by three
+Every one of them except `shell` is wired to the hub's MCP endpoint: each gets an
+address, a brief and the `send_message` tool set. They arrive there by four
 different routes, because no two of these CLIs configure an MCP server the same
-way — and none of the three writes to a file you own, so there is nothing left
+way — and **none of them writes to a file you own**, so there is nothing left
 behind when a session ends or when the hub is killed rather than stopped.
 
 | agent | how it reaches the hub | brief | resume |
@@ -197,21 +197,31 @@ behind when a session ends or when the hub is killed rather than stopped.
 | `claude` | `--mcp-config` on a generated file | `--append-system-prompt-file` | `--resume <uuid>` |
 | `codex` | `-c mcp_servers.…` overrides, one run only | typed in at startup | restarts clean |
 | `gemini` | `GEMINI_CLI_SYSTEM_SETTINGS_PATH` at a generated file | typed in at startup | restarts clean |
+| `opencode` | `OPENCODE_CONFIG_CONTENT`, no file anywhere | typed in at startup | restarts clean |
 
-Codex and Gemini are typed at rather than handed a brief because neither can
+The last three are typed at rather than handed a brief because none of them can
 *append* to its system prompt — Codex's `base_instructions` and Gemini's
 `GEMINI_SYSTEM_MD` each replace the whole thing, which would cost the agent its
-own tool instructions. Neither is resumable: Codex mints a session id it will
-not accept from us, and Gemini accepts one but resumes by list index instead.
+own tool instructions. None of the three is resumable either: Codex mints a
+session id it will not accept from us, and Gemini accepts one but resumes by
+list index instead. They restart clean, and are briefed again when they do.
 
-`opencode` and `shell` are plain terminals on the canvas. `opencode mcp add`
-mutates its own config and there is no per-run equivalent, so wiring it means
-writing to a file you own and undoing that reliably afterwards — a decision that
-has not been made rather than one that has been skipped.
+Two details worth knowing, because both are easy to get wrong:
 
-Codex's bearer token is passed through the environment, never `-c`: config
-overrides land in the command line, where any other user on the machine can
-read them.
+- **Codex's bearer token goes in the environment, never `-c`.** Config
+  overrides land in the command line, where any other user on the machine can
+  read them. `bearer_token_env_var` exists precisely for this.
+- **opencode is configured entirely from the environment.** Its config is
+  handed over as a string, merged with your own rather than replacing it, so
+  your models, themes and your own MCP servers survive the session. Note that
+  `opencode mcp add` is *not* how this is done: that command writes to
+  `~/.config/opencode/opencode.json` and ignores `OPENCODE_CONFIG` while doing
+  it. Setting the variable also stops opencode writing its default config file
+  on start, so a session leaves nothing behind at all.
+
+`shell` is the one profile that is not an agent, and it is not one in a way no
+flag can fix: it runs a shell, so text typed at it is executed rather than read.
+It gets no brief, and its profile says so rather than relying on a default.
 
 Override or add profiles in `~/.termscape/agents.toml`:
 
@@ -222,7 +232,8 @@ args = ["--mcp-config", "{{mcp_config_path}}"]
 status = "heuristic"          # or "hooks", for exact turn boundaries
 ready_hint = "[$#>%] ?$"      # prompt regex, for the idle indicator
 inject = "bracketed"          # bracketed paste, or "raw"
-brief = "typed"               # when it has no flag to append a system prompt
+brief = "typed"               # "flag" if it can append a system prompt,
+                              # "none" for a terminal that would execute one
 version_args = ["--version"]  # how to ask its version, for the panel
 models_args = ["models"]      # optional: one model per line on stdout
 models = ["opus", "sonnet"]   # the answer when it has no listing command

@@ -36,10 +36,20 @@ export interface AgentProfile {
    * to it, so using either would cost the agent its own tool instructions -
    * a far worse trade than a first turn that arrives as text.
    *
-   * Only meaningful when `mcp` is true; a terminal has no brief. Defaults to
-   * `flag`, which is what every profile written before this did.
+   * `none` - nothing is sent. `shell` is the reason this value exists and it
+   * is not a value any agent should want: a shell *executes* what is typed at
+   * it, so a brief there is not context, it is a series of commands that fail
+   * loudly.
+   *
+   * Absent means `flag` for a wired agent - what every profile written before
+   * this did - and `none` for an unwired one, because `mcp: false` has always
+   * meant "a plain terminal" and a profile that declared one should not start
+   * having text typed into it. An unwired agent that *is* an agent says
+   * `brief = "typed"` and gets the shorter brief: no tool list, because it has
+   * no tools, but it is still told its address and still told that a
+   * `[from ...]` line is a colleague rather than the human.
    */
-  brief?: 'flag' | 'typed';
+  brief?: 'flag' | 'typed' | 'none';
   /**
    * Argument template used to bring a session back with its prior
    * conversation. `{{uuid}}` is replaced with agent_session_uuid. When absent,
@@ -114,12 +124,18 @@ function defaultShell(): string {
  *   `GEMINI_CLI_SYSTEM_SETTINGS_PATH` repoints its system settings layer at a
  *   file of our choosing, which the hub generates per session.
  *
- * opencode stays `mcp: false`. It has neither: `opencode mcp add` mutates its
- * own config and its `--help` lists no per-run equivalent, so wiring it means
- * writing to a file the user owns and undoing that afterwards even when the
- * hub was killed rather than stopped. That is a different decision from this
- * one and it has not been made. A profile that claims agent wiring it does
- * not have is worse than one that says plainly it is a terminal.
+ * - **opencode** turned out to be the least invasive of the three and was
+ *   assumed to be the hardest. It reads its entire config from
+ *   `OPENCODE_CONFIG_CONTENT`, so nothing is written anywhere at all, and what
+ *   it is given is merged with the user's own config rather than replacing it.
+ *   The assumption that it had no per-run route came from reading
+ *   `opencode mcp add` - which does write to the user's file, and ignores
+ *   `OPENCODE_CONFIG` when it does - and mistaking that command for the only
+ *   way in.
+ *
+ * `shell` is the only profile left that is not an agent, and it is not one in
+ * a way no flag can fix: it runs a shell, so text typed at it is executed
+ * rather than read.
  */
 export const BUILTIN_PROFILES: Record<string, AgentProfile> = {
   claude: {
@@ -171,13 +187,26 @@ export const BUILTIN_PROFILES: Record<string, AgentProfile> = {
   },
   opencode: {
     id: 'opencode',
-    description: 'opencode TUI — no hub wiring; it configures MCP its own way',
+    description: 'opencode TUI, wired to the hub MCP endpoint',
     command: 'opencode',
     // Bare, which is its default subcommand and starts the TUI. `run` is the
     // one-shot form and is not what a window on the canvas wants.
     args: [],
-    env: {},
-    mcp: false,
+    /*
+     * The least invasive of the four, and the one that was assumed hardest.
+     * opencode reads its whole config from this variable, so there is no file
+     * anywhere - not even one of ours - and it is *merged* with the user's own
+     * config rather than replacing it, so their models, themes and their own
+     * MCP servers survive the session.
+     *
+     * Note what this deliberately does not use: `opencode mcp add` writes to
+     * ~/.config/opencode/opencode.json and ignores OPENCODE_CONFIG while doing
+     * it. Setting this variable also stops opencode writing its default config
+     * file on start, so a session leaves nothing behind at all.
+     */
+    env: { OPENCODE_CONFIG_CONTENT: '{{opencode_config}}' },
+    mcp: true,
+    brief: 'typed',
     status: 'heuristic',
     inject: 'bracketed',
     versionArgs: ['--version'],
@@ -303,6 +332,11 @@ export const BUILTIN_PROFILES: Record<string, AgentProfile> = {
     args: [],
     env: {},
     mcp: false,
+    // Said out loud rather than left to the default, because this is the one
+    // profile where being typed at is actively harmful: a shell runs what it
+    // is given. It can still be *sent* a message - the router writes to any
+    // running window - and that is the human's business, not the hub's.
+    brief: 'none',
     status: 'heuristic',
     readyHint: '[$#>%] ?$',
     inject: 'raw',
@@ -311,6 +345,17 @@ export const BUILTIN_PROFILES: Record<string, AgentProfile> = {
     // on every platform.
   },
 };
+
+/**
+ * How this profile's brief travels, with the defaults applied.
+ *
+ * One place, because three callers need the same answer and the interesting
+ * part is the default rather than the field: absent means `flag` for a wired
+ * agent and `none` for an unwired one.
+ */
+export function briefMode(p: AgentProfile): 'flag' | 'typed' | 'none' {
+  return p.brief ?? (p.mcp ? 'flag' : 'none');
+}
 
 export class ProfileRegistry {
   private profiles: Record<string, AgentProfile>;

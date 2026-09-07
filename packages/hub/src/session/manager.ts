@@ -8,7 +8,13 @@ import {
   type WindowRect,
 } from '@termscape/protocol';
 import { DEFAULT_WINDOW, Store, type SessionLaunchSpec } from '../db/store.js';
-import { ProfileRegistry, template, templateAll, type AgentProfile } from '../agents/profiles.js';
+import {
+  briefMode,
+  ProfileRegistry,
+  template,
+  templateAll,
+  type AgentProfile,
+} from '../agents/profiles.js';
 import { resolveCommand } from '../agents/resolve.js';
 import { TokenRegistry } from '../agents/tokens.js';
 import { writeWiring } from '../agents/wiring.js';
@@ -139,7 +145,12 @@ export class SessionManager extends EventEmitter {
       effort: session.effort ?? '',
     };
 
-    if (profile.mcp) {
+    /*
+     * Wiring is generated for a wired agent, and also for an unwired one that
+     * still gets a brief - the gate used to be `mcp` alone, which is how an
+     * agent that could be messaged ended up never being told so.
+     */
+    if (profile.mcp || briefMode(profile) !== 'none') {
       const w = writeWiring({
         sessionId: session.id,
         address: session.address,
@@ -152,10 +163,11 @@ export class SessionManager extends EventEmitter {
       });
       vars = {
         ...vars,
+        brief_path: w.briefPath,
         mcp_config_path: w.mcpConfigPath,
         settings_path: w.settingsPath,
-        brief_path: w.briefPath,
         gemini_settings_path: w.geminiSettingsPath,
+        opencode_config: w.opencodeConfig,
         mcp_url: `${this.hubOrigin}/mcp`,
         /*
          * Only ever expanded into a profile's `env`, never its `args`. A CLI

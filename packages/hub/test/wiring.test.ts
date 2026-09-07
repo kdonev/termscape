@@ -1,8 +1,13 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { BUILTIN_PROFILES, templateAll } from '../src/agents/profiles.js';
+import {
+  briefMode,
+  BUILTIN_PROFILES,
+  templateAll,
+  type AgentProfile,
+} from '../src/agents/profiles.js';
 import { writeWiring } from '../src/agents/wiring.js';
 import { removeTree } from './tmp.js';
 
@@ -52,6 +57,7 @@ const varsFor = (w: ReturnType<typeof wire>) => ({
   settings_path: w.settingsPath,
   brief_path: w.briefPath,
   gemini_settings_path: w.geminiSettingsPath,
+  opencode_config: w.opencodeConfig,
   mcp_url: `${HUB}/mcp`,
   token: TOKEN,
 });
@@ -151,15 +157,97 @@ describe('gemini', () => {
   });
 });
 
+describe('opencode', () => {
+  const opencode = BUILTIN_PROFILES.opencode!;
+
+  it('is configured entirely from the environment, writing no file at all', () => {
+    const w = wire();
+    // The assumption that opencode had no per-run route came from reading
+    // `opencode mcp add` - which does write to ~/.config/opencode/opencode.json
+    // and ignores OPENCODE_CONFIG while doing it - and taking that command for
+    // the only way in. This variable is the way in, and it writes nothing.
+    const cfg = JSON.parse(
+      templateAll([opencode.env.OPENCODE_CONFIG_CONTENT!], varsFor(w))[0]!,
+    );
+    expect(cfg.mcp.termscape).toEqual({
+      type: 'remote',
+      url: `${HUB}/mcp`,
+      headers: { Authorization: `Bearer ${TOKEN}` },
+    });
+  });
+
+  it('is wired and briefed by being typed at', () => {
+    expect(opencode.mcp).toBe(true);
+    expect(opencode.brief).toBe('typed');
+  });
+});
+
 describe('what stays a plain terminal', () => {
-  it('leaves opencode unwired, because wiring it means writing to the user', () => {
-    // `opencode mcp add` mutates its own config and there is no per-run
-    // equivalent, so wiring it means editing a file the user owns and undoing
-    // that even when the hub was killed rather than stopped. A profile that
-    // claimed wiring it does not have would be worse than one that says
-    // plainly it is a terminal.
-    expect(BUILTIN_PROFILES.opencode!.mcp).toBe(false);
+  it('leaves shell alone, and says so rather than relying on the default', () => {
+    // The one profile where being typed at is actively harmful: a shell runs
+    // what it is given, so a brief there is a series of failing commands.
     expect(BUILTIN_PROFILES.shell!.mcp).toBe(false);
+    expect(BUILTIN_PROFILES.shell!.brief).toBe('none');
+  });
+
+  it('defaults an unwired profile to no brief, so a declared terminal stays one', () => {
+    // `mcp: false` has always meant "a plain terminal". Someone who declared
+    // one should not find text being typed into it after an upgrade; an
+    // unwired agent that is an agent opts in with brief = "typed".
+    expect(briefMode({ mcp: false } as AgentProfile)).toBe('none');
+    expect(briefMode({ mcp: true } as AgentProfile)).toBe('flag');
+    expect(briefMode({ mcp: false, brief: 'typed' } as AgentProfile)).toBe('typed');
+  });
+});
+
+describe('the brief an unwired agent gets', () => {
+  /** An agent CLI with no MCP support, the way a user would declare one. */
+  const unwired = {
+    ...BUILTIN_PROFILES.opencode!,
+    id: 'plain',
+    mcp: false,
+    brief: 'typed' as const,
+  };
+
+  const wireUnwired = () =>
+    writeWiring({
+      sessionId: 'sess-2',
+      address: 'crew/plain',
+      workspace: 'crew',
+      cwd: dir,
+      profile: unwired,
+      token: TOKEN,
+      hubOrigin: HUB,
+      peers: ['crew/other'],
+    });
+
+  it('tells it its address and what a [from ...] line is', () => {
+    const brief = readFileSync(wireUnwired().briefPath, 'utf8');
+    expect(brief).toContain('crew/plain');
+    expect(brief).toContain('[from <address>]');
+    // The paragraph that matters most: without it a peer's instruction reads
+    // as the human's own.
+    expect(brief).toContain('a request from a peer');
+  });
+
+  it('promises no tools, because it has none', () => {
+    const brief = readFileSync(wireUnwired().briefPath, 'utf8');
+    for (const tool of ['send_message', 'list_agents', 'spawn_agent', 'whoami']) {
+      expect(brief).not.toContain(tool);
+    }
+  });
+
+  it('names no peers, because it could never refresh the list', () => {
+    // A list frozen at launch is wrong the moment a second agent starts, and
+    // it would be the only picture this agent ever had.
+    expect(readFileSync(wireUnwired().briefPath, 'utf8')).not.toContain('crew/other');
+  });
+
+  it('is given no MCP config naming tools it cannot call', () => {
+    const w = wireUnwired();
+    expect(existsSync(w.mcpConfigPath)).toBe(false);
+    expect(existsSync(w.geminiSettingsPath)).toBe(false);
+    expect(existsSync(w.briefPath)).toBe(true);
   });
 });
 

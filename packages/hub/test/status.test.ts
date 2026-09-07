@@ -107,8 +107,17 @@ describe('the hooks an agent is wired with', () => {
     removeTree(home);
   });
 
+  // `mcp: true` because settings.json is a wired agent's file: hooks are how a
+  // CLI reports its own turn boundaries, and an unwired one has none to report.
   const profile = (status: 'hooks' | 'heuristic'): AgentProfile =>
-    ({ id: 'test', command: 'noop', args: [], status, inject: 'bracketed' }) as AgentProfile;
+    ({
+      id: 'test',
+      command: 'noop',
+      args: [],
+      mcp: true,
+      status,
+      inject: 'bracketed',
+    }) as AgentProfile;
 
   function settingsFor(status: 'hooks' | 'heuristic'): Record<string, any> {
     const out = writeWiring({
