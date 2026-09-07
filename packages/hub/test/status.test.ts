@@ -133,6 +133,31 @@ describe('the hooks an agent is wired with', () => {
     return JSON.parse(readFileSync(out.settingsPath, 'utf8'));
   }
 
+  it('cannot report a failed hook when the hub is unreachable', () => {
+    /*
+     * A status ping that cannot land is not worth telling the user about, and
+     * the CLI running the hook judges that by the exit code. The POSIX branch
+     * always had `|| true`; the Windows branch had `catch {}`, which swallows
+     * the message and not the failure - PowerShell still exits 1 because $? is
+     * false, and the agent reported a failed hook with no stderr every turn.
+     */
+    const cmd = settingsFor('hooks').hooks.Stop[0].hooks[0].command as string;
+    if (process.platform === 'win32') expect(cmd).toMatch(/;\s*exit 0"?$/);
+    else expect(cmd).toMatch(/\|\| true$/);
+  });
+
+  it('sends a body the hub will actually accept', () => {
+    /*
+     * `Invoke-WebRequest -Method POST` with no body still sends a content type
+     * the hub has no parser for, and Fastify answers 415 - so every status
+     * hook on Windows was rejected and the dot fell back to guessing from
+     * silence. curl sends no content type at all, which is why this never
+     * showed on the other branch.
+     */
+    const cmd = settingsFor('hooks').hooks.Stop[0].hooks[0].command as string;
+    expect(cmd).toMatch(/application\/json/);
+  });
+
   it('covers both edges of a turn, not only the start of one', () => {
     const hooks = settingsFor('hooks').hooks;
     // Work that began without a prompt of its own - a resumed turn, a message

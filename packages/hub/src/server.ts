@@ -137,6 +137,19 @@ export async function serve(opts: ServeOptions): Promise<ServeResult> {
    * Agent CLIs POST here at turn boundaries. The path carries the agent's own
    * bearer token, which is also how we know which window changed state.
    */
+  /*
+   * Accept a POST whose content type nothing else parses, and ignore the body.
+   *
+   * The hook carries its event in the query string and has no body worth
+   * reading, but Fastify answers 415 for a content type it has no parser for -
+   * which is how every status hook from Windows was rejected while looking, to
+   * the agent, like a hook that simply failed. Registered parsers still win, so
+   * /mcp keeps its JSON.
+   */
+  app.addContentTypeParser('*', { parseAs: 'buffer' }, (_req, _body, done) =>
+    done(null, undefined),
+  );
+
   app.post<{ Params: { token: string }; Querystring: { event?: string } }>(
     '/hook/:token',
     async (req, reply) => {

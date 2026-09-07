@@ -144,10 +144,26 @@ function writeWiredFiles(
   // output. Claude Code runs these as shell commands; we POST the session
   // token back so the hub knows which window changed state.
   const hookUrl = `${input.hubOrigin}/hook/${input.token}`;
+  /*
+   * Two details on the Windows branch, both of which cost a working feature.
+   *
+   * The body and content type are not decoration. `Invoke-WebRequest -Method
+   * POST` with no body still sends a content type the hub has no parser for,
+   * and Fastify answers 415 - so every status hook on Windows was rejected and
+   * the dot fell back to guessing from silence. curl sends no content type at
+   * all, which is why the POSIX branch never showed it.
+   *
+   * `exit 0` is the counterpart of `|| true` on the other branch, and it was
+   * missing. `catch {}` swallows the message but not the failure: PowerShell
+   * still exits 1 because $? is false, and the CLI running the hook reports
+   * that as a failed hook with no stderr to explain it. A status ping that
+   * cannot reach the hub is not worth telling the user about; it is worth not
+   * lying about, which is what the 415 above was.
+   */
   const hookCmd = (event: string) =>
     process.platform === 'win32'
-      ? `powershell -NoProfile -Command "try { Invoke-WebRequest -UseBasicParsing -Method POST -Uri '${hookUrl}?event=${event}' -TimeoutSec 2 | Out-Null } catch {}"`
-      : `curl -s -m 2 -X POST '${hookUrl}?event=${event}' >/dev/null 2>&1 || true`;
+      ? `powershell -NoProfile -Command "try { Invoke-WebRequest -UseBasicParsing -Method POST -Uri '${hookUrl}?event=${event}' -ContentType 'application/json' -Body '{}' -TimeoutSec 2 | Out-Null } catch {}; exit 0"`
+      : `curl -s -m 2 -X POST -H 'content-type: application/json' -d '{}' '${hookUrl}?event=${event}' >/dev/null 2>&1 || true`;
 
   writePrivate(
     settingsPath,

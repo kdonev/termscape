@@ -84,6 +84,53 @@ afterAll(async () => {
   delete process.env.TERMSCAPE_HOME;
 });
 
+describe('the status hook endpoint', () => {
+  /*
+   * A token rather than a session on purpose: this is about what the endpoint
+   * accepts, and starting an agent here would add one to the canvas that the
+   * messaging tests below then count.
+   */
+  it('accepts a hook whose content type it has no parser for', async () => {
+    const token = hub.tokens.mint('hook-endpoint-test');
+
+    // Fastify answers 415 for an unknown content type by default, which is how
+    // every status hook from Windows was turned away - PowerShell sends one
+    // even with no body - while looking, to the agent, like a hook that failed.
+    for (const headers of [
+      {},
+      { 'content-type': 'application/json' },
+      { 'content-type': 'application/x-www-form-urlencoded' },
+      { 'content-type': 'text/plain' },
+    ]) {
+      const body = 'content-type' in headers ? '{}' : undefined;
+      const res = await fetch(`${origin}/hook/${token}?event=busy`, {
+        method: 'POST',
+        headers,
+        body,
+      });
+      expect({ headers, status: res.status }).toEqual({ headers, status: 200 });
+    }
+  });
+
+  it('still refuses a token it does not know', async () => {
+    // Tolerating any body is not tolerating anyone who asks.
+    const res = await fetch(`${origin}/hook/not-a-real-token?event=busy`, { method: 'POST' });
+    expect(res.status).toBe(404);
+  });
+
+  it('refuses a request that promises JSON and sends none', async () => {
+    // Correct, and worth pinning: it is the shape `Invoke-WebRequest
+    // -ContentType 'application/json'` produces with no -Body, so the hook
+    // command has to send a body rather than only a content type.
+    const token = hub.tokens.mint('hook-empty-json-test');
+    const res = await fetch(`${origin}/hook/${token}?event=busy`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+    });
+    expect(res.status).toBe(400);
+  });
+});
+
 describe('agent-to-agent messaging', () => {
   it('delivers a message as typed input in the target terminal', async () => {
     const a = await hub.startSession({ workspaceId, profile: 'shell', name: 'alpha' });
