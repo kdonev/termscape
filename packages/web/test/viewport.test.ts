@@ -636,7 +636,7 @@ describe('wheelFlickIntent', () => {
     // Turning the wheel a click at a time is the common case, and it must
     // never fly the canvas somewhere.
     expect(wheelFlickIntent(spin(1, 0))).toBeNull();
-    expect(wheelFlickIntent(spin(3, 150))).toBeNull();
+    expect(wheelFlickIntent(spin(2, 150))).toBeNull();
     // Far enough, but taking its time: aiming at a zoom, not flicking.
     expect(wheelFlickIntent(spin(6, WHEEL_FLICK_MAX_MS + 1))).toBeNull();
   });
@@ -650,8 +650,9 @@ describe('wheelFlickIntent', () => {
   });
 
   it('counts exactly the minimum as a flick', () => {
-    // Four detents is a product of four floats and lands a hair under four.
-    expect(wheelFlickIntent(spin(4, 100))).toBe('in');
+    // Three detents is a product of three floats and lands a hair under three.
+    expect(wheelFlickIntent(spin(3, 100))).toBe('in');
+    expect(wheelFlickIntent(spin(-3, 100))).toBe('out');
   });
 
   it('refuses a ratio that is not a ratio', () => {

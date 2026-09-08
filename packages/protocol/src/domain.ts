@@ -169,6 +169,16 @@ export const AgentTemplateInfo = z.object({
   effort: z.string().nullable(),
   prompt: z.string().nullable(),
   /**
+   * Extra environment for the agent process, on top of what its profile sets.
+   *
+   * The one thing a template could not say. Two agents differing only in an
+   * API key, a proxy, or a feature flag were two entries in agents.toml with
+   * no way to express the difference, so the difference lived in whatever
+   * shell the hub happened to be started from — which is not a per-template
+   * answer at all. Empty for a template that sets none.
+   */
+  env: z.record(z.string(), z.string()),
+  /**
    * Why it cannot be used. A template asking for an effort on an agent with
    * no effort setting is a configuration error, and it stays in the list
    * saying so rather than vanishing as if the config had been ignored.

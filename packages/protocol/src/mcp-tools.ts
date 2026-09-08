@@ -15,6 +15,22 @@ export const ListAgentsInput = z.object({
     .describe('Limit to one workspace. Defaults to all workspaces on all hosts.'),
 });
 
+/**
+ * Listing templates, and reading one in full.
+ *
+ * One tool rather than two. The list is short — a handful of names — and the
+ * only reason to ask for details is to decide between them, so a second
+ * round-trip to fetch what the first should have carried is a step nobody
+ * benefits from. `id` narrows it to one, which is what "template details"
+ * means when there are enough of them to want just one.
+ */
+export const ListTemplatesInput = z.object({
+  id: z
+    .string()
+    .optional()
+    .describe('Just this one template, in full. Omit to list them all.'),
+});
+
 export const SendMessageInput = z.object({
   to: z
     .string()
@@ -93,6 +109,7 @@ export const ProposeTemplateInput = z.object({
 
 export type WhoamiInput = z.infer<typeof WhoamiInput>;
 export type ListAgentsInput = z.infer<typeof ListAgentsInput>;
+export type ListTemplatesInput = z.infer<typeof ListTemplatesInput>;
 export type SendMessageInput = z.infer<typeof SendMessageInput>;
 export type SpawnAgentInput = z.infer<typeof SpawnAgentInput>;
 export type ReadScreenInput = z.infer<typeof ReadScreenInput>;

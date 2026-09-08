@@ -371,6 +371,7 @@ export class Hub extends EventEmitter implements AgentApi {
     model?: string | null;
     effort?: string | null;
     prompt?: string | null;
+    env?: Record<string, string>;
   }): AgentTemplateInfo {
     const candidate = this.candidateTemplate(input);
     this.store.upsertTemplate({
@@ -380,6 +381,7 @@ export class Hub extends EventEmitter implements AgentApi {
       model: candidate.model ?? null,
       effort: candidate.effort ?? null,
       prompt: candidate.prompt ?? null,
+      env: candidate.env,
     });
     this.reloadTemplates();
     return this.templates.info().find((t) => t.id === candidate.id)!;
@@ -400,6 +402,7 @@ export class Hub extends EventEmitter implements AgentApi {
     model?: string | null;
     effort?: string | null;
     prompt?: string | null;
+    env?: Record<string, string>;
   }): {
     id: string;
     description: string;
@@ -407,6 +410,7 @@ export class Hub extends EventEmitter implements AgentApi {
     model?: string;
     effort?: string;
     prompt?: string;
+    env: Record<string, string>;
     source: 'stored';
   } {
     const id = slugify(input.id);
@@ -434,6 +438,14 @@ export class Hub extends EventEmitter implements AgentApi {
       model: blank(input.model),
       effort: blank(input.effort),
       prompt: blank(input.prompt),
+      // A name with nothing behind it is dropped rather than set to empty:
+      // an exported-but-empty variable reads as set to every program that
+      // checks, which is the opposite of leaving it out.
+      env: Object.fromEntries(
+        Object.entries(input.env ?? {})
+          .map(([k, v]) => [k.trim(), v] as const)
+          .filter(([k, v]) => k.length > 0 && v.length > 0),
+      ),
       source: 'stored' as const,
     };
 
@@ -579,6 +591,7 @@ export class Hub extends EventEmitter implements AgentApi {
       model?: string | null;
       effort?: string | null;
       prompt?: string | null;
+      env?: Record<string, string>;
     } = {},
   ): void {
     const proposal = this.proposals.get(proposalId);
@@ -783,7 +796,14 @@ export class Hub extends EventEmitter implements AgentApi {
     model?: string;
     effort?: string;
     prompt?: string;
-  }): { agent: string; template: string | null; model?: string; effort?: string; prompt?: string } {
+  }): {
+    agent: string;
+    template: string | null;
+    model?: string;
+    effort?: string;
+    prompt?: string;
+    env?: Record<string, string>;
+  } {
     const t = this.templates.get(opts.profile);
     if (!t) {
       // Not a template: an agent id straight from spawn_agent or an older
@@ -803,6 +823,7 @@ export class Hub extends EventEmitter implements AgentApi {
       model: opts.model ?? t.model,
       effort: opts.effort ?? t.effort,
       prompt: opts.prompt ?? t.prompt,
+      env: t.env,
     };
   }
 
@@ -836,6 +857,9 @@ export class Hub extends EventEmitter implements AgentApi {
         model: picked.model,
         effort: picked.effort,
         prompt: picked.prompt,
+        // Values, like the model and the effort beside it: the template lives
+        // here and the far side has never heard of it.
+        env: picked.env,
         name: opts.name,
         spawnedByAddress: spawner?.address ?? null,
       });
@@ -861,6 +885,7 @@ export class Hub extends EventEmitter implements AgentApi {
     model?: string;
     effort?: string;
     prompt?: string;
+    env?: Record<string, string>;
     name?: string;
     cwd?: string;
     spawnedBy?: string | null;
@@ -878,6 +903,7 @@ export class Hub extends EventEmitter implements AgentApi {
       template: opts.template ?? null,
       model: opts.model,
       effort: opts.effort,
+      env: opts.env,
       // A window called "reviewer" says more than one called "claude", so the
       // template names the agent when nothing else did.
       name: opts.name ?? opts.template ?? undefined,
@@ -988,6 +1014,38 @@ export class Hub extends EventEmitter implements AgentApi {
    * care whether a peer is on this machine or a remote one; the address is
    * the whole interface.
    */
+  /**
+   * The templates an agent can start something from.
+   *
+   * Exposed because spawn_agent takes a template id and there was no way to
+   * find out what the ids were: an agent could only pass its own profile, or
+   * guess. The environment a template sets is deliberately *not* returned —
+   * knowing that a template exists is what an agent needs to use it, and the
+   * values in there are credentials more often than not.
+   */
+  async listTemplates(sessionId: string, id?: string) {
+    this.requireSession(sessionId);
+    const shown = this.templates.info().map((t) => ({
+      id: t.id,
+      description: t.description,
+      agent: t.agent,
+      model: t.model,
+      effort: t.effort,
+      prompt: t.prompt,
+      /** Names only, so a template's own config is described but not leaked. */
+      envNames: Object.keys(t.env).sort(),
+      // A template that cannot be used stays in the list saying why, exactly
+      // as it does in the picker: silently omitting it invites an agent to
+      // conclude the name was never configured and propose it again.
+      error: t.error,
+      source: t.source,
+    }));
+    if (id === undefined) return { templates: shown };
+    const one = shown.find((t) => t.id === id);
+    if (!one) throw new Error(`no template "${id}"`);
+    return one;
+  }
+
   async listAgents(sessionId: string, workspace?: string) {
     const me = this.requireSession(sessionId);
     const wsById = new Map(this.store.listWorkspaces().map((w) => [w.id, w]));

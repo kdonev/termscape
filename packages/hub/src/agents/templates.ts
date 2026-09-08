@@ -38,6 +38,12 @@ export interface AgentTemplate {
    */
   prompt?: string;
   /**
+   * Extra environment for the agent process, merged over what its profile
+   * sets. Values only — no expansion of any kind, so a value containing
+   * `{{...}}` reaches the process as typed.
+   */
+  env: Record<string, string>;
+  /**
    * Why this template cannot be used, when it cannot.
    *
    * Kept rather than dropped, for the same reason a missing agent stays in the
@@ -67,6 +73,7 @@ function bare(profile: AgentProfile): AgentTemplate {
     id: profile.id,
     description: profile.description,
     agent: profile.id,
+    env: {},
     source: 'derived',
   };
 }
@@ -80,6 +87,7 @@ function fromStored(t: StoredTemplate, profiles: ProfileRegistry): AgentTemplate
     model: t.model ?? undefined,
     effort: t.effort ?? undefined,
     prompt: t.prompt ?? undefined,
+    env: t.env,
     source: 'stored',
   };
 }
@@ -104,7 +112,39 @@ export function validate(
   if (t.effort !== undefined && !agent.effortArgs) {
     return `${t.agent} has no effort setting`;
   }
+  for (const name of Object.keys(t.env)) {
+    if (!isEnvName(name)) return `"${name}" is not a usable environment variable name`;
+  }
   return null;
+}
+
+/**
+ * What a process will actually accept as a variable name.
+ *
+ * Deliberately strict rather than permissive: a name with a space or an `=` in
+ * it is silently dropped by some shells and rejected by others, and finding
+ * that out at launch — as a missing key rather than an error — is exactly the
+ * kind of thing templates are validated at load to avoid.
+ */
+export function isEnvName(name: string): boolean {
+  return /^[A-Za-z_][A-Za-z0-9_]*$/.test(name);
+}
+
+/**
+ * `[template.x.env]` out of the TOML file, keeping only string values.
+ *
+ * A number or a boolean in that table is a mistake worth ignoring rather than
+ * coercing: `PORT = 8080` reaching the process as the string "8080" is
+ * probably what was meant, but `DEBUG = false` reaching it as "false" — which
+ * every program reads as set — is the opposite.
+ */
+function envTable(v: unknown): Record<string, string> {
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) return {};
+  return Object.fromEntries(
+    Object.entries(v as Record<string, unknown>).filter(
+      (e): e is [string, string] => typeof e[1] === 'string',
+    ),
+  );
 }
 
 export class TemplateRegistry {
@@ -165,6 +205,7 @@ export class TemplateRegistry {
               model: typeof t.model === 'string' ? t.model : undefined,
               effort: typeof t.effort === 'string' ? t.effort : undefined,
               prompt: typeof t.prompt === 'string' ? t.prompt : undefined,
+              env: envTable(t.env),
               source: 'file',
             };
           }
@@ -198,6 +239,7 @@ export class TemplateRegistry {
       model: t.model ?? null,
       effort: t.effort ?? null,
       prompt: t.prompt ?? null,
+      env: t.env,
       error: t.error ?? null,
       source: t.source,
     }));

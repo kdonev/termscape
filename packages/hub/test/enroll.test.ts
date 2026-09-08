@@ -19,6 +19,7 @@ import {
   coversLoopback,
   isLoopback,
   lanAddress,
+  pickLanAddress,
   listenPlan,
   preferredHostname,
   resolveBindHost,
@@ -137,15 +138,83 @@ describe('bind address', () => {
 });
 
 /*
+ * Which of a machine's own addresses gets handed to another machine.
+ *
+ * The rule is "who can reach me here": a box with a routable address and a LAN
+ * one has to offer the routable one, or it hands out a URL the machine being
+ * attached has no route to. Interface kind only breaks ties within a class.
+ */
+describe('pickLanAddress', () => {
+  const v4 = (address: string) => ({ address, family: 'IPv4', internal: false });
+
+  it('prefers a public address to a private one', () => {
+    expect(
+      pickLanAddress({
+        eth0: [v4('10.0.0.5')],
+        eth1: [v4('203.0.113.9')],
+      }),
+    ).toBe('203.0.113.9');
+  });
+
+  it('still answers on a machine that only has a private address', () => {
+    expect(pickLanAddress({ eth0: [v4('192.168.1.40')] })).toBe('192.168.1.40');
+    expect(pickLanAddress({ eth0: [v4('172.16.4.4')] })).toBe('172.16.4.4');
+    expect(pickLanAddress({ eth0: [v4('100.80.1.1')] })).toBe('100.80.1.1');
+  });
+
+  it('takes a real interface over a virtual one of the same class', () => {
+    expect(
+      pickLanAddress({
+        docker0: [v4('172.17.0.1')],
+        wlan0: [v4('192.168.1.40')],
+      }),
+    ).toBe('192.168.1.40');
+  });
+
+  it('takes a public address even off an interface it would otherwise skip', () => {
+    // Rank is about reachability first. A tailscale address that happens to be
+    // routable still beats a LAN address nothing outside the LAN can reach.
+    expect(
+      pickLanAddress({
+        tailscale0: [v4('203.0.113.9')],
+        eth0: [v4('192.168.1.40')],
+      }),
+    ).toBe('203.0.113.9');
+  });
+
+  it('leaves a link-local address for last', () => {
+    // 169.254.x is what an interface holds when DHCP never answered; it is a
+    // usable address for nothing and must never be the one advertised.
+    expect(
+      pickLanAddress({
+        eth0: [v4('169.254.7.7')],
+        wlan0: [v4('192.168.1.40')],
+      }),
+    ).toBe('192.168.1.40');
+    // Unless it is genuinely all there is, in which case saying so beats null.
+    expect(pickLanAddress({ eth0: [v4('169.254.7.7')] })).toBe('169.254.7.7');
+  });
+
+  it('ignores loopback and IPv6', () => {
+    expect(
+      pickLanAddress({
+        lo: [{ address: '127.0.0.1', family: 'IPv4', internal: true }],
+        eth0: [{ address: 'fe80::1', family: 'IPv6', internal: false }],
+      }),
+    ).toBeNull();
+  });
+});
+
+/*
  * What a hub binds when nobody said. This is the promise the README used to
  * make in the other direction, so it is worth pinning down rather than
  * inferring from the banner.
  */
 describe('the default bind', () => {
-  it('goes wide for a hub with a canvas', () => {
+  it('goes wide for a hub with a canvas, and enrolls on it', () => {
     expect(listenPlan(undefined, { hasLan: true })).toEqual({
       host: '0.0.0.0',
-      enroll: false,
+      enroll: true,
     });
   });
 
@@ -168,18 +237,31 @@ describe('the default bind', () => {
     });
   });
 
-  it('does not hand out enrollments until asked', () => {
-    // Reachable and enrollable are two permissions. The canvas carries a
-    // token; /join deliberately does not, because it has to be typed by hand
-    // on a machine that has nothing yet. So the wide default gives the first
-    // and --listen lan is still what gives the second.
-    expect(listenPlan(undefined, { hasLan: true }).enroll).toBe(false);
+  it('hands out enrollments wherever it is reachable, and nowhere else', () => {
+    // Enrollment follows the bind now, in both directions. It was a separate
+    // permission once, and the reason it is not any more is that the
+    // add-machine dialog had nothing to show on a default hub but an
+    // instruction to restart with a flag - so the second machine was never
+    // attached. /join still carries no token, which is what `--listen
+    // loopback` is the answer to.
+    expect(listenPlan(undefined, { hasLan: true }).enroll).toBe(true);
     expect(listenPlan('lan', { hasLan: true }).enroll).toBe(true);
     expect(listenPlan('192.168.1.40').enroll).toBe(true);
     expect(listenPlan('127.0.0.1').enroll).toBe(false);
+    expect(listenPlan('loopback').enroll).toBe(false);
+    // A hub that fell back to loopback for want of an address has nothing to
+    // advertise, and a headless one is not a canvas to attach to.
+    expect(listenPlan(undefined, { hasLan: false }).enroll).toBe(false);
+    expect(listenPlan(undefined, { headless: true, hasLan: true }).enroll).toBe(false);
   });
 });
 
+/*
+ * `enroll` is still a real switch at the serve layer even though the default
+ * now turns it on: it is what `--listen loopback` and a headless hub turn off,
+ * and withholding the origin is the whole mechanism - there is no second
+ * switch to keep in step with it.
+ */
 describe('reachable without being enrollable', () => {
   const skip = lanAddress() === null;
 
@@ -362,9 +444,20 @@ describe('the join page', () => {
       // The ABI, not only the dependency versions: these are compiled modules
       // and a Node upgrade invalidates them without changing a version.
       expect(script).toContain('process.platform');
-      // A stamp is a claim, not proof. The modules have to actually load.
-      expect(script).toContain('node-pty');
+      // A stamp is a claim, not proof: the hub's own entry has to actually
+      // import. That links the whole graph, so it catches both a native module
+      // built for the wrong ABI and a stale @termscape/protocol - which fails
+      // at link time and which a require of node-pty would never have noticed.
+      expect(script).toContain("import('./dist/hub.js')");
     }
+
+    // And the vendored protocol is removed before npm runs, because npm reads
+    // the copy already in node_modules as satisfying a file: spec whose
+    // version never moves, and leaves last build's there. Spelled per script:
+    // one joins the path, the other builds it.
+    expect(sh).toContain('rm -rf "$HOME_DIR/hub/node_modules/@termscape"');
+    expect(ps).toContain("Join-Path $hubModules '@termscape'");
+    expect(ps).toContain('Remove-Item $vendored -Recurse -Force');
 
     // Nothing to keep unless node_modules survives the install being replaced.
     for (const script of [sh, ps]) expect(script).toContain('node_modules.kept');
@@ -374,9 +467,10 @@ describe('the join page', () => {
 
     // PowerShell drops a double quote out of an argument on its way to a
     // native command, which once handed node an unparseable expression and
-    // made the check fail open into a full install every run.
-    expect(ps).toContain("require('node-pty')");
-    expect(ps).not.toContain('require("node-pty")');
+    // made the check fail open into a full install every run. So the probe
+    // has to quote its own strings with single quotes, whatever it probes.
+    expect(ps).toContain("import('./dist/hub.js')");
+    expect(ps).not.toContain('import("./dist/hub.js")');
   });
 
   it('runs npm without routing its stderr through a PowerShell stream', async () => {

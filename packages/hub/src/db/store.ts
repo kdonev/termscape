@@ -22,6 +22,7 @@ interface SessionRow {
   agent_session_uuid: string | null;
   argv_json: string;
   env_json: string;
+  template_env_json: string | null;
   spawned_by: string | null;
   state: string;
   status_text: string | null;
@@ -71,6 +72,8 @@ export interface StoredTemplate {
   model: string | null;
   effort: string | null;
   prompt: string | null;
+  /** Extra environment for the agent process. Empty when it sets none. */
+  env: Record<string, string>;
 }
 
 interface StoredTemplateRow {
@@ -80,7 +83,30 @@ interface StoredTemplateRow {
   model: string | null;
   effort: string | null;
   prompt: string | null;
+  env_json: string | null;
   created_at: number;
+}
+
+/**
+ * A JSON column back as a string map, tolerating anything that is not one.
+ *
+ * Rows predating the column are null, and a hand-edited database is not a
+ * reason to refuse to start: an unreadable value is treated as "none set",
+ * which is what it was before the column existed.
+ */
+function envFromJson(json: string | null): Record<string, string> {
+  if (!json) return {};
+  try {
+    const v = JSON.parse(json) as unknown;
+    if (typeof v !== 'object' || v === null || Array.isArray(v)) return {};
+    return Object.fromEntries(
+      Object.entries(v as Record<string, unknown>).filter(
+        (e): e is [string, string] => typeof e[1] === 'string',
+      ),
+    );
+  } catch {
+    return {};
+  }
 }
 
 export class Store {
@@ -232,6 +258,7 @@ export class Store {
       model: r.model,
       effort: r.effort,
       prompt: r.prompt,
+      env: envFromJson(r.env_json),
     }));
   }
 
@@ -249,14 +276,15 @@ export class Store {
   upsertTemplate(t: StoredTemplate): void {
     this.db
       .prepare(
-        `INSERT INTO template (id, description, agent, model, effort, prompt, created_at)
-         VALUES (@id, @description, @agent, @model, @effort, @prompt, @createdAt)
+        `INSERT INTO template (id, description, agent, model, effort, prompt, env_json, created_at)
+         VALUES (@id, @description, @agent, @model, @effort, @prompt, @envJson, @createdAt)
          ON CONFLICT(id) DO UPDATE SET
            description = excluded.description,
            agent       = excluded.agent,
            model       = excluded.model,
            effort      = excluded.effort,
-           prompt      = excluded.prompt`,
+           prompt      = excluded.prompt,
+           env_json    = excluded.env_json`,
       )
       .run({
         id: t.id,
@@ -265,6 +293,9 @@ export class Store {
         model: t.model ?? null,
         effort: t.effort ?? null,
         prompt: t.prompt ?? null,
+        // Stored as `null` rather than `{}` so a template that sets nothing
+        // looks the same as every row written before the column existed.
+        envJson: Object.keys(t.env).length > 0 ? JSON.stringify(t.env) : null,
         createdAt: Date.now(),
       });
   }
@@ -343,19 +374,30 @@ export class Store {
     ).map((r) => r.name);
   }
 
-  insertSession(s: Session, spec: SessionLaunchSpec): void {
+  /**
+   * `templateEnv` is recorded beside the launch spec rather than folded into
+   * it: the spec is rebuilt from scratch on every resume, and this is the one
+   * input to that rebuild which lives on the template rather than the profile
+   * — so the session has to keep its own copy or a later edit to the template
+   * would silently change what a resumed agent runs in.
+   */
+  insertSession(
+    s: Session,
+    spec: SessionLaunchSpec,
+    templateEnv: Record<string, string> = {},
+  ): void {
     const tx = this.db.transaction(() => {
       this.db
         .prepare(
           `INSERT INTO session (
              id, workspace_id, name, profile, template, model, effort, cwd,
              agent_session_uuid,
-             argv_json, env_json, spawned_by, state, status_text, title,
+             argv_json, env_json, template_env_json, spawned_by, state, status_text, title,
              pid, exit_code, cols, rows, created_at, exited_at, last_active_at)
            VALUES (
              @id, @workspaceId, @name, @profile, @template, @model, @effort, @cwd,
              @agentSessionUuid,
-             @argvJson, @envJson, @spawnedBy, @state, @statusText, @title,
+             @argvJson, @envJson, @templateEnvJson, @spawnedBy, @state, @statusText, @title,
              @pid, @exitCode, @cols, @rows, @createdAt, @exitedAt, @lastActiveAt)`,
         )
         .run({
@@ -370,6 +412,8 @@ export class Store {
           agentSessionUuid: s.agentSessionUuid,
           argvJson: JSON.stringify(spec.argv),
           envJson: JSON.stringify(spec.env),
+          templateEnvJson:
+            Object.keys(templateEnv).length > 0 ? JSON.stringify(templateEnv) : null,
           spawnedBy: s.spawnedBy,
           state: s.state,
           statusText: s.statusText,
@@ -423,6 +467,14 @@ export class Store {
       .get(id) as { argv_json: string; env_json: string } | undefined;
     if (!r) return null;
     return { argv: JSON.parse(r.argv_json), env: JSON.parse(r.env_json) };
+  }
+
+  /** What the template this session came from added to its environment. */
+  getTemplateEnv(id: string): Record<string, string> {
+    const r = this.db
+      .prepare('SELECT template_env_json FROM session WHERE id = ?')
+      .get(id) as { template_env_json: string | null } | undefined;
+    return envFromJson(r?.template_env_json ?? null);
   }
 
   setLaunchSpec(id: string, spec: SessionLaunchSpec): void {

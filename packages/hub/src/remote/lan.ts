@@ -9,20 +9,81 @@ import { lookup } from 'node:dns/promises';
  * exactly the kind of step that makes a feature go unused.
  */
 
-/** First non-internal IPv4 address, preferring real NICs over virtual ones. */
+/**
+ * How good an address is as the one to hand another machine, lower is better.
+ *
+ * The ordering is "who can reach me on this": a globally routable address can
+ * be reached from anywhere, an RFC1918 address only from the same network, a
+ * link-local one only from the same wire and usually not even then. A machine
+ * with a public IP — a VPS, a box with a routable interface beside its LAN one
+ * — has to advertise that one, or it hands out an address the machine being
+ * attached has no route to.
+ *
+ * Interface kind is the tie-break rather than the rule: Docker bridges, WSL
+ * adapters and VM host-only networks carry private addresses that are
+ * reachable from almost nothing, so they lose to a real interface holding an
+ * address of the same class.
+ */
+function addressRank(name: string, address: string): number {
+  const virtual = /^(docker|br-|veth|vEthernet|virbr|utun|tailscale)/i.test(name) ? 1 : 0;
+  if (isLinkLocalV4(address)) return 6 + virtual;
+  if (isPrivateV4(address)) return 2 + virtual;
+  return 0 + virtual;
+}
+
+/** RFC1918 plus the shared-address and carrier-grade NAT range. */
+function isPrivateV4(address: string): boolean {
+  const [a = 0, b = 0] = address.split('.').map(Number);
+  if (a === 10) return true;
+  if (a === 172 && b >= 16 && b <= 31) return true;
+  if (a === 192 && b === 168) return true;
+  if (a === 100 && b >= 64 && b <= 127) return true;
+  return false;
+}
+
+/** 169.254.0.0/16 — what an interface holds when DHCP never answered. */
+function isLinkLocalV4(address: string): boolean {
+  return address.startsWith('169.254.');
+}
+
+/**
+ * The IPv4 address another machine should be pointed at.
+ *
+ * Public beats private beats link-local, and a real NIC beats a virtual one
+ * within each class. Ties keep the order the OS reported, which is the closest
+ * thing to a preference the machine itself expresses.
+ */
 export function lanAddress(): string | null {
-  const candidates: string[] = [];
-  for (const [name, addrs] of Object.entries(networkInterfaces())) {
+  return pickLanAddress(networkInterfaces());
+}
+
+/** One entry of what `os.networkInterfaces()` returns, narrowed to what matters. */
+export interface NicAddress {
+  address: string;
+  family: string;
+  internal: boolean;
+}
+
+/**
+ * The pick itself, over an interface map rather than the machine's own.
+ *
+ * Split out so the ordering can be tested against a machine shape that is not
+ * the one running the test — a VPS with a public address beside a Docker
+ * bridge is exactly the case this exists for, and no CI runner has one.
+ */
+export function pickLanAddress(
+  interfaces: Record<string, NicAddress[] | undefined>,
+): string | null {
+  const candidates: { address: string; rank: number }[] = [];
+  for (const [name, addrs] of Object.entries(interfaces)) {
     for (const a of addrs ?? []) {
       if (a.family !== 'IPv4' || a.internal) continue;
-      // Docker bridges, WSL adapters and VM host-only networks are reachable
-      // from almost nothing, so they lose to a real interface.
-      const virtual = /^(docker|br-|veth|vEthernet|virbr|utun|tailscale)/i.test(name);
-      if (virtual) candidates.push(a.address);
-      else candidates.unshift(a.address);
+      candidates.push({ address: a.address, rank: addressRank(name, a.address) });
     }
   }
-  return candidates[0] ?? null;
+  if (candidates.length === 0) return null;
+  // Stable: only a strictly better rank moves ahead of what came first.
+  return candidates.reduce((best, c) => (c.rank < best.rank ? c : best)).address;
 }
 
 /**
@@ -67,25 +128,35 @@ export interface ListenPlan {
 /**
  * Decide what to bind, and whether to hand out enrollments, from `--listen`.
  *
- * A hub with a UI binds wide by default. The canvas is worth opening on a
- * phone or a second screen and a second machine is worth attaching, and
- * neither is discoverable from a hub that only ever prints 127.0.0.1. Every
- * route that matters still requires the client token, so what widens is which
- * interfaces answer, not who gets in.
+ * A hub with a UI binds wide by default, and hands out enrollments on that
+ * bind. The canvas is worth opening on a phone or a second screen and a second
+ * machine is worth attaching, and neither is discoverable from a hub that only
+ * ever prints 127.0.0.1.
  *
- * Two things are deliberately *not* covered by that default:
+ * Enrollment used to be the exception — reachable by default, enrollable only
+ * on `--listen lan`. That was the wrong line to draw, for a plain reason: the
+ * add-machine dialog is the *only* place a second machine is ever attached
+ * from, and on a default hub it had nothing to show but an instruction to
+ * restart with a flag. A feature reachable only by restarting the process with
+ * a flag you have to already know about is a feature nobody uses, and this one
+ * is the product. So the default now answers `/join`, and `--listen loopback`
+ * is the way to say no.
  *
- * - **A headless hub stays on loopback.** Headless means a hub that joined a
- *   canvas or was deployed over SSH, and the SSH one is reached only through
- *   its tunnel — binding it wide would put a hub on a network that its
- *   operator never asked to expose and cannot see. It has no UI to reach
- *   anyway, so there is nothing to gain against that.
- * - **Enrollment stays opt-in.** `/join` is the one route served without the
- *   token, because it has to be typed by hand on a machine that has nothing
- *   yet. A token-gated canvas on the café wi-fi is a different proposition
- *   from a page that hands anyone an installer and a slot on your canvas. So
- *   the default is reachable, and `--listen lan` is still what makes it
- *   enrollable.
+ * What that costs is worth stating plainly, because it is real: `/join` is the
+ * one route served without the client token — it has to be typed by hand on a
+ * machine that has nothing yet — so on a network you do not trust, anyone who
+ * can reach this hub can pull the installer and put a machine on your canvas.
+ * That is what `--listen loopback` is for, and what the banner says out loud on
+ * every start. Everything else still needs the token.
+ *
+ * One thing is still *not* covered by the default:
+ *
+ * - **A headless hub stays on loopback, and never enrolls.** Headless means a
+ *   hub that joined a canvas or was deployed over SSH, and the SSH one is
+ *   reached only through its tunnel — binding it wide would put a hub on a
+ *   network that its operator never asked to expose and cannot see. It has no
+ *   UI to reach anyway, and a machine attaching to *it* rather than to the
+ *   canvas is not a thing anyone wants.
  *
  * `hasLan` is injected so this is testable without a network interface; the
  * fallback matters because a machine with no non-loopback address must still
@@ -98,11 +169,13 @@ export function listenPlan(
   const hasLan = opts.hasLan ?? lanAddress() !== null;
   if (spec === undefined) {
     const wide = !opts.headless && hasLan;
-    return { host: wide ? '0.0.0.0' : '127.0.0.1', enroll: false };
+    // Enrollment follows the bind, both ways: a hub that fell back to loopback
+    // for want of an address has nothing to advertise and must not claim a
+    // join page, and a headless one is not a canvas to attach to.
+    return { host: wide ? '0.0.0.0' : '127.0.0.1', enroll: wide };
   }
   const host = resolveBindHost(spec);
-  // Asking for a wider bind by hand is the deliberate act that turns the join
-  // page on; it is what `--listen lan` has always meant.
+  // Same rule when it was asked for by hand: anything but loopback enrolls.
   return { host, enroll: !isLoopback(host) };
 }
 

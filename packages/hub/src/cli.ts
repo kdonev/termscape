@@ -63,9 +63,10 @@ async function main(): Promise<void> {
   --port <n>        port to bind; 0 lets the OS pick. Default: the first
                     free memorable port (7777, 4242, ...)
   --listen <addr>   bind address. Default: every interface, so the canvas is
-                    reachable from your network with its token. "loopback"
-                    keeps it to this machine; "lan" also turns on the join
-                    page, which is served without the token
+                    reachable from your network with its token and another
+                    machine can attach from the join page - the one page
+                    served *without* the token. "loopback" keeps the hub to
+                    this machine, and turns that page off with it
   --headless        serve no web UI; used when running as a remote hub
   --token <t>       client token to use instead of generating one
   --open            open the UI in the browser even when not on a terminal
@@ -119,10 +120,14 @@ Joining another machine's canvas:
   console.log(`TERMSCAPE_PORT=${port}`);
 
   /*
-   * Binding wide is the default now, which makes it news rather than a
-   * confirmation - so it is said first, before the URLs, and it says what it
-   * costs before it says what it buys. The old banner put this last, where it
-   * read as an acknowledgement of something the operator had just typed.
+   * Binding wide and answering the join page is the default now, which makes
+   * it news rather than a confirmation - so it is said first, before the URLs,
+   * and it says what it costs before it says what it buys. The old banner put
+   * this last, where it read as an acknowledgement of something the operator
+   * had just typed.
+   *
+   * The way out is printed on the enrolling path too, not only the other one.
+   * It is the branch where somebody might want it.
    */
   if (!values.headless && lanOrigin) {
     const where = lanOrigin.replace(/^http:\/\//, '');
@@ -131,6 +136,7 @@ Joining another machine's canvas:
       console.log(`          anyone who can reach it can load the join page and`);
       console.log(`          attach a machine to this canvas. Everything else`);
       console.log(`          needs the token below.`);
+      console.log(`          --listen loopback keeps the hub to this machine.`);
     } else {
       console.log(`          the canvas needs the token below, so this is worth`);
       console.log(`          opening on a phone or a second screen.`);
@@ -151,10 +157,15 @@ Joining another machine's canvas:
     console.log(`\n  enroll: ${enrollOrigin}/join`);
     if (enrollAltOrigin) console.log(`       or ${enrollAltOrigin}/join`);
   } else if (!values.headless) {
-    // The join page is the point of --listen lan now that reachability is not,
-    // and a hub that never mentions it is a hub whose second machine is never
-    // attached.
-    console.log(`\n  to attach another machine, restart with --listen lan`);
+    // Only two ways to get here now that the default enrolls: the operator
+    // asked for loopback, or this machine has no address anyone could reach it
+    // on. Saying which is the difference between a setting they chose and a
+    // network they need to go and look at.
+    const why =
+      values.listen === undefined
+        ? 'this machine has no address another machine could reach it on'
+        : 'this hub is bound to loopback';
+    console.log(`\n  no join page: ${why}`);
   }
   if (!values.headless) console.log('');
 

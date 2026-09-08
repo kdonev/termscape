@@ -20,7 +20,7 @@
  * whether the dependency tree it already has is still the right one. See
  * `depsFingerprint` below for what goes into it and why.
  */
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
   copyFileSync,
@@ -37,7 +37,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const pkgRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const repoRoot = join(pkgRoot, '..', '..');
@@ -120,6 +120,36 @@ if (!existsSync(join(dist, 'cli.js'))) {
 }
 if (!existsSync(join(repoRoot, 'packages', 'protocol', 'dist', 'index.js'))) {
   console.error('pack-hub: protocol dist missing — build @termscape/protocol first');
+  process.exit(1);
+}
+
+/**
+ * And that it is the same generation as the hub dist about to be packed.
+ *
+ * This is a real import of the hub's own entry, not a comparison of
+ * timestamps: the two have to link, and linking is the thing that fails. A
+ * hub built against a protocol export the vendored protocol does not have
+ * dies on its first import with "does not provide an export named X" - on
+ * somebody else's machine, minutes into a join, which is the worst place to
+ * find out. `npm run build` at the root gets the order right;
+ * `npm run build -w @termscape/hub` on its own does not.
+ *
+ * Importing hub.js starts nothing - only cli.js does - and it resolves
+ * @termscape/protocol through the workspace link to exactly the dist that is
+ * about to be vendored.
+ */
+const link = spawnSync(
+  process.execPath,
+  ['-e', "import(process.argv[1]).catch(e => { console.error(String(e)); process.exit(1); })", pathToFileURL(join(dist, 'hub.js')).href],
+  { cwd: repoRoot, encoding: 'utf8' },
+);
+if (link.status !== 0) {
+  console.error('pack-hub: the hub dist and the protocol dist do not link.');
+  console.error((link.stderr || '').trim());
+  console.error(
+    '          Run `npm run build` at the repo root so both are rebuilt in order.\n' +
+      '          Packing now would ship a hub that cannot load its own protocol.',
+  );
   process.exit(1);
 }
 

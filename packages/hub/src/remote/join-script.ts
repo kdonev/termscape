@@ -246,16 +246,37 @@ WANT_STAMP="$FINGERPRINT-$NODE_ABI"
 # The stamp claims this tree still works. Confirming it does costs one Node
 # start, and is the whole difference between an optimisation and a machine
 # that joins with a hub unable to load its own modules.
+#
+# The confirmation is an import of the hub's own entry point rather than a
+# require of the two native modules. It links the whole graph - node-pty and
+# better-sqlite3 among it - so it still catches a module built for the wrong
+# ABI, and it additionally catches the one thing a require of those two never
+# could: a stale @termscape/protocol, which fails at link time with "does not
+# provide an export named X". Importing it is side-effect free and leaves no
+# handles open; the hub only starts from cli.js.
 deps_reusable() {
   [ -d "$HOME_DIR/hub/node_modules" ] || return 1
   [ "$(cat "$STAMP_FILE" 2>/dev/null || true)" = "$WANT_STAMP" ] || return 1
-  "$NODE_BIN" -e "require('node-pty'); require('better-sqlite3')" >>"$HOME_DIR/install.log" 2>&1
+  "$NODE_BIN" -e "import('./dist/hub.js').catch(e => { console.error(e); process.exit(1); })" \\
+    >>"$HOME_DIR/install.log" 2>&1
 }
 
 install_deps() {
   note "this is the slow part - a minute or two on a first run"
   # A half-finished tree must not inherit the last run's stamp.
   rm -f "$STAMP_FILE"
+
+  # The vendored workspace package has to go before npm runs.
+  #
+  # Every other dependency is a registry package whose version moves when its
+  # code does, so npm reinstalls it on its own. @termscape/protocol is a
+  # file: tarball whose version stands still across builds while its code
+  # changes underneath, and npm reads the copy already in node_modules as
+  # satisfying the spec and leaves it there - so a hub built against a new
+  # protocol was installed beside last build's copy, and died on its first
+  # import. Deleting it is what makes npm extract the tarball again; the
+  # expensive native modules beside it are untouched.
+  rm -rf "$HOME_DIR/hub/node_modules/@termscape"
 
   # Prebuilt binaries first: node-pty and better-sqlite3 publish them for the
   # mainstream platforms, and downloading one beats compiling it every time.
@@ -612,7 +633,13 @@ if ((Test-Path $hubModules) -and ($haveStamp -eq $wantStamp)) {
   # its own errors and reports through stdout and an exit code, so nothing
   # reaches PowerShell's error stream - where 5.1 turns a native command's
   # stderr into a terminating error.
-  $probe = "try { require('node-pty'); require('better-sqlite3') } catch (e) { console.log('dependency probe failed: ' + e.message); process.exit(1) }"
+  #
+  # It imports the hub's own entry rather than requiring the two native
+  # modules: that links the whole graph, so it still catches a module built
+  # for the wrong ABI and additionally catches a stale @termscape/protocol,
+  # which fails at link time with "does not provide an export named X". See
+  # the POSIX half for why that can happen at all.
+  $probe = "import('./dist/hub.js').catch(e => { console.log('dependency probe failed: ' + e.message); process.exit(1) })"
   & $NodeExe -e $probe > $log
   $reusable = ($LASTEXITCODE -eq 0)
 }
@@ -623,6 +650,11 @@ if ($reusable) {
   Note "this is the slow part - a minute or two on a first run"
   # A half-finished tree must not inherit the last run's stamp.
   if (Test-Path $stampFile) { Remove-Item $stampFile -Force }
+
+  # The vendored workspace package has to go before npm runs - see the POSIX
+  # half for why npm will otherwise keep last build's copy of it.
+  $vendored = Join-Path $hubModules '@termscape'
+  if (Test-Path $vendored) { Remove-Item $vendored -Recurse -Force }
 
   # Prebuilt binaries first; compiling is the fallback, not the default.
   $npmArgs = '"' + $NpmCli + '" install --omit=dev --no-audit --no-fund'

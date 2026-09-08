@@ -383,8 +383,15 @@ export const WHEEL_FLICK_GAP_MS = 80;
  * How far a spin has to travel to read as a flick rather than as zooming,
  * counted in detents — so a spin that doubles back cancels itself out instead
  * of adding up.
+ *
+ * Three, not four. Four detents inside the gap below is a longer spin than it
+ * sounds: the snap arrived late enough that people gave up on it and kept
+ * turning, which is the failure that matters — a gesture nobody reaches is
+ * worth nothing, while one that fires a notch early is undone by a notch the
+ * other way. Below three there is no burst to speak of and every deliberate
+ * two-notch zoom would snap.
  */
-export const WHEEL_FLICK_MIN_DETENTS = 4;
+export const WHEEL_FLICK_MIN_DETENTS = 3;
 
 /**
  * And how long it may take. "Short and quick" is the whole gesture, and past

@@ -73,6 +73,9 @@ body {
   cursor: pointer;
   white-space: nowrap;
 }
+/* An anchor wearing the button class - the bug report, which is a real link
+   and has to stay one so it can be opened in a new tab the ordinary way. */
+a.btn { text-decoration: none; display: inline-block; }
 .btn:hover:not(:disabled) { border-color: var(--accent); }
 .btn:disabled { opacity: 0.45; cursor: default; }
 .btn.primary { background: #1e2a45; border-color: #33406a; }

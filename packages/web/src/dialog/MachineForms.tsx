@@ -58,9 +58,11 @@ export function JoinInstructions() {
         </>
       ) : (
         <p className="dialog-note">
-          Handing out a join link is opt-in: <code>/join</code> is the one page served
-          without your token, because it has to be typed by hand on a machine that has
-          nothing yet. Restart the hub with <code>--listen lan</code> to turn it on.
+          This hub has no join page. Either it was started with{' '}
+          <code>--listen loopback</code>, or this machine has no network address another
+          machine could reach it on — the hub's own startup banner says which. Use the{' '}
+          <strong>ssh</strong> tab meanwhile: it needs no join page, only a machine you
+          can reach.
         </p>
       )}
       <footer className="dialog-actions">

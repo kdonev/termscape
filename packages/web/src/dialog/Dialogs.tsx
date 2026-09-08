@@ -425,6 +425,20 @@ function TemplateDialog({
   const [model, setModel] = useState(seed?.model ?? '');
   const [effort, setEffort] = useState(seed?.effort ?? '');
   const [prompt, setPrompt] = useState(seed?.prompt ?? '');
+  /*
+   * Seeded from the stored template only, never from a proposal: an agent
+   * cannot name environment variables for every future launch of a template,
+   * so there is nothing on a proposal to seed from and this box starts empty
+   * for one.
+   *
+   * Edited as text, not as a row of key/value inputs.
+   *
+   * A `.env`-shaped block is a thing people already have: it is what gets
+   * pasted out of a README or a password manager, and a grid of paired fields
+   * turns one paste into eight. Parsed on submit, so what is typed is exactly
+   * what is round-tripped back into this box on the next edit.
+   */
+  const [envText, setEnvText] = useState(() => envToText(editing?.env));
 
   const agent = profiles.find((p) => p.id === agentId);
 
@@ -441,6 +455,7 @@ function TemplateDialog({
     model: model.trim() || null,
     effort: effort.trim() || null,
     prompt: prompt.trim() || null,
+    env: parseEnvText(envText),
   };
 
   return (
@@ -598,9 +613,54 @@ function TemplateDialog({
             onChange={(e) => setPrompt(e.target.value)}
           />
         </Field>
+
+        <Field
+          label="environment"
+          hint="One NAME=value per line, set for this template's agents on top of whatever the CLI already gets. Blank lines and # comments are ignored."
+        >
+          <textarea
+            className="input"
+            rows={3}
+            spellCheck={false}
+            placeholder={'optional\nANTHROPIC_BASE_URL=https://proxy.internal'}
+            value={envText}
+            onChange={(e) => setEnvText(e.target.value)}
+          />
+        </Field>
       </DialogForm>
     </Dialog>
   );
+}
+
+/** A stored env map back into the text the box shows. Sorted, so edits are diffable. */
+function envToText(env: Record<string, string> | undefined): string {
+  if (!env) return '';
+  return Object.keys(env)
+    .sort()
+    .map((k) => `${k}=${env[k]}`)
+    .join('\n');
+}
+
+/**
+ * `NAME=value` lines into a map.
+ *
+ * Everything after the first `=` is the value, untrimmed and unquoted: a token
+ * with a trailing space is a token with a trailing space, and stripping quotes
+ * here would make a value that genuinely starts with one impossible to type. A
+ * line with no `=`, or an empty name, is dropped — the hub validates the names
+ * it does get and refuses the template if one cannot be a variable.
+ */
+function parseEnvText(text: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const line of text.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const eq = trimmed.indexOf('=');
+    if (eq <= 0) continue;
+    const name = trimmed.slice(0, eq).trim();
+    if (name) out[name] = trimmed.slice(eq + 1);
+  }
+  return out;
 }
 
 /**

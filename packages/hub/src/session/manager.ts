@@ -167,6 +167,12 @@ export interface StartOptions {
   cols?: number;
   rows?: number;
   window?: WindowRect;
+  /**
+   * Extra environment from the template, already resolved to values. Recorded
+   * on the session so a resume a week later runs in the same environment even
+   * if the template has been edited since.
+   */
+  env?: Record<string, string>;
 }
 
 export interface ManagerEvents {
@@ -191,6 +197,16 @@ export class SessionManager extends EventEmitter {
   private readonly live = new Map<string, PtySession>();
   private readonly snapshotTimers = new Map<string, NodeJS.Timeout>();
   private readonly layoutTimers = new Map<string, NodeJS.Timeout>();
+  /**
+   * Rects a client has moved but the debounce has not written yet.
+   *
+   * Sessions are read back out of SQLite on every emit, so without this a
+   * broadcast triggered by anything else — a title the agent rewrote, a
+   * status flip — would carry the rect from before the drag and snap the
+   * window back under the cursor. The move is authoritative the moment it
+   * arrives; the debounce only defers the write, not the truth.
+   */
+  private readonly pendingWindows = new Map<string, WindowRect>();
   /** Latest title per session, waiting for the coalescing window to close. */
   private readonly pendingTitles = new Map<string, string>();
   private titleTimer: NodeJS.Timeout | null = null;
@@ -233,9 +249,11 @@ export class SessionManager extends EventEmitter {
 
   /** Overlay live runtime status onto the persisted row. */
   private decorate(s: Session): Session {
+    const pendingWindow = this.pendingWindows.get(s.id);
+    const base = pendingWindow ? { ...s, window: pendingWindow } : s;
     const p = this.live.get(s.id);
-    if (!p) return s;
-    return { ...s, status: p.status, pid: p.pid, cols: p.cols, rows: p.rows };
+    if (!p) return base;
+    return { ...base, status: p.status, pid: p.pid, cols: p.cols, rows: p.rows };
   }
 
   pty(id: string): PtySession | null {
@@ -258,6 +276,7 @@ export class SessionManager extends EventEmitter {
     profile: AgentProfile,
     peers: string[],
     resume: boolean,
+    templateEnv: Record<string, string> = {},
   ): SessionLaunchSpec {
     const token = this.tokens.mint(session.id);
     let vars: Record<string, string> = {
@@ -335,9 +354,20 @@ export class SessionManager extends EventEmitter {
 
     return {
       argv,
-      env: Object.fromEntries(
-        Object.entries(profile.env).map(([k, v]) => [k, templateAll([v], vars)[0]!]),
-      ),
+      env: {
+        ...Object.fromEntries(
+          Object.entries(profile.env).map(([k, v]) => [k, templateAll([v], vars)[0]!]),
+        ),
+        /*
+         * The template's own environment wins over the profile's. The profile
+         * is the recipe for launching a CLI and the template is what a person
+         * chose for this one launch, so on the rare name they both set, the
+         * chosen value is the one that was meant. Not expanded: a template
+         * holds values, and `{{token}}` in one is a literal, not a way to hand
+         * the hub's bearer token to something else.
+         */
+        ...templateEnv,
+      },
     };
   }
 
@@ -390,8 +420,16 @@ export class SessionManager extends EventEmitter {
       window: opts.window ?? this.placeWindow(ws.id, opts.spawnedBy ?? null),
     };
 
-    const spec = this.buildSpec(session, ws.name, profile, this.peersOf(ws.id), false);
-    this.store.insertSession(session, spec);
+    const templateEnv = opts.env ?? {};
+    const spec = this.buildSpec(
+      session,
+      ws.name,
+      profile,
+      this.peersOf(ws.id),
+      false,
+      templateEnv,
+    );
+    this.store.insertSession(session, spec, templateEnv);
     this.spawn(session, spec, profile);
     return this.get(id)!;
   }
@@ -414,6 +452,7 @@ export class SessionManager extends EventEmitter {
       profile,
       this.peersOf(ws.id, s.id),
       !!profile.resumeArgs && !!s.agentSessionUuid,
+      this.store.getTemplateEnv(s.id),
     );
     this.store.setLaunchSpec(s.id, spec);
     this.spawn(s, spec, profile);
@@ -550,6 +589,7 @@ export class SessionManager extends EventEmitter {
     this.live.delete(sessionId);
     this.clearTimer(this.snapshotTimers, sessionId);
     this.clearTimer(this.layoutTimers, sessionId);
+    this.pendingWindows.delete(sessionId);
     this.tokens.revoke(sessionId);
     this.store.removeSession(sessionId);
     this.emit('removed', sessionId, address);
@@ -593,10 +633,14 @@ export class SessionManager extends EventEmitter {
   /* --------------------------------------------------------------- layout */
 
   moveWindow(sessionId: string, rect: WindowRect): void {
+    this.pendingWindows.set(sessionId, rect);
     this.clearTimer(this.layoutTimers, sessionId);
     const t = setTimeout(() => {
       this.layoutTimers.delete(sessionId);
       this.store.saveWindow(sessionId, rect);
+      // Only now is the row the same as the overlay, so dropping it changes
+      // nothing that a reader can see.
+      if (this.pendingWindows.get(sessionId) === rect) this.pendingWindows.delete(sessionId);
     }, LAYOUT_DEBOUNCE_MS);
     t.unref?.();
     this.layoutTimers.set(sessionId, t);

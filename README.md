@@ -10,7 +10,8 @@ from one agent is delivered by typing it into the other's terminal, immediately.
 
 Local-first: the hub runs on your machine and the UI is a browser tab. It binds
 every interface, so the canvas opens on your phone or a second screen as well —
-with its token; `--listen loopback` keeps it to this machine. Other machines run
+with its token — and another machine can attach itself from the join page.
+`--listen loopback` keeps the whole thing to this machine. Other machines run
 the same hub as a daemon and appear on the same canvas.
 
 ## Getting started
@@ -25,9 +26,10 @@ installed system-wide: state lives in `~/.termscape`, and deleting that
 directory is the uninstall.
 
 The hub is reachable from your network, so the same URL — token and all — opens
-the canvas on a phone or a second screen. Attaching another machine is a
-separate opt-in; see [Adding another machine](#adding-another-machine). To keep
-the hub to this machine entirely:
+the canvas on a phone or a second screen, and the **+ machine** dialog already
+has a join link in it for the second machine; see
+[Adding another machine](#adding-another-machine). To keep the hub to this
+machine entirely — no join page, nothing off 127.0.0.1:
 
 ```bash
 npx @kdonev/termscape --listen loopback
@@ -81,23 +83,18 @@ next window.
 
 ## Adding another machine
 
-The hub is already reachable from your network, but it does not hand out join
-links until asked. `/join` is the one page served without your token — it has
-to be typed by hand on a machine that has nothing yet — so being reachable and
-being enrollable are kept as two separate permissions. Turn the second one on,
-then let the other machine come to you:
+Nothing to turn on: a hub started with no flags at all hands out join links.
+The startup banner prints an `enroll:` URL alongside the usual one, and the
+**+ machine** dialog shows the same URL with a copy button.
 
-```bash
-npx @kdonev/termscape --listen lan
-```
+That is a deliberate trade and worth knowing about, because `/join` is the one
+page served without your token — it has to be typed by hand on a machine that
+has nothing yet. So on a network you do not trust, anyone who can reach this
+hub can pull the installer and put a machine on your canvas. `--listen
+loopback` is how you say no, and it turns off the network entirely.
 
-(From a clone that is `npm run dev -- --listen lan`, or
-`npm run dev -w @termscape/hub -- --listen lan` if you are calling the
-workspace directly — npm needs the `--` to hand flags to the hub rather than
-reading them itself.)
-
-The hub prints an `enroll:` URL alongside the usual one. Open it **on the
-machine you want to add** and run the command it shows:
+Open the join URL **on the machine you want to add** and run the command it
+shows:
 
 ```bash
 curl -fsSL http://studio:7777/join.sh | sh    # macOS, Linux
@@ -152,10 +149,12 @@ have actually changed, and checks that tree really loads before trusting it.
 
 Two things worth knowing:
 
-- The **join page** is opt-in and off by default; `--listen lan` is what turns
-  it on. With it, anyone who can reach your hub can load that page and attach a
-  machine to your canvas. Every other route still requires the token, and being
-  reachable — which a default install already is — grants none of this.
+- The **join page** answers by default, on the same interfaces the canvas does.
+  Anyone who can reach your hub can load that page and attach a machine to your
+  canvas; every *other* route still requires the token. It was opt-in once, and
+  the reason it is not any more is that the add-machine dialog had nothing to
+  show but an instruction to restart the hub with a flag — a feature reachable
+  only that way is a feature nobody uses. `--listen loopback` is the way back.
 - Each download carries a single-use key that expires in 15 minutes. Once a
   machine has joined it keeps a durable token in `~/.termscape/host-token` and
   rejoins by itself after a reboot or a dropped link — its agents keep running
@@ -172,12 +171,18 @@ tunnel. Same protocol, opposite direction.
 |---|---|
 | `whoami` | your address, workspace and working directory |
 | `list_agents` | everyone on the canvas, across every host, and whether they are busy |
+| `list_templates` | the saved ways of starting an agent, and what each one runs |
 | `send_message` | type a message into another agent's terminal, right now |
 | `spawn_agent` | start a helper in your workspace, with an optional first task |
 | `read_screen` | look at another agent's terminal without interrupting it |
 | `set_status` | label your own window so the human can see what you are doing |
 | `stop_agent` | stop an agent you spawned |
 | `propose_template` | ask the human to save a way of starting an agent, under a name |
+
+`list_templates` is what makes `spawn_agent` usable for anything but a bare
+CLI: its `profile` takes a template id, and this is how an agent finds out
+which ids exist. It reports the *names* of the environment variables a template
+sets and never their values, which are credentials more often than not.
 
 `propose_template` is the only one that asks rather than does. A template
 changes how *future* agents are launched, on every machine, with nobody
@@ -272,6 +277,10 @@ agent  = "claude"
 model  = "opus"
 effort = "high"
 prompt = "Review the diff on this branch for correctness bugs. Report, do not fix."
+
+# Set for the agents this template starts, on top of what the CLI already gets.
+[template.reviewer.env]
+ANTHROPIC_BASE_URL = "https://proxy.internal"
 ```
 
 - Templates made in the panel are stored in `state.db`, the same place
@@ -309,6 +318,18 @@ instance with an address and a window.
   afterwards.
 - **Starting an agent on another machine sends values, not a template name.**
   The two machines do not share config, so the name is resolved here first.
+- **A template can set environment variables**, in the panel as `NAME=value`
+  lines or as a `[template.<name>.env]` table in the file. They are set for the
+  agents that template starts, on top of whatever the CLI would inherit
+  anyway, and they win over what the agent profile sets on the rare name both
+  name. This is where an API key, a base URL or a feature flag that
+  distinguishes two otherwise identical templates belongs — before it, the
+  difference could only live in whichever shell the hub happened to be started
+  from, which is not a per-template answer at all. Like the model, they are
+  recorded on the session, so a resumed agent comes back in the environment it
+  was launched in. An agent proposing a template cannot ask for any: choosing
+  what the next agent's credentials are is not something to review one dialog
+  at a time.
 
 ### What is actually installed
 
@@ -375,8 +396,9 @@ could be talked into sending an attacker's text to a peer.
   the network can read. `--listen loopback` narrows it to this machine.
 - A hub running `--headless` — one that joined a canvas, or was deployed over
   ssh and is reached through its tunnel — stays on `127.0.0.1` regardless.
-- `/join` is the only route served without the token, and it is off unless you
-  passed `--listen lan`.
+- `/join` is the only route served without the token, and it answers by
+  default on every interface the hub bound. `--listen loopback` turns it off,
+  along with the rest of the network.
 - Every agent gets its own bearer token. The sender of a message is taken from
   that token, never from the arguments, so attribution cannot be forged.
 - Messages are length-capped, rate-limited per sender, and always arrive with a

@@ -450,6 +450,7 @@ export async function serve(opts: ServeOptions): Promise<ServeResult> {
           model: msg.model,
           effort: msg.effort,
           prompt: msg.prompt,
+          env: msg.env,
         });
         return;
 
@@ -465,6 +466,7 @@ export async function serve(opts: ServeOptions): Promise<ServeResult> {
           model: msg.model,
           effort: msg.effort,
           prompt: msg.prompt,
+          env: msg.env,
         });
         return;
 

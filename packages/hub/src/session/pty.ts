@@ -56,6 +56,24 @@ const HEURISTIC_QUIET_MS = 400;
 const HOOK_FALLBACK_QUIET_MS = 2000;
 
 /**
+ * How much is written into a PTY in one go, and how long the gap between one
+ * chunk and the next.
+ *
+ * A paste is one `write()` here but not on the far side: a pty's input buffer
+ * is small — 4KB on Linux, and ConPTY's is no more generous — and a writer
+ * that fills it faster than the program drains it loses the remainder with no
+ * error anywhere. An agent handed a long instruction therefore acts on the
+ * first few lines of it and never sees the rest, which is worse than failing.
+ *
+ * So anything past one chunk is fed in paced pieces. The gap only has to be
+ * long enough for the program to come back round to its read; it is not a
+ * throughput limit worth tuning, and at these sizes even a very long message
+ * is delivered in well under a second.
+ */
+const WRITE_CHUNK = 1024;
+const WRITE_GAP_MS = 8;
+
+/**
  * One PTY plus a headless xterm that mirrors it.
  *
  * The headless terminal earns its keep twice: it produces the serialized
@@ -82,6 +100,9 @@ export class PtySession extends EventEmitter {
   /** argv[0], to recognise the one title the program did not choose. */
   private launchedFile = '';
   private disposed = false;
+  /** Input still to be fed in, when a write was too big for one go. */
+  private readonly writeQueue: string[] = [];
+  private writeTimer: NodeJS.Timeout | null = null;
 
   constructor(
     readonly id: string,
@@ -241,9 +262,45 @@ export class PtySession extends EventEmitter {
     this.emit('status', s);
   }
 
+  /**
+   * Feed input to the program.
+   *
+   * Keystrokes take the direct path — they are one or two bytes and must not
+   * acquire latency — while anything larger is queued and paced. The queue is
+   * shared so ordering holds: a keystroke that arrives while a paste is still
+   * draining goes behind it, exactly as it would have on a real terminal.
+   */
   write(data: string): void {
     if (!this.proc) throw new Error(`session ${this.id} is not running`);
-    this.proc.write(data);
+    if (data.length === 0) return;
+    if (this.writeQueue.length === 0 && data.length <= WRITE_CHUNK) {
+      this.proc.write(data);
+      return;
+    }
+    this.writeQueue.push(...splitChunks(data, WRITE_CHUNK));
+    this.drainWrites();
+  }
+
+  /** One chunk per tick until the queue is empty, the process dies, or we do. */
+  private drainWrites(): void {
+    if (this.writeTimer) return;
+    const next = () => {
+      this.writeTimer = null;
+      const chunk = this.writeQueue.shift();
+      if (chunk === undefined) return;
+      if (!this.proc || this.disposed) {
+        // Nothing left to write into. Drop the rest rather than throwing from
+        // a timer, where there is no caller to tell.
+        this.writeQueue.length = 0;
+        return;
+      }
+      this.proc.write(chunk);
+      if (this.writeQueue.length > 0) {
+        this.writeTimer = setTimeout(next, WRITE_GAP_MS);
+        this.writeTimer.unref?.();
+      }
+    };
+    next();
   }
 
   resize(cols: number, rows: number): void {
@@ -313,6 +370,10 @@ export class PtySession extends EventEmitter {
 
   kill(): void {
     this.clearIdleTimer();
+    // Whatever is left of a paste has nowhere to go once the process is gone.
+    if (this.writeTimer) clearTimeout(this.writeTimer);
+    this.writeTimer = null;
+    this.writeQueue.length = 0;
     if (!this.proc) return;
     try {
       this.proc.kill();
@@ -328,4 +389,24 @@ export class PtySession extends EventEmitter {
     this.term.dispose();
     this.removeAllListeners();
   }
+}
+
+/**
+ * Split text into pieces of at most `size` UTF-16 units, never between the two
+ * halves of a surrogate pair — a lone half would reach the program as a
+ * replacement character and corrupt whatever emoji or CJK text it came from.
+ */
+export function splitChunks(text: string, size: number): string[] {
+  const out: string[] = [];
+  let i = 0;
+  while (i < text.length) {
+    let end = Math.min(i + size, text.length);
+    const code = text.charCodeAt(end - 1);
+    // A high surrogate as the last unit means its pair starts here; keep both
+    // together by leaving it for the next chunk.
+    if (end < text.length && code >= 0xd800 && code <= 0xdbff) end -= 1;
+    out.push(text.slice(i, end));
+    i = end;
+  }
+  return out;
 }

@@ -221,6 +221,24 @@ export const MIGRATIONS: Migration[] = [
       );
     `,
   },
+  {
+    version: 7,
+    name: 'template_env',
+    up: `
+      -- Extra environment a template sets for the agent it launches.
+      --
+      -- JSON rather than a side table: it is a small map read and written
+      -- whole, exactly like the argv and env already on the session row, and a
+      -- table would buy queries nobody makes.
+      ALTER TABLE template ADD COLUMN env_json TEXT;
+
+      -- And the copy that belongs to the session, for the same reason model
+      -- and effort are recorded there: a template is editable, and a session
+      -- resumed a week later has to come back in the environment it was
+      -- launched in rather than whatever the template says today.
+      ALTER TABLE session ADD COLUMN template_env_json TEXT;
+    `,
+  },
 ];
 
 export function runMigrations(db: Database): number {

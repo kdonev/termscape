@@ -121,6 +121,8 @@ export const ClientMsg = z.discriminatedUnion('t', [
     model: z.string().nullable().optional(),
     effort: z.string().nullable().optional(),
     prompt: z.string().nullable().optional(),
+    /** Extra environment for the agent process. Absent means "leave as is". */
+    env: z.record(z.string(), z.string()).optional(),
   }),
   z.object({ t: z.literal('removeTemplate'), requestId, id: z.string() }),
   /**
@@ -142,6 +144,13 @@ export const ClientMsg = z.discriminatedUnion('t', [
     model: z.string().nullable().optional(),
     effort: z.string().nullable().optional(),
     prompt: z.string().nullable().optional(),
+    /**
+     * Only ever the human's own. A proposal carries no environment: an agent
+     * that could name variables for every future launch of a template would
+     * be choosing what the next agent's credentials are, which is not a thing
+     * to ask a human to review one dialog at a time.
+     */
+    env: z.record(z.string(), z.string()).optional(),
   }),
 
   // sessions

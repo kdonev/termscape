@@ -124,11 +124,26 @@ convertEol: false,
 
     const detach = client.attach(sessionId, (chunk) => term.write(chunk));
     const onData = term.onData((d) => client.sendInput(sessionId, d));
+    /*
+     * Mouse reports do not all come out of onData. xterm splits its input, and
+     * the default mouse encoding — what a program gets when it enables
+     * tracking (mode 1000/1002/1003) without also asking for SGR — goes to
+     * onBinary instead. Unwired, a wheel over such a terminal produced nothing
+     * at all, which is what made scrolling look broken in some agents and fine
+     * in others: the ones that ask for SGR were never on this path.
+     *
+     * The whole input pipe is UTF-8 text, so a report is faithful up to code
+     * point 0x7f — coordinates past column or row 95, where this encoding is
+     * already ambiguous by its own definition. SGR has no such limit and is
+     * what any program that cares asks for.
+     */
+    const onBinary = term.onBinary((d) => client.sendInput(sessionId, d));
 
     applyGrid();
 
     return () => {
       onData.dispose();
+      onBinary.dispose();
       detach();
       term.dispose();
       termRef.current = null;

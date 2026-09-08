@@ -2,6 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import {
   ListAgentsInput,
+  ListTemplatesInput,
   ReadScreenInput,
   SendMessageInput,
   SetStatusInput,
@@ -18,6 +19,7 @@ import {
 export interface AgentApi {
   whoami(sessionId: string): Promise<unknown>;
   listAgents(sessionId: string, workspace?: string): Promise<unknown>;
+  listTemplates(sessionId: string, id?: string): Promise<unknown>;
   sendMessage(sessionId: string, to: string, text: string): Promise<unknown>;
   spawnAgent(
     sessionId: string,
@@ -80,6 +82,20 @@ export function buildMcpServer(callerSessionId: string, api: AgentApi): McpServe
       inputSchema: ListAgentsInput.shape,
     },
     ({ workspace }) => guard(() => api.listAgents(callerSessionId, workspace)),
+  );
+
+  server.registerTool(
+    'list_templates',
+    {
+      description:
+        'List the templates an agent can be started from: the name, the agent CLI it ' +
+        'launches, the model and effort it pins, and the first instruction it gives. ' +
+        'Pass a template id to `spawn_agent` as `profile` to start one. Call this ' +
+        'before proposing a template, so you find out whether one already does what ' +
+        'you were about to ask for.',
+      inputSchema: ListTemplatesInput.shape,
+    },
+    ({ id }) => guard(() => api.listTemplates(callerSessionId, id)),
   );
 
   server.registerTool(

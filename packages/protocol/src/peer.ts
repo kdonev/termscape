@@ -118,6 +118,11 @@ export const PeerRequest = z.discriminatedUnion('t', [
     model: z.string().optional(),
     effort: z.string().optional(),
     prompt: z.string().optional(),
+    /**
+     * Extra environment the template asked for, already resolved to values —
+     * the template itself never crosses, for the reason above.
+     */
+    env: z.record(z.string(), z.string()).optional(),
     name: z.string().optional(),
     spawnedByAddress: z.string().nullable(),
     /**
@@ -224,4 +229,4 @@ export type PeerResponse = z.infer<typeof PeerResponse>;
  * Bumped whenever the peer protocol or the DB schema changes shape. Hubs
  * refuse to connect across a mismatch rather than corrupting each other.
  */
-export const PEER_SCHEMA_VERSION = 5;
+export const PEER_SCHEMA_VERSION = 6;

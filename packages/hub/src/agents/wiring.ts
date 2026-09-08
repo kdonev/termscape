@@ -284,6 +284,9 @@ on the ending rather than looking for the exact name below:
 - \`list_agents\` — who else exists, and whether they are idle or busy.
 - \`send_message\` — send text to another agent. It is typed directly into
   their terminal, as if a user had pasted it.
+- \`list_templates\` — the saved ways of starting an agent: what CLI each one
+  runs, on what model, with what opening instruction. A template id is what
+  \`spawn_agent\` takes as its \`profile\`.
 - \`spawn_agent\` — start a new agent in your workspace and optionally give it
   a first instruction. Use this to delegate work you want done in parallel.
 - \`read_screen\` — look at another agent's terminal without interrupting it.

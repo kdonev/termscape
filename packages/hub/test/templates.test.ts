@@ -2,6 +2,7 @@ import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { TemplateProposal } from '@termscape/protocol';
 import { Hub } from '../src/hub.js';
 import { ProfileRegistry } from '../src/agents/profiles.js';
 import { TemplateRegistry } from '../src/agents/templates.js';
@@ -295,6 +296,125 @@ describe('templates made from the panel', () => {
  * human says so, and that what gets stored is what the human saw rather than
  * what the agent asked for.
  */
+/*
+ * The environment a template sets.
+ *
+ * The one thing a template could not say. Two agents differing only in an API
+ * key or a proxy were two entries with no way to express the difference, so
+ * the difference lived in whichever shell the hub was started from - which is
+ * not a per-template answer at all.
+ */
+describe('the environment a template sets', () => {
+  let hub: Hub;
+  const info = (id: string) => hub.templates.info().find((t) => t.id === id);
+
+  beforeEach(() => {
+    hub = new Hub({ dbPath: join(dir, 'state.db') });
+  });
+  afterEach(() => hub.shutdown());
+
+  it('stores it and survives a restart', () => {
+    hub.saveTemplate({
+      id: 'proxied',
+      agent: 'claude',
+      env: { ANTHROPIC_BASE_URL: 'https://proxy.internal' },
+    });
+    expect(info('proxied')?.env).toEqual({ ANTHROPIC_BASE_URL: 'https://proxy.internal' });
+
+    hub.shutdown();
+    hub = new Hub({ dbPath: join(dir, 'state.db') });
+    expect(info('proxied')?.env).toEqual({ ANTHROPIC_BASE_URL: 'https://proxy.internal' });
+  });
+
+  it('is empty rather than absent for a template that sets none', () => {
+    // Every reader can then treat it as a map without a null check, and a
+    // template written before the column existed looks like one that set none.
+    expect(info('claude')?.env).toEqual({});
+    hub.saveTemplate({ id: 'plain', agent: 'claude' });
+    expect(info('plain')?.env).toEqual({});
+  });
+
+  it('drops a name with nothing behind it', () => {
+    // An exported-but-empty variable reads as *set* to every program that
+    // checks for it, which is the opposite of leaving it out.
+    hub.saveTemplate({ id: 'half', agent: 'claude', env: { KEEP: 'yes', DROP: '' } });
+    expect(info('half')?.env).toEqual({ KEEP: 'yes' });
+  });
+
+  it('refuses a name no process could accept', () => {
+    expect(() =>
+      hub.saveTemplate({ id: 'bad', agent: 'claude', env: { 'NOT A NAME': 'x' } }),
+    ).toThrow(/environment variable name/);
+    expect(info('bad')).toBeUndefined();
+  });
+
+  it('is declarable in agents.toml too', () => {
+    writeConfig(`
+      [template.proxied]
+      agent = "claude"
+      [template.proxied.env]
+      ANTHROPIC_BASE_URL = "https://proxy.internal"
+      PORT = 8080
+    `);
+    // A number is dropped rather than coerced: "8080" is probably what was
+    // meant, but `DEBUG = false` arriving as "false" is the opposite.
+    expect(load().get('proxied')?.env).toEqual({
+      ANTHROPIC_BASE_URL: 'https://proxy.internal',
+    });
+  });
+
+  it('is not something an agent can put in a proposal', () => {
+    // An agent naming variables for every future launch of a template would
+    // be choosing the next agent's credentials, one dialog at a time. The wire
+    // schema is where that is settled: a proposal has no env field, so an
+    // agent's extra key is dropped before the hub ever sees it.
+    const parsed = TemplateProposal.parse({
+      id: 'p1',
+      fromAddr: 'crew/claude-1',
+      proposedAt: Date.now(),
+      template: {
+        id: 'sneaky',
+        agent: 'claude',
+        description: null,
+        model: null,
+        effort: null,
+        prompt: null,
+        env: { AWS_PROFILE: 'prod' },
+      },
+    });
+    expect(parsed.template).not.toHaveProperty('env');
+  });
+
+  it('reaches the process, and is still there after a resume', async () => {
+    const folder = join(dir, 'envws');
+    mkdirSync(folder, { recursive: true });
+    writeConfig(
+      [
+        '[template.proxied]',
+        'agent = "shell"',
+        '[template.proxied.env]',
+        'TERMSCAPE_TEST_VAR = "hello"',
+      ].join('\n'),
+    );
+    hub.shutdown();
+    hub = new Hub({ dbPath: join(dir, 'env.db') });
+
+    const ws = hub.createWorkspace('envws', folder);
+    const s = await hub.startSession({ workspaceId: ws.id, profile: 'proxied' });
+    expect(hub.store.getLaunchSpec(s.id)?.env).toMatchObject({
+      TERMSCAPE_TEST_VAR: 'hello',
+    });
+
+    // Recorded on the session rather than looked up again: resume rebuilds
+    // the spec from scratch, and the template may have been edited since.
+    hub.sessions.stop(s.id);
+    const back = await hub.sessions.resume(s.id);
+    expect(hub.store.getLaunchSpec(back.id)?.env).toMatchObject({
+      TERMSCAPE_TEST_VAR: 'hello',
+    });
+  }, 60_000);
+});
+
 describe('templates an agent proposes', () => {
   let hub: Hub;
   let workspaceId: string;

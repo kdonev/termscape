@@ -117,8 +117,15 @@ function defaultShell(): string {
 
 /**
  * Built-in profiles. All Claude Code flags here are verified against the CLI:
- * --mcp-config, --strict-mcp-config, --session-id, --settings,
- * --append-system-prompt-file, --resume.
+ * --mcp-config, --session-id, --settings, --append-system-prompt-file,
+ * --resume.
+ *
+ * `--mcp-config` deliberately arrives *without* `--strict-mcp-config`. Strict
+ * mode makes the named file the whole of the agent's MCP configuration, which
+ * silently drops every server the user set up for themselves — an agent
+ * started here would be missing the tools it has everywhere else, with nothing
+ * on screen to say why. Without it the hub's server is one more entry beside
+ * theirs, which is the only version of "wired to the hub" worth having.
  *
  * Codex and Gemini are wired too, and every flag and key below was verified
  * against the CLI actually installed - codex-cli 0.153.4 and gemini 0.58.0 -
@@ -155,7 +162,6 @@ export const BUILTIN_PROFILES: Record<string, AgentProfile> = {
     args: [
       '--mcp-config',
       '{{mcp_config_path}}',
-      '--strict-mcp-config',
       '--session-id',
       '{{session_uuid}}',
       '--settings',
@@ -186,7 +192,6 @@ export const BUILTIN_PROFILES: Record<string, AgentProfile> = {
     resumeArgs: [
       '--mcp-config',
       '{{mcp_config_path}}',
-      '--strict-mcp-config',
       '--resume',
       '{{session_uuid}}',
       '--settings',

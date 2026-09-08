@@ -204,6 +204,7 @@ export function createPeerServer(hub: Hub, clientToken: string): PeerServer {
               model: req.model,
               effort: req.effort,
               prompt: req.prompt,
+              env: req.env,
               name: req.name,
               // Deliberately no `spawnedBy` here even though the request
               // carries one: the spawner lives on the canvas hub, its id

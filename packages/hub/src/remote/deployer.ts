@@ -162,14 +162,19 @@ export async function provision(
     `"$(cat deps.fingerprint 2>/dev/null || echo none)-` +
     `$(node -p 'process.versions.node.split(".")[0] + "-" + process.platform + "-" + process.arch')"`;
 
-  // The stamp claims the tree still works; the require confirms it does.
+  // The stamp claims the tree still works; the import confirms it does.
   // Trusting the stamp alone would trade a slow deploy for a remote hub that
   // cannot load its own modules.
+  //
+  // The hub's own entry rather than the two native modules, because linking
+  // the whole graph is what catches a stale @termscape/protocol - a missing
+  // named export is a link-time error and nothing a `require` of node-pty
+  // would ever notice. Importing it starts nothing; only cli.js does.
   const reusable = await exec(
     conn,
     `cd ${remoteDir}/hub && [ -d node_modules ]` +
       ` && [ "$(cat ../deps.stamp 2>/dev/null)" = ${stamp} ]` +
-      ` && node -e 'require("node-pty"); require("better-sqlite3")'`,
+      ` && node -e 'import("./dist/hub.js").catch(e => { console.error(e); process.exit(1) })'`,
   );
   if (reusable.code === 0) {
     log('dependencies unchanged; keeping the modules already there');
@@ -178,6 +183,15 @@ export async function provision(
 
   // A half-finished tree must not inherit the last deploy's stamp.
   await exec(conn, `rm -f ${remoteDir}/deps.stamp`);
+
+  // And the vendored workspace package goes before npm runs. Every other
+  // dependency is a registry package whose version moves when its code does;
+  // @termscape/protocol is a `file:` tarball whose version stands still while
+  // its code changes underneath, and npm reads the copy already in
+  // node_modules as satisfying the spec and leaves last deploy's there. The
+  // native modules beside it - the whole reason the tree is kept - are not
+  // touched.
+  await exec(conn, `rm -rf ${remoteDir}/hub/node_modules/@termscape`);
 
   // Prebuilt binaries first: node-pty and better-sqlite3 publish them for the
   // mainstream platforms, and downloading one beats compiling it every time.

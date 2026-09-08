@@ -648,19 +648,40 @@ export function Canvas() {
     [viewport, size],
   );
 
+  /*
+   * Which windows had live terminals on the last pass.
+   *
+   * Zooming out used to blank every terminal the moment it crossed the LOD
+   * threshold, mid-gesture — the content you were zooming out to get a view of
+   * disappeared while you were still moving, and came back only once you
+   * stopped. A terminal that is already mounted therefore stays mounted for
+   * the length of a gesture, and the swap to the cheap placeholder happens
+   * once the canvas settles. Nothing is promoted this way, only held: a window
+   * that was not live when the gesture started does not become live because
+   * the gesture passed over it, so a zoomed-out canvas never lights up dozens
+   * of terminals at once.
+   */
+  const wasLive = useRef<ReadonlySet<string>>(new Set());
+
   const decorated = useMemo(
     () =>
       sessions.map((s) => {
         const onScreen = rectsIntersect(visible, s.window);
+        const readable = viewport.zoom >= LIVE_ZOOM_THRESHOLD;
         return {
           session: s,
-          // A terminal is live only when it is both readable and on screen.
-          live: onScreen && viewport.zoom >= LIVE_ZOOM_THRESHOLD,
+          // A terminal is live when it is on screen and either readable or
+          // held over from before this gesture started.
+          live: onScreen && (readable || (interacting && wasLive.current.has(s.id))),
           onScreen,
         };
       }),
-    [sessions, visible, viewport.zoom],
+    [sessions, visible, viewport.zoom, interacting],
   );
+
+  useEffect(() => {
+    wasLive.current = new Set(decorated.filter((d) => d.live).map((d) => d.session.id));
+  }, [decorated]);
 
   /* --------------------------------------------- workspace grouping */
 
