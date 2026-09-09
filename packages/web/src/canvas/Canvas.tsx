@@ -721,10 +721,13 @@ export function Canvas() {
               transform: `translate(${g.box.x}px, ${g.box.y}px)`,
               width: g.box.w,
               height: g.box.h,
+              // `color` as well as the border: the frame's background wash is
+              // mixed from currentColor, and the label inherits it.
+              color: g.ws.color,
               borderColor: g.ws.color,
             }}
           >
-            <span className="ws-label" style={{ color: g.ws.color }}>
+            <span className="ws-label">
               {g.ws.name}
               <span className="ws-path">{g.ws.rootPath}</span>
             </span>

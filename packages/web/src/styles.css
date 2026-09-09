@@ -115,9 +115,20 @@ a.btn { text-decoration: none; display: inline-block; }
 .ws-group {
   position: absolute;
   top: 0; left: 0;
-  border: 1px dashed;
+  /*
+   * Full-strength colour, and two pixels of it.
+   *
+   * This used to be a 1px dash at opacity 0.4, which on the canvas ground is
+   * a frame you have to go looking for - and the opacity dimmed the label
+   * with it, since the label is a child. The colours in the palette are
+   * already mid-tone, so simply not fading them is the whole fix.
+   */
+  border: 2px dashed;
   border-radius: 14px;
-  opacity: 0.4;
+  /* A wash of the same colour, so the group reads as an area rather than only
+     as an outline. `currentColor` is the workspace colour, set on the element
+     beside the border colour. */
+  background: color-mix(in srgb, currentColor 6%, transparent);
   pointer-events: none;
 }
 .ws-label {
