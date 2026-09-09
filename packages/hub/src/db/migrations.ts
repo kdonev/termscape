@@ -239,6 +239,27 @@ export const MIGRATIONS: Migration[] = [
       ALTER TABLE session ADD COLUMN template_env_json TEXT;
     `,
   },
+  {
+    version: 8,
+    name: 'host_machine_id',
+    up: `
+      -- Which physical machine a host row is. Written by the machine itself on
+      -- enrollment and stable across reinstalls of the hub there.
+      --
+      -- Without it the only thing identifying a returning machine was the
+      -- durable host token it holds, and a machine that lost that token - a
+      -- wiped ~/.termscape, a re-run of the join command after a refusal -
+      -- enrolled again and arrived as a second row for the same box. This is
+      -- what lets enrollment recognise it and hand the existing row a fresh
+      -- token instead.
+      ALTER TABLE host ADD COLUMN machine_id TEXT;
+
+      -- Not UNIQUE: every host predating this column has NULL here, and SQLite
+      -- treats NULLs as distinct, but an index that would reject a legitimate
+      -- second row is worse than the lookup being a scan of a handful of rows.
+      CREATE INDEX IF NOT EXISTS host_machine_id_idx ON host(machine_id);
+    `,
+  },
 ];
 
 export function runMigrations(db: Database): number {

@@ -137,17 +137,26 @@ export class Store {
     return this.listHosts().find((h) => h.id === id) ?? null;
   }
 
-  upsertHost(h: Host & { keyRef?: string | null; hostToken?: string | null }): void {
+  upsertHost(
+    h: Host & {
+      keyRef?: string | null;
+      hostToken?: string | null;
+      machineId?: string | null;
+    },
+  ): void {
     this.db
       .prepare(
         `INSERT INTO host (id, label, kind, ssh_host, ssh_user, ssh_port, key_ref,
-                           host_token, platform, hub_version, state, last_seen_at, error)
+                           host_token, machine_id, platform, hub_version, state,
+                           last_seen_at, error)
          VALUES (@id, @label, @kind, @sshHost, @sshUser, @sshPort, @keyRef,
-                 @hostToken, @platform, @hubVersion, @state, @lastSeenAt, @error)
+                 @hostToken, @machineId, @platform, @hubVersion, @state,
+                 @lastSeenAt, @error)
          ON CONFLICT(id) DO UPDATE SET
            label=@label, kind=@kind, ssh_host=@sshHost, ssh_user=@sshUser,
            ssh_port=@sshPort, key_ref=COALESCE(@keyRef, key_ref),
-           host_token=COALESCE(@hostToken, host_token), platform=@platform,
+           host_token=COALESCE(@hostToken, host_token),
+           machine_id=COALESCE(@machineId, machine_id), platform=@platform,
            hub_version=@hubVersion, state=@state, last_seen_at=@lastSeenAt,
            error=@error`,
       )
@@ -158,6 +167,7 @@ export class Store {
         platform: h.platform ?? null,
         keyRef: h.keyRef ?? null,
         hostToken: h.hostToken ?? null,
+        machineId: h.machineId ?? null,
       });
   }
 
@@ -180,6 +190,18 @@ export class Store {
     const r = this.db.prepare('SELECT id FROM host WHERE host_token = ?').get(token) as
       | { id: string }
       | undefined;
+    return r ? this.getHost(r.id) : null;
+  }
+
+  /**
+   * Match a machine by the id it minted for itself, whatever token it is
+   * holding. This is what makes a second enrollment of a machine we already
+   * know an update to its row rather than a duplicate of it.
+   */
+  hostByMachineId(machineId: string): Host | null {
+    const r = this.db
+      .prepare('SELECT id FROM host WHERE machine_id = ? ORDER BY rowid LIMIT 1')
+      .get(machineId) as { id: string } | undefined;
     return r ? this.getHost(r.id) : null;
   }
 

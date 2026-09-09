@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { readFileSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { hostname, platform, arch, homedir } from 'node:os';
 import { dirname } from 'node:path';
@@ -39,6 +40,8 @@ export interface JoinOptions {
   label?: string;
   /** Where to keep the durable host token. Defaults to the hub home. */
   tokenFile?: string;
+  /** Where to keep this machine's own id. Defaults to the hub home. */
+  machineIdFile?: string;
   log?: (line: string) => void;
 }
 
@@ -58,6 +61,31 @@ function readHostToken(file: string): string | null {
 function writeHostToken(file: string, token: string): void {
   mkdirSync(dirname(file), { recursive: true });
   writeFileSync(file, token, { mode: 0o600 });
+}
+
+/**
+ * This machine's id, minted on first use and kept from then on.
+ *
+ * Unlike the host token it is ours rather than a canvas's, so it survives
+ * being forgotten by one - which is exactly the case it exists for. An
+ * unwritable home is not worth failing a join over: a per-process id still
+ * behaves like the old code did, and enrollment simply does not recognise us.
+ */
+function machineId(file: string): string {
+  try {
+    const existing = readFileSync(file, 'utf8').trim();
+    if (existing) return existing;
+  } catch {
+    // Not there yet, which is the ordinary first-run case.
+  }
+  const minted = randomUUID();
+  try {
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, minted, { mode: 0o600 });
+  } catch {
+    // See above: worth trying, not worth stopping for.
+  }
+  return minted;
 }
 
 /** Drop a credential the canvas has told us it does not recognise. */
@@ -91,6 +119,7 @@ export function joinCanvas(opts: JoinOptions): JoinLink {
     opts.hub.emit('joinFailed', message);
   };
   const tokenFile = opts.tokenFile ?? paths.hostTokenFile();
+  const idFile = opts.machineIdFile ?? paths.machineIdFile();
   const url = peerInUrl(opts.hubUrl);
   let backoff = 500;
   let stopped = false;
@@ -135,6 +164,7 @@ export function joinCanvas(opts: JoinOptions): JoinLink {
                 platform: platform(),
                 arch: arch(),
                 homeDir: homedir(),
+                machineId: machineId(idFile),
               },
             }),
       };
@@ -158,7 +188,17 @@ export function joinCanvas(opts: JoinOptions): JoinLink {
         // dropping the host and then re-running the join command. The fresh
         // key they were just handed is exactly the answer, so use it rather
         // than failing while holding an unused one.
-        if (usedHostToken && opts.joinToken && !hostTokenSpent) {
+        //
+        // Only for that refusal, though. A schema gap is not the canvas
+        // saying it has forgotten us, and reading it as one is how a hub that
+        // had merely been upgraded threw its identity away and came back as a
+        // second machine. An older canvas sends no code at all, and the
+        // message is the only thing left to go on there.
+        const forgotten =
+          msg.code === undefined
+            ? /unknown|expired/i.test(msg.message)
+            : msg.code === 'unknown-token';
+        if (forgotten && usedHostToken && opts.joinToken && !hostTokenSpent) {
           hostTokenSpent = true;
           clearHostToken(tokenFile);
           log('this canvas no longer knows this machine; enrolling again');

@@ -84,6 +84,19 @@ export const PeerHello = z.object({
       platform: z.string(),
       arch: z.string(),
       homeDir: z.string(),
+      /**
+       * An id this machine minted for itself once and keeps.
+       *
+       * The durable host token says "I am the machine this canvas issued this
+       * to"; it does not survive the machine losing it, and a machine that
+       * enrolled a second time used to arrive as a second row for the same
+       * box. This says "I am *that* machine" independently of any credential,
+       * so the canvas can hand the row it already has a fresh token instead.
+       *
+       * Optional because a hub older than this sends none, in which case
+       * enrollment behaves exactly as it did before.
+       */
+      machineId: z.string().optional(),
     })
     .optional(),
 });
@@ -219,7 +232,22 @@ export const PeerResponse = z.discriminatedUnion('t', [
     hostToken: z.string().optional(),
   }),
   z.object({ t: z.literal('ok'), id: z.string(), result: z.unknown() }),
-  z.object({ t: z.literal('err'), id: z.string(), message: z.string() }),
+  z.object({
+    t: z.literal('err'),
+    id: z.string(),
+    message: z.string(),
+    /**
+     * Why, for the handshake refusals a dialer can act on.
+     *
+     * `unknown-token` is the only one that means "enroll again": the canvas
+     * does not recognise the credential presented, so a machine holding a
+     * stale host token should drop it and spend its enrollment key. Every
+     * other refusal - a schema gap above all - is not about the credential,
+     * and treating it as one is what made an upgraded hub throw away its
+     * identity and come back as a new machine.
+     */
+    code: z.enum(['unknown-token', 'schema-mismatch', 'bad-hello']).optional(),
+  }),
   // Unsolicited: the peer pushing state changes and terminal output.
   z.object({ t: z.literal('sessions'), sessions: z.array(Session) }),
   // Unsolicited as well as in reply: that machine's detection finishes after

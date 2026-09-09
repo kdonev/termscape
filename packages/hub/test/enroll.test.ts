@@ -594,12 +594,68 @@ describe('enrolling a host', () => {
     const res = await handshake(originA, token, { schemaVersion: PEER_SCHEMA_VERSION + 1 });
     expect(res.t).toBe('err');
     expect(res.message).toMatch(/schema mismatch/i);
+    // Coded, and deliberately not `unknown-token`: a machine that reads a
+    // version gap as "this canvas has forgotten me" throws away its durable
+    // token and comes back as a second row for the same box.
+    expect(res.code).toBe('schema-mismatch');
   });
 
-  it('refuses a token it never minted', async () => {
+  it('says plainly when it is the credential it does not know', async () => {
     const res = await handshake(originA, 'not-a-token-we-issued');
     expect(res.t).toBe('err');
+    expect(res.code).toBe('unknown-token');
   });
+
+  it('keeps one row for a machine that has to enroll twice', async () => {
+    // The case this exists for: a machine loses its host token - a wiped
+    // ~/.termscape, or a refusal it read as being dropped - and runs the join
+    // command again. It is the same box, so it belongs in the row it already
+    // has rather than beside it.
+    const machineId = randomUUID();
+    const first = await handshake(originA, servedA.enrollment.mint(), {
+      enroll: {
+        label: 'twice-box',
+        platform: 'linux',
+        arch: 'x64',
+        homeDir: '/home/twice',
+        machineId,
+      },
+    });
+    expect(first.t).toBe('welcome');
+
+    const before = hubA.store.listHosts().filter((h) => h.label === 'twice-box');
+    expect(before).toHaveLength(1);
+
+    const second = await handshake(originA, servedA.enrollment.mint(), {
+      enroll: {
+        label: 'twice-box-renamed',
+        platform: 'linux',
+        arch: 'x64',
+        homeDir: '/home/twice',
+        machineId,
+      },
+    });
+    expect(second.t).toBe('welcome');
+    // A fresh credential, on the row that was already there.
+    expect(second.hostToken).not.toBe(first.hostToken);
+    expect(hubA.store.hostByToken(second.hostToken)?.id).toBe(before[0]!.id);
+    expect(hubA.store.listHosts().filter((h) => h.id === before[0]!.id)).toHaveLength(1);
+    expect(hubA.store.listHosts().some((h) => h.label === 'twice-box')).toBe(false);
+    expect(hubA.store.getHost(before[0]!.id)?.label).toBe('twice-box-renamed');
+  });
+
+  it('still gives a machine that names no id a row of its own', async () => {
+    // A hub older than machine ids sends none, and two of those are two
+    // machines as far as anything here can tell.
+    const a = await handshake(originA, servedA.enrollment.mint());
+    const b = await handshake(originA, servedA.enrollment.mint());
+    expect(a.t).toBe('welcome');
+    expect(b.t).toBe('welcome');
+    expect(hubA.store.hostByToken(a.hostToken)?.id).not.toBe(
+      hubA.store.hostByToken(b.hostToken)?.id,
+    );
+  });
+
 });
 
 describe('running agents on an enrolled host', () => {
@@ -824,6 +880,11 @@ describe('a peer refusing a request', () => {
 describe('re-joining a machine the canvas has forgotten', () => {
   it('falls back to the fresh key instead of failing on a stale one', async () => {
     const tokenFile = join(homeB, 'forgotten-token');
+    // A machine id of its own, because in this fixture one process stands in
+    // for two machines. Sharing the id with the box that joined in setup would
+    // - correctly - land both on the one host row, which is the subject of a
+    // different test and not this one.
+    const machineIdFile = join(homeB, 'forgetful-machine-id');
 
     // Enrol once, the ordinary way.
     const first = joinCanvas({
@@ -833,6 +894,7 @@ describe('re-joining a machine the canvas has forgotten', () => {
       joinToken: servedA.enrollment.mint(),
       label: 'forgetful-box',
       tokenFile,
+      machineIdFile,
       log: () => {},
     });
     await waitFor(() => existsSync(tokenFile), 15_000, 'host token written');
@@ -855,6 +917,7 @@ describe('re-joining a machine the canvas has forgotten', () => {
       joinToken: servedA.enrollment.mint(),
       label: 'forgetful-box',
       tokenFile,
+      machineIdFile,
       log: () => {},
     });
 

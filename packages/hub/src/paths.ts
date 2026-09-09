@@ -24,6 +24,15 @@ export const paths = {
    */
   hostTokenFile: () => join(hubHome(), 'host-token'),
   /**
+   * This machine's own id, minted once and kept.
+   *
+   * Distinct from the host token, which is a credential a canvas issues and
+   * can forget. This says which machine we are, so a canvas that has a row for
+   * us recognises it as the same box when we have to enroll a second time,
+   * rather than drawing a duplicate beside it.
+   */
+  machineIdFile: () => join(hubHome(), 'machine-id'),
+  /**
    * PID of the running hub. The join installer reads it to stop a previous
    * hub before replacing its files — on Windows an open .node cannot be
    * deleted, so re-joining fails outright without this.

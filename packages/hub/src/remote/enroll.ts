@@ -141,8 +141,11 @@ export function registerEnrollment(
     const reply = (msg: PeerResponse): void => {
       if (socket.readyState === socket.OPEN) socket.send(JSON.stringify(msg));
     };
-    const refuse = (message: string): void => {
-      reply({ t: 'err', id: 'hello', message });
+    const refuse = (
+      message: string,
+      code: 'unknown-token' | 'schema-mismatch' | 'bad-hello',
+    ): void => {
+      reply({ t: 'err', id: 'hello', message, code });
       socket.close();
     };
 
@@ -155,10 +158,10 @@ export function registerEnrollment(
       try {
         parsed = PeerRequest.safeParse(JSON.parse(raw.toString('utf8')));
       } catch {
-        return refuse('unparseable hello');
+        return refuse('unparseable hello', 'bad-hello');
       }
       if (!parsed.success || parsed.data.t !== 'hello') {
-        return refuse('expected hello');
+        return refuse('expected hello', 'bad-hello');
       }
       const hello = parsed.data;
 
@@ -166,6 +169,7 @@ export function registerEnrollment(
         return refuse(
           `peer schema mismatch: you speak v${hello.schemaVersion}, this hub speaks ` +
             `v${PEER_SCHEMA_VERSION}. Re-run the join command to get a matching hub.`,
+          'schema-mismatch',
         );
       }
 
@@ -178,10 +182,25 @@ export function registerEnrollment(
         host = { ...known, hubVersion: hello.hubVersion };
         hub.store.upsertHost(host);
       } else if (consume(hello.token)) {
-        if (!hello.enroll) return refuse('enrollment token used without host details');
+        if (!hello.enroll) {
+          return refuse('enrollment token used without host details', 'bad-hello');
+        }
         issuedToken = randomBytes(24).toString('base64url');
+        const machineId = hello.enroll.machineId ?? null;
+        /*
+         * A machine we already have a row for, enrolling again. It lost its
+         * host token - a wiped ~/.termscape, or a refusal it read as being
+         * forgotten - and without this it would land on the canvas a second
+         * time, with its own windows, beside the row that is the same box.
+         * So the row is kept and handed the new token; only the details it
+         * reports are refreshed.
+         */
+        const sameMachine = machineId ? hub.store.hostByMachineId(machineId) : null;
         host = {
-          id: randomUUID(),
+          id: sameMachine?.id ?? randomUUID(),
+          // Its own name for itself wins: it is what the person running the
+          // join command typed, and a label edited here is not worth keeping
+          // over a machine that has just told us what it is called.
           label: hello.enroll.label,
           kind: 'enrolled',
           sshHost: null,
@@ -190,13 +209,16 @@ export function registerEnrollment(
           platform: `${hello.enroll.platform}-${hello.enroll.arch}`,
           hubVersion: hello.hubVersion,
           state: 'connecting',
-          lastSeenAt: null,
+          lastSeenAt: sameMachine?.lastSeenAt ?? null,
           error: null,
         };
-        hub.store.upsertHost({ ...host, hostToken: issuedToken });
+        hub.store.upsertHost({ ...host, hostToken: issuedToken, machineId });
         hub.emit('host', host);
       } else {
-        return refuse('unknown or expired enrollment token; open the join page again');
+        return refuse(
+          'unknown or expired enrollment token; open the join page again',
+          'unknown-token',
+        );
       }
 
       settled = true;
