@@ -191,7 +191,16 @@ convertEol: false,
   }, [focused]);
 
   return (
-    <div className="term-host" ref={frameRef}>
+    <div
+      className="term-host"
+      ref={frameRef}
+      /*
+       * Right-click belongs to the program, not to the browser. xterm already
+       * encodes button 2 for a program that asked for mouse reports; all that
+       * was in the way was the context menu opening over the top of it.
+       */
+      onContextMenu={(e) => e.preventDefault()}
+    >
       <div
         className="term-scale"
         ref={hostRef}
