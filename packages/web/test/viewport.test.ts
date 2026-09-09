@@ -28,7 +28,6 @@ import {
   worldToScreen,
   zoomAt,
   BASE_FONT_SIZE,
-  LIVE_ZOOM_THRESHOLD,
   MAX_DEVICE_FONT,
   MAX_ZOOM,
   MIN_DEVICE_FONT,
@@ -95,7 +94,7 @@ describe('zoomAt', () => {
   });
 });
 
-describe('culling and level of detail', () => {
+describe('culling', () => {
   it('includes offscreen padding so neighbours mount before they scroll in', () => {
     const v = { panX: 0, panY: 0, zoom: 1 };
     const r = visibleWorldRect(v, 1000, 800, 400);
@@ -117,11 +116,6 @@ describe('culling and level of detail', () => {
     expect(rectsIntersect(a, { x: 100, y: 0, w: 10, h: 10 })).toBe(true); // touching
     expect(rectsIntersect(a, { x: 101, y: 0, w: 10, h: 10 })).toBe(false);
     expect(rectsIntersect(a, { x: 0, y: -200, w: 10, h: 10 })).toBe(false);
-  });
-
-  it('has a live threshold inside the usable zoom range', () => {
-    expect(LIVE_ZOOM_THRESHOLD).toBeGreaterThan(MIN_ZOOM);
-    expect(LIVE_ZOOM_THRESHOLD).toBeLessThan(MAX_ZOOM);
   });
 });
 
@@ -195,12 +189,16 @@ describe('renderScaleFor', () => {
     }
   });
 
-  it('does not shrink text below legibility in the live band', () => {
-    // At LIVE_ZOOM_THRESHOLD a terminal is still interactive, so its text has
-    // to stay readable rather than following the zoom all the way down.
+  it('never shrinks text below the legibility floor, at any zoom', () => {
+    // Terminals stay live all the way down now, so this is what stops a
+    // zoomed-out canvas rendering glyphs that are pure noise: the render
+    // scale stops following the zoom at MIN_DEVICE_FONT and the world
+    // transform minifies from there.
     for (const dpr of DPRS) {
-      const device = terminalFontSize(renderScaleFor(LIVE_ZOOM_THRESHOLD, dpr)) * dpr;
-      expect(device).toBeGreaterThanOrEqual(MIN_DEVICE_FONT);
+      for (const zoom of [MIN_ZOOM, 0.1, 0.2, 0.4, 0.6]) {
+        const device = terminalFontSize(renderScaleFor(zoom, dpr)) * dpr;
+        expect(device).toBeGreaterThanOrEqual(MIN_DEVICE_FONT);
+      }
     }
   });
 });

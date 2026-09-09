@@ -3,7 +3,7 @@ import { useShallow } from 'zustand/react/shallow';
 import type { Session, Workspace } from '@termscape/protocol';
 import { useStore } from '../state/store.js';
 import { TerminalView } from './Terminal.js';
-import { LIVE_ZOOM_THRESHOLD, snapWorldPx } from '../canvas/viewport.js';
+import { snapWorldPx } from '../canvas/viewport.js';
 import { statusColor, statusLabel } from './status.js';
 
 interface Props {
@@ -13,7 +13,6 @@ interface Props {
   dpr: number;
   /** Shared by every window, so all terminals show the same size text. */
   renderScale: number;
-  live: boolean;
   selected: boolean;
   /** True while the canvas is zoomed to this window. */
   maximized: boolean;
@@ -29,7 +28,6 @@ export const TerminalWindow = memo(function TerminalWindow({
   zoom,
   dpr,
   renderScale,
-  live,
   selected,
   maximized,
   onMaximize,
@@ -171,39 +169,18 @@ export const TerminalWindow = memo(function TerminalWindow({
       </header>
 
       <div className="window-body">
-        {live ? (
-          <TerminalView
-            sessionId={session.id}
-            w={w}
-            h={h}
-            renderScale={renderScale}
-            focused={selected}
-          />
-        ) : (
-          <LodPlaceholder session={session} zoom={zoom} />
-        )}
+        {/* Always a real terminal, at every zoom. See the culling note in
+            Canvas.tsx for why there is no cheap card underneath this. */}
+        <TerminalView
+          sessionId={session.id}
+          w={w}
+          h={h}
+          renderScale={renderScale}
+          focused={selected}
+        />
       </div>
 
       <div className="resize-handle" onPointerDown={onPointerDown('resize')} />
     </div>
   );
 });
-
-/**
- * What a window shows when it is zoomed out or offscreen. Deliberately cheap:
- * no terminal, no parsing, no stream subscription.
- */
-function LodPlaceholder({ session, zoom }: { session: Session; zoom: number }) {
-  return (
-    <div className="lod">
-      <div className="lod-title">{session.address}</div>
-      <div className="lod-sub">
-        {session.profile} · {statusLabel(session)}
-      </div>
-      {session.statusText && <div className="lod-status">{session.statusText}</div>}
-      {zoom < LIVE_ZOOM_THRESHOLD && (
-        <div className="lod-hint">zoom in to interact</div>
-      )}
-    </div>
-  );
-}

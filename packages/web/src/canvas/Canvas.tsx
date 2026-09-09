@@ -6,7 +6,6 @@ import { sessionsIn } from '../state/tree.js';
 import { TerminalWindow } from '../window/TerminalWindow.js';
 import { MessageEdges } from './MessageEdges.js';
 import {
-  LIVE_ZOOM_THRESHOLD,
   PINCH_GAP_MS,
   alignViewport,
   boundsOf,
@@ -641,7 +640,7 @@ export function Canvas() {
   const maximizedId =
     maximized && sameViewport(viewport, maximized.applied) ? maximized.sessionId : null;
 
-  /* ------------------------------------------------ LOD + culling */
+  /* ---------------------------------------------------- culling */
 
   const visible = useMemo(
     () => visibleWorldRect(viewport, size.w, size.h),
@@ -649,39 +648,25 @@ export function Canvas() {
   );
 
   /*
-   * Which windows had live terminals on the last pass.
+   * Every window on screen carries a real terminal, at every zoom.
    *
-   * Zooming out used to blank every terminal the moment it crossed the LOD
-   * threshold, mid-gesture — the content you were zooming out to get a view of
-   * disappeared while you were still moving, and came back only once you
-   * stopped. A terminal that is already mounted therefore stays mounted for
-   * the length of a gesture, and the swap to the cheap placeholder happens
-   * once the canvas settles. Nothing is promoted this way, only held: a window
-   * that was not live when the gesture started does not become live because
-   * the gesture passed over it, so a zoomed-out canvas never lights up dozens
-   * of terminals at once.
+   * There used to be a zoom threshold below which a window swapped to a
+   * static card, on the argument that nobody can read 6px text so nobody
+   * should pay to render it. That got the trade backwards: what you are
+   * looking for on a zoomed-out canvas is the *shape* of each agent's output
+   * — a wall of diff, a prompt waiting, a stack trace — and a card showing
+   * its address instead is precisely the information you did not need. So the
+   * text is always the text, and the render scale (see viewport.ts) minifies
+   * it rather than replacing it.
+   *
+   * Culling is what keeps that affordable, and it is the honest control: a
+   * window off screen costs nothing whatever the zoom, and the number on
+   * screen is bounded by the viewport rather than by the canvas.
    */
-  const wasLive = useRef<ReadonlySet<string>>(new Set());
-
-  const decorated = useMemo(
-    () =>
-      sessions.map((s) => {
-        const onScreen = rectsIntersect(visible, s.window);
-        const readable = viewport.zoom >= LIVE_ZOOM_THRESHOLD;
-        return {
-          session: s,
-          // A terminal is live when it is on screen and either readable or
-          // held over from before this gesture started.
-          live: onScreen && (readable || (interacting && wasLive.current.has(s.id))),
-          onScreen,
-        };
-      }),
-    [sessions, visible, viewport.zoom, interacting],
+  const onScreen = useMemo(
+    () => sessions.filter((s) => rectsIntersect(visible, s.window)),
+    [sessions, visible],
   );
-
-  useEffect(() => {
-    wasLive.current = new Set(decorated.filter((d) => d.live).map((d) => d.session.id));
-  }, [decorated]);
 
   /* --------------------------------------------- workspace grouping */
 
@@ -748,22 +733,19 @@ export function Canvas() {
 
         <MessageEdges sessions={sessions} />
 
-        {decorated.map(({ session, live, onScreen }) =>
-          onScreen ? (
-            <TerminalWindow
-              key={session.id}
-              session={session}
-              workspace={wsBySession.get(session.id)}
-              zoom={viewport.zoom}
-              dpr={devicePixelRatio}
-              renderScale={renderScale}
-              live={live}
-              selected={selectedId === session.id}
-              maximized={maximizedId === session.id}
-              onMaximize={toggleMaximize}
-            />
-          ) : null,
-        )}
+        {onScreen.map((session) => (
+          <TerminalWindow
+            key={session.id}
+            session={session}
+            workspace={wsBySession.get(session.id)}
+            zoom={viewport.zoom}
+            dpr={devicePixelRatio}
+            renderScale={renderScale}
+            selected={selectedId === session.id}
+            maximized={maximizedId === session.id}
+            onMaximize={toggleMaximize}
+          />
+        ))}
       </div>
     </div>
   );

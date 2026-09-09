@@ -48,7 +48,9 @@ the field, with what you typed still in it.
   navigates instead of zooming: in over a terminal maximizes it, out steps
   back to the workspace around it and then to everything. Zooming at any
   ordinary pace is left alone
-- Below 60% zoom terminals become preview cards — zoom in to interact
+- Every window shows its real terminal at every zoom; the text minifies
+  rather than being replaced by a card, so a zoomed-out canvas still shows
+  the shape of what each agent is doing
 - Clicking an agent in the panel brings the canvas to it
 - Clicking the canvas closes the panel, as does **Escape** — which closes the
   panel first and clears the selection only once it is shut

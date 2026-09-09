@@ -4,14 +4,6 @@ export const MIN_ZOOM = 0.08;
 export const MAX_ZOOM = 2.5;
 
 /**
- * Below this zoom a terminal is unmounted and replaced by a static snapshot.
- * Live xterm instances are expensive; a canvas showing twenty of them at 20%
- * zoom would be paying full parsing and rendering cost for text nobody can
- * read. This is the single number that keeps the canvas usable at scale.
- */
-export const LIVE_ZOOM_THRESHOLD = 0.6;
-
-/**
  * Terminal text size in CSS pixels at zoom 1. Every terminal on the canvas uses
  * this one number scaled by the render scale, so they all show the same size
  * text no matter how big their windows are.

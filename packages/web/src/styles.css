@@ -189,24 +189,6 @@ a.btn { text-decoration: none; display: inline-block; }
   background: linear-gradient(135deg, transparent 50%, var(--border) 50%);
 }
 
-/* --------------------------------------------------------------- LOD */
-
-.lod {
-  height: 100%;
-  padding: 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  justify-content: center;
-  align-items: center;
-  text-align: center;
-  color: var(--muted);
-}
-.lod-title { font-size: 20px; font-weight: 650; color: var(--text); }
-.lod-sub { font-size: 13px; }
-.lod-status { font-size: 13px; color: var(--warn); }
-.lod-hint { font-size: 11px; opacity: 0.6; margin-top: 6px; }
-
 /* ------------------------------------------------------- message log */
 
 .msg-log {

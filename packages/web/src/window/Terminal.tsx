@@ -39,8 +39,8 @@ const THEME = {
 /**
  * A live xterm bound to one session.
  *
- * Mounted only while the window is in view and above the LOD zoom threshold;
- * unmounting is how the canvas stays cheap. On mount it replays the hub's
+ * Mounted for as long as the window is in view, at any zoom; culling offscreen
+ * windows is what keeps the canvas cheap. On mount it replays the hub's
  * serialized screen before the live stream, so a re-attached window shows its
  * real content immediately instead of flashing empty.
  *
@@ -109,8 +109,20 @@ convertEol: false,
     });
     term.open(host);
 
+    /*
+     * WebGL where it is available, and a way back when it is not.
+     *
+     * A browser keeps only so many live WebGL contexts - around sixteen - and
+     * hands out the next one by dropping the oldest. That was academic while
+     * terminals unmounted below a zoom threshold; now that every window on
+     * screen carries one, a canvas of twenty is over the limit by design. A
+     * lost context leaves the addon rendering nothing at all, so it is dropped
+     * on loss and xterm falls back to the DOM renderer - slower, and correct.
+     */
     try {
-      term.loadAddon(new WebglAddon());
+      const webgl = new WebglAddon();
+      webgl.onContextLoss(() => webgl.dispose());
+      term.loadAddon(webgl);
     } catch {
       // No WebGL context available; the DOM renderer is correct, just slower.
     }
