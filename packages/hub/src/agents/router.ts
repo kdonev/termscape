@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import {
   encodeInjection,
   formatMessage,
+  INJECT_SUBMIT,
   MESSAGE_RATE_LIMIT,
   type Message,
 } from '@termscape/protocol';
@@ -96,7 +97,11 @@ export class MessageRouter {
     try {
       // Attribution comes from the hub's own record of who is calling, never
       // from the sender's arguments, so it cannot be spoofed.
-      this.sessions.write(target.id, encodeInjection(formatMessage(fromAddr, body), mode));
+      this.sessions.inject(
+        target.id,
+        encodeInjection(formatMessage(fromAddr, body), mode),
+        INJECT_SUBMIT,
+      );
       pty.markBusy();
       return record('delivered');
     } catch (err) {

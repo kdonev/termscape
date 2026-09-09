@@ -4,6 +4,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { basename, resolve } from 'node:path';
 import {
   encodeInjection,
+  INJECT_SUBMIT,
   MAX_PENDING_PROPOSALS,
   parseAddress,
   slugify,
@@ -639,7 +640,7 @@ export class Hub extends EventEmitter implements AgentApi {
     if (!target) return;
     const mode = this.profiles.get(target.profile)?.inject ?? 'bracketed';
     try {
-      this.sessions.write(target.id, encodeInjection(`[termscape] ${text}`, mode));
+      this.sessions.inject(target.id, encodeInjection(`[termscape] ${text}`, mode), INJECT_SUBMIT);
     } catch {
       // The agent is gone. Nothing to tell and nothing to fix.
     }
@@ -1291,7 +1292,7 @@ export class Hub extends EventEmitter implements AgentApi {
     if (!session) return;
     const mode = this.profiles.get(session.profile)?.inject ?? 'bracketed';
     try {
-      this.sessions.write(sessionId, encodeInjection(text, mode));
+      this.sessions.inject(sessionId, encodeInjection(text, mode), INJECT_SUBMIT);
     } catch {
       // The agent died between the readiness check and the write; the message
       // log already reflects that it never started.

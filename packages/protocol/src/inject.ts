@@ -31,14 +31,35 @@ export function formatMessage(from: string, text: string): string {
 }
 
 /**
- * Wire bytes for injecting `body` into a PTY.
+ * The keypress that submits an injected message.
+ *
+ * Deliberately not part of `encodeInjection`, and the split is the whole
+ * point of it. The CR used to be appended to the paste and written in the
+ * same go, on the reasonable-sounding grounds that a terminal sees the paste
+ * end and then an Enter. Agent TUIs do not behave that way: they debounce a
+ * paste - Claude Code among them, and deliberately, so that a pasted block
+ * full of newlines cannot fire off half-written prompts - and anything
+ * arriving inside that window is folded into the pasted text. A CR glued to
+ * the end of the paste therefore became a literal newline in the composer,
+ * and the message sat there fully typed and never sent. From the outside
+ * that looked like an agent messaging another and getting no answer, with
+ * its text plainly visible in the other's terminal.
+ *
+ * So it goes in on its own, once the paste has landed. `PtySession.inject`
+ * owns that timing.
+ */
+export const INJECT_SUBMIT = '\r';
+
+/**
+ * Wire bytes for injecting `body` into a PTY - the message itself, without
+ * the keypress that sends it.
  *
  * Bracketed paste makes a multi-line body arrive as one atomic paste rather
  * than as a line-by-line keystroke stream, so a CLI that reads line-at-a-time
- * does not act on a half-delivered message. The trailing CR submits it.
+ * does not act on a half-delivered message. `INJECT_SUBMIT` follows separately.
  */
 export function encodeInjection(body: string, mode: InjectMode): string {
   const clean = sanitizeMessageBody(body);
-  if (mode === 'raw') return `${clean}\r`;
-  return `${PASTE_START}${clean}${PASTE_END}\r`;
+  if (mode === 'raw') return clean;
+  return `${PASTE_START}${clean}${PASTE_END}`;
 }

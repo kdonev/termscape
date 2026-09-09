@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   encodeInjection,
   formatMessage,
+  INJECT_SUBMIT,
   sanitizeMessageBody,
   PASTE_START,
   PASTE_END,
@@ -15,13 +16,24 @@ import {
 } from '../src/index.js';
 
 describe('injection encoding', () => {
-  it('frames a body in bracketed paste and submits it', () => {
+  it('frames a body in bracketed paste', () => {
     const out = encodeInjection('hello world', 'bracketed');
-    expect(out).toBe(`${PASTE_START}hello world${PASTE_END}\r`);
+    expect(out).toBe(`${PASTE_START}hello world${PASTE_END}`);
   });
 
-  it('raw mode submits without paste framing', () => {
-    expect(encodeInjection('ls -la', 'raw')).toBe('ls -la\r');
+  it('leaves the submit key out of the paste entirely', () => {
+    // The bug this split exists for: an Enter arriving inside an agent
+    // TUI's paste window is folded into the pasted text, so the message
+    // lands in the composer fully typed and is never sent. Nothing
+    // encodeInjection produces may carry one.
+    for (const mode of ['bracketed', 'raw'] as const) {
+      expect(encodeInjection('hello world', mode)).not.toContain(INJECT_SUBMIT);
+    }
+    expect(INJECT_SUBMIT).toBe('\r');
+  });
+
+  it('raw mode has no paste framing', () => {
+    expect(encodeInjection('ls -la', 'raw')).toBe('ls -la');
   });
 
   it('keeps a multi-line body inside a single paste', () => {
@@ -30,7 +42,6 @@ describe('injection encoding', () => {
     // two separate submitted lines.
     expect(out.split(PASTE_START)).toHaveLength(2);
     expect(out.split(PASTE_END)).toHaveLength(2);
-    expect(out.indexOf('\r')).toBe(out.length - 1);
   });
 
   it('strips a paste terminator so a body cannot escape its own framing', () => {
@@ -41,18 +52,18 @@ describe('injection encoding', () => {
 
     // Exactly one terminator survives, and it is the framing's own.
     expect(out.split(PASTE_END)).toHaveLength(2);
-    expect(out.endsWith(`${PASTE_END}\r`)).toBe(true);
+    expect(out.endsWith(PASTE_END)).toBe(true);
 
     // The body region carries no escape at all, so the neutered terminator is
     // inert literal text rather than a control sequence.
-    const body = out.slice(PASTE_START.length, out.length - PASTE_END.length - 1);
+    const body = out.slice(PASTE_START.length, out.length - PASTE_END.length);
     expect(body).not.toContain('\x1b');
     expect(body).toBe('innocent[201~rm -rf /');
   });
 
   it('strips embedded CR so a body cannot submit early', () => {
     const out = encodeInjection('first\rsecond', 'bracketed');
-    expect(out.indexOf('\r')).toBe(out.length - 1);
+    expect(out).not.toContain('\r');
   });
 
   it('removes escape sequences and control characters', () => {

@@ -533,6 +533,22 @@ export class SessionManager extends EventEmitter {
   }
 
   /**
+   * Paste a message into a session and send it.
+   *
+   * Not `write` with a CR on the end: the Enter has to be its own keypress,
+   * arriving after the paste has settled, or an agent TUI folds it into the
+   * pasted text and the message is never submitted. PtySession.inject owns the
+   * timing; this is here so callers say what they mean rather than assembling
+   * the bytes themselves.
+   */
+  inject(sessionId: string, paste: string, submit: string): void {
+    const p = this.live.get(sessionId);
+    if (!p?.running) throw new Error(`session ${sessionId} is not running`);
+    p.inject(paste, submit);
+    this.store.updateSession(sessionId, { lastActiveAt: Date.now() });
+  }
+
+  /**
    * Input that is bytes rather than text - mouse reports in the default
    * encoding. Kept apart from `write` all the way down so nothing on the path
    * decodes it; see PtySession.writeBytes.

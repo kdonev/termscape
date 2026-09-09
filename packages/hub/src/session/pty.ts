@@ -74,6 +74,23 @@ const WRITE_CHUNK = 1024;
 const WRITE_GAP_MS = 8;
 
 /**
+ * How long a pasted message is left to land before the Enter that sends it.
+ *
+ * The two cannot go in together. An agent TUI debounces a paste on purpose -
+ * so that pasting a block full of newlines does not submit half of it - and a
+ * CR arriving inside that window is taken as part of the pasted text rather
+ * than as a keypress. That is how a message could be delivered, appear in full
+ * in the recipient's composer, and never be sent.
+ *
+ * Bounded on both sides. Long enough to clear any debounce worth the name, and
+ * short enough that nobody watching the canvas sees a pause between the message
+ * appearing and going in. The write pacing above is 8ms because it only has to
+ * outlast a read() returning; this has to outlast a render, which is a
+ * different order of magnitude.
+ */
+const SUBMIT_SETTLE_MS = 120;
+
+/**
  * One PTY plus a headless xterm that mirrors it.
  *
  * The headless terminal earns its keep twice: it produces the serialized
@@ -103,6 +120,8 @@ export class PtySession extends EventEmitter {
   /** Input still to be fed in, when a write was too big for one go. */
   private readonly writeQueue: (string | Buffer)[] = [];
   private writeTimer: NodeJS.Timeout | null = null;
+  /** Pending Enter for a message already pasted in. See inject(). */
+  private submitTimer: NodeJS.Timeout | null = null;
 
   constructor(
     readonly id: string,
@@ -306,6 +325,38 @@ export class PtySession extends EventEmitter {
     this.drainWrites();
   }
 
+  /**
+   * Paste a message in, then send it.
+   *
+   * Two writes, never one. See SUBMIT_SETTLE_MS for why, and `INJECT_SUBMIT`
+   * for what it cost when this was a single write with a CR on the end.
+   *
+   * The wait starts once the paste is actually out - a long message is fed in
+   * paced chunks, and a settle measured from the first of them is no settle at
+   * all. A second message arriving mid-wait replaces the pending Enter rather
+   * than adding one: two of them would submit an empty prompt.
+   */
+  inject(paste: string, submit: string): void {
+    this.write(paste);
+    if (this.submitTimer) clearTimeout(this.submitTimer);
+    const tick = (): void => {
+      this.submitTimer = null;
+      if (this.disposed || !this.proc) return;
+      if (this.writeQueue.length > 0) return arm();
+      try {
+        this.write(submit);
+      } catch {
+        // It exited between the paste and the Enter. The message log already
+        // records the delivery; there is nothing left to submit it to.
+      }
+    };
+    const arm = (): void => {
+      this.submitTimer = setTimeout(tick, SUBMIT_SETTLE_MS);
+      this.submitTimer.unref?.();
+    };
+    arm();
+  }
+
   /** One chunk per tick until the queue is empty, the process dies, or we do. */
   private drainWrites(): void {
     if (this.writeTimer) return;
@@ -395,9 +446,12 @@ export class PtySession extends EventEmitter {
 
   kill(): void {
     this.clearIdleTimer();
-    // Whatever is left of a paste has nowhere to go once the process is gone.
+    // Whatever is left of a paste has nowhere to go once the process is gone,
+    // and neither does the Enter that would have sent it.
     if (this.writeTimer) clearTimeout(this.writeTimer);
     this.writeTimer = null;
+    if (this.submitTimer) clearTimeout(this.submitTimer);
+    this.submitTimer = null;
     this.writeQueue.length = 0;
     if (!this.proc) return;
     try {
