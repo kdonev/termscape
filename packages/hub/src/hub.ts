@@ -36,7 +36,7 @@ import { deploy, type DeployResult } from './remote/deployer.js';
 import { hubTarballPath } from './remote/tarball.js';
 import { paths } from './paths.js';
 
-export const HUB_VERSION = '0.1.2';
+export const HUB_VERSION = '0.2.0';
 
 /**
  * How long changes are pooled before every attached machine is told the

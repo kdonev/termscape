@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, describe, expect, it } from 'vitest';
@@ -37,6 +37,11 @@ const RECORD_PROGRAM = `
   process.stdin.on('data', (b) => {
     fs.appendFileSync(out, JSON.stringify({ at: Date.now() - t0, data: b.toString('utf8') }) + '\\n');
   });
+  // Only now is there anything worth writing at. A fixed wait after spawn
+  // was mostly waiting for node to boot, and on a loaded machine the paste
+  // landed while the console was still line-buffering — which merges it with
+  // the Enter and hides the very thing under test.
+  fs.writeFileSync(out + '.ready', '1');
   setTimeout(() => {}, 30000);
 `;
 
@@ -54,7 +59,14 @@ const live: PtySession[] = [];
  */
 let recorders = 0;
 
-function startRecorder(): { pty: PtySession; reads: () => Read[] } {
+interface Recorder {
+  pty: PtySession;
+  reads: () => Read[];
+  /** Written by the child once its stdin is raw and being read. */
+  readyFile: string;
+}
+
+function startRecorder(): Recorder {
   const n = recorders++;
   const file = join(home, `reads-${n}.jsonl`);
   const p = new PtySession(`inject-${n}`, 120, 24, null, 'heuristic');
@@ -77,7 +89,7 @@ function startRecorder(): { pty: PtySession; reads: () => Read[] } {
       return [];
     }
   };
-  return { pty: p, reads };
+  return { pty: p, reads, readyFile: `${file}.ready` };
 }
 
 function waitFor(fn: () => boolean, ms: number): Promise<boolean> {
@@ -92,10 +104,11 @@ function waitFor(fn: () => boolean, ms: number): Promise<boolean> {
   });
 }
 
-/** Let the child install its stdin handler before anything is written at it. */
-async function ready(pty: PtySession): Promise<void> {
-  await waitFor(() => pty.running, 5000);
-  await new Promise((r) => setTimeout(r, 700));
+/** Wait until the child says it is in raw mode and reading. */
+async function ready(rec: Recorder): Promise<void> {
+  await waitFor(() => rec.pty.running, 5000);
+  const up = await waitFor(() => existsSync(rec.readyFile), 15000);
+  if (!up) throw new Error('the recorder never signalled it was ready');
 }
 
 afterEach(() => {
@@ -106,8 +119,9 @@ afterAll(() => removeTree(home));
 
 describe('injecting a message into a PTY', () => {
   it('sends the Enter as its own read, after the paste', async () => {
-    const { pty, reads } = startRecorder();
-    await ready(pty);
+    const rec = startRecorder();
+    const { pty, reads } = rec;
+    await ready(rec);
 
     pty.inject(encodeInjection('[from ws/other] take a look', 'bracketed'), INJECT_SUBMIT);
 
@@ -136,26 +150,35 @@ describe('injecting a message into a PTY', () => {
     // A message past one write chunk is fed in paced pieces. An Enter timed
     // from the first of them would land in the middle of the paste, which is
     // worse than landing glued to the end of it.
-    const { pty, reads } = startRecorder();
-    await ready(pty);
+    const rec = startRecorder();
+    const { pty, reads } = rec;
+    await ready(rec);
 
     pty.inject(encodeInjection('x'.repeat(5000), 'bracketed'), INJECT_SUBMIT);
 
     await waitFor(() => reads().some((r) => r.data.includes(INJECT_SUBMIT)), 10_000);
 
-    const all = reads();
-    const submitIndex = all.findIndex((r) => r.data.includes(INJECT_SUBMIT));
-    expect(submitIndex, `reads: ${all.length}`).toBeGreaterThan(0);
-    // The Enter is the last thing in: everything else arrived before it.
-    expect(submitIndex).toBe(all.length - 1);
-    expect(all[submitIndex]!.data).toBe(INJECT_SUBMIT);
+    // Ordering, not framing. How the paste is split across reads is the
+    // reader's business — a child that falls behind gets the tail of the paste
+    // and the Enter in one read, and that says nothing about when they were
+    // written. What matters is that exactly one Enter went in, that it went in
+    // last, and that the whole paste preceded it: a settle timed from the
+    // first chunk of a paced write would have put it in the middle.
+    const stream = reads()
+      .map((r) => r.data)
+      .join('');
+    expect(stream).toContain(PASTE_END);
+    expect(stream.split(INJECT_SUBMIT)).toHaveLength(2);
+    expect(stream.endsWith(INJECT_SUBMIT)).toBe(true);
+    expect(stream.indexOf(PASTE_END)).toBeLessThan(stream.length - 1);
   }, 30_000);
 
   it('sends one Enter when two messages land back to back', async () => {
     // Two pending submits would put a stray Enter into an empty composer,
     // which an agent CLI reads as a prompt of its own.
-    const { pty, reads } = startRecorder();
-    await ready(pty);
+    const rec = startRecorder();
+    const { pty, reads } = rec;
+    await ready(rec);
 
     pty.inject(encodeInjection('first', 'bracketed'), INJECT_SUBMIT);
     pty.inject(encodeInjection('second', 'bracketed'), INJECT_SUBMIT);
