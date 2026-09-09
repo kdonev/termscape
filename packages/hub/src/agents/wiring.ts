@@ -278,7 +278,17 @@ ${peerList}
 The \`termscape\` MCP server gives you these tools. Your CLI probably shows
 them under a prefix — \`termscape_send_message\` or
 \`mcp__termscape__send_message\` rather than plain \`send_message\` — so match
-on the ending rather than looking for the exact name below:
+on the ending rather than looking for the exact name below.
+
+**Only the \`termscape\` ones see this canvas.** Several CLIs ship a built-in
+tool of their own for listing agents or sessions, under a name close enough to
+be mistaken for one of these, and it answers about that CLI's own subagents or
+sibling processes — names and ids that mean nothing here and that you cannot
+send a message to. If a \`[from <address>]\` message arrived and the agent
+listing in front of you does not contain that address, you are reading the
+wrong tool's answer: call the \`termscape\` one. Addresses on this canvas are
+always \`workspace/name\`, and every one of them appears in
+\`termscape\`'s \`list_agents\`.
 
 - \`whoami\` — your own address and workspace.
 - \`list_agents\` — who else exists, and whether they are idle or busy.
