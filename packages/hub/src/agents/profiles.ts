@@ -150,9 +150,9 @@ function defaultShell(): string {
  *   `OPENCODE_CONFIG` when it does - and mistaking that command for the only
  *   way in.
  *
- * `shell` is the only profile left that is not an agent, and it is not one in
- * a way no flag can fix: it runs a shell, so text typed at it is executed
- * rather than read.
+ * `shell` and `powershell` are the two profiles left that are not agents, and
+ * they are not agents in a way no flag can fix: they run a shell, so text
+ * typed at one is executed rather than read.
  */
 export const BUILTIN_PROFILES: Record<string, AgentProfile> = {
   claude: {
@@ -344,6 +344,38 @@ export const BUILTIN_PROFILES: Record<string, AgentProfile> = {
      * index into a list - never that UUID - so the id the hub could record is
      * not an id it could resume by.
      */
+  },
+  /*
+   * PowerShell, named rather than left to `shell`.
+   *
+   * On Windows `shell` follows COMSPEC, which is cmd.exe - so the shell most
+   * Windows work actually happens in was the one thing the picker could not
+   * offer. Elsewhere `pwsh` is the cross-platform build, and it stays in the
+   * list when it is not installed with "not found on PATH" against it, which
+   * is the honest answer for a shell you have to install.
+   *
+   * Unwired for the same reason `shell` is, and it is not a gap a flag could
+   * close: a shell executes what is typed at it, so a brief there is a series
+   * of commands rather than context.
+   */
+  powershell: {
+    id: 'powershell',
+    description: 'PowerShell, no agent wiring',
+    command: platform === 'win32' ? 'powershell.exe' : 'pwsh',
+    // -NoLogo: the banner is three lines of nothing in a window this small.
+    args: ['-NoLogo'],
+    env: {},
+    mcp: false,
+    brief: 'none',
+    status: 'heuristic',
+    // `PS C:\dev>`, and the `>>` of a continuation prompt. Not a bare `>`,
+    // which is the last character of half the redirects anyone types.
+    readyHint: '(PS [^>]*>|^>>) ?$',
+    inject: 'raw',
+    // Asked rather than declared: unlike `shell`, which is whatever COMSPEC or
+    // SHELL happens to point at, this is one named command that either is on
+    // PATH or is not - and its version is worth showing next to it.
+    versionArgs: ['-NoLogo', '-NoProfile', '-Command', '$PSVersionTable.PSVersion.ToString()'],
   },
   shell: {
     id: 'shell',
