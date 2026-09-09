@@ -263,7 +263,13 @@ export function createPeerServer(hub: Hub, clientToken: string): PeerServer {
           case 'input': {
             const t = hub.sessions.getByAddress(req.address);
             if (!t) return err(`no agent at address "${req.address}"`);
-            hub.sessions.write(t.id, req.data);
+            // `binary` carries bytes one per code unit; anything else, including
+            // an older canvas that sends no encoding at all, is text.
+            if (req.encoding === 'binary') {
+              hub.sessions.writeBytes(t.id, Buffer.from(req.data, 'latin1'));
+            } else {
+              hub.sessions.write(t.id, req.data);
+            }
             return ok({ ok: true });
           }
 

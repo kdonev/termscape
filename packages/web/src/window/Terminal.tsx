@@ -132,12 +132,15 @@ convertEol: false,
      * at all, which is what made scrolling look broken in some agents and fine
      * in others: the ones that ask for SGR were never on this path.
      *
-     * The whole input pipe is UTF-8 text, so a report is faithful up to code
-     * point 0x7f — coordinates past column or row 95, where this encoding is
-     * already ambiguous by its own definition. SGR has no such limit and is
-     * what any program that cares asks for.
+     * These are bytes, not text: the default encoding spells a coordinate as
+     * `32 + n`, so past column or row 95 a report contains bytes above 0x7f.
+     * Sending them down the UTF-8 input path re-encoded each of those as two
+     * bytes, and the program - unable to parse the report it had asked for -
+     * printed the remainder as text. That is the garbage that appeared in
+     * terminals whenever the mouse moved over the wide half of one. Hence
+     * sendInputBytes, which is byte-faithful end to end.
      */
-    const onBinary = term.onBinary((d) => client.sendInput(sessionId, d));
+    const onBinary = term.onBinary((d) => client.sendInputBytes(sessionId, d));
 
     applyGrid();
 

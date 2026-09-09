@@ -300,8 +300,15 @@ export async function serve(opts: ServeOptions): Promise<ServeResult> {
         if (isBinary) {
           if (!authed) return;
           const f = decodeBinaryFrame(new Uint8Array(raw));
-          if (f.kind === BinaryFrameKind.PtyInput) {
-            const data = Buffer.from(f.payload).toString('utf8');
+          const isInput =
+            f.kind === BinaryFrameKind.PtyInput ||
+            f.kind === BinaryFrameKind.PtyInputRaw;
+          if (isInput) {
+            // Raw frames are bytes and stay bytes: latin1 is the encoding that
+            // survives a JSON hop to a peer without inventing code points, and
+            // locally the Buffer never becomes a string at all.
+            const bytes = Buffer.from(f.payload);
+            const isRaw = f.kind === BinaryFrameKind.PtyInputRaw;
             const remote = hub.peers.find(f.sessionId);
             if (remote) {
               // Typing into a remote terminal whose PTY has since exited is
@@ -309,12 +316,20 @@ export async function serve(opts: ServeOptions): Promise<ServeResult> {
               // rejection reaches the process and takes the whole canvas with
               // it — so it is reported to this browser and goes no further.
               void remote.peer
-                .request({ t: 'input', id: randomUUID(), address: f.sessionId, data })
+                .request({
+                  t: 'input',
+                  id: randomUUID(),
+                  address: f.sessionId,
+                  data: bytes.toString(isRaw ? 'latin1' : 'utf8'),
+                  ...(isRaw ? { encoding: 'binary' as const } : {}),
+                })
                 .catch((e: Error) =>
                   send(socket, { t: 'error', message: e.message, sessionId: f.sessionId }),
                 );
+            } else if (isRaw) {
+              hub.sessions.writeBytes(f.sessionId, bytes);
             } else {
-              hub.sessions.write(f.sessionId, data);
+              hub.sessions.write(f.sessionId, bytes.toString('utf8'));
             }
           }
           return;

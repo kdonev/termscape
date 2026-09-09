@@ -532,6 +532,18 @@ export class SessionManager extends EventEmitter {
     this.store.updateSession(sessionId, { lastActiveAt: Date.now() });
   }
 
+  /**
+   * Input that is bytes rather than text - mouse reports in the default
+   * encoding. Kept apart from `write` all the way down so nothing on the path
+   * decodes it; see PtySession.writeBytes.
+   */
+  writeBytes(sessionId: string, data: Buffer): void {
+    const p = this.live.get(sessionId);
+    if (!p?.running) throw new Error(`session ${sessionId} is not running`);
+    p.writeBytes(data);
+    this.store.updateSession(sessionId, { lastActiveAt: Date.now() });
+  }
+
   resize(sessionId: string, cols: number, rows: number): void {
     const p = this.live.get(sessionId);
     p?.resize(cols, rows);

@@ -101,7 +101,7 @@ export class PtySession extends EventEmitter {
   private launchedFile = '';
   private disposed = false;
   /** Input still to be fed in, when a write was too big for one go. */
-  private readonly writeQueue: string[] = [];
+  private readonly writeQueue: (string | Buffer)[] = [];
   private writeTimer: NodeJS.Timeout | null = null;
 
   constructor(
@@ -281,6 +281,31 @@ export class PtySession extends EventEmitter {
     this.drainWrites();
   }
 
+  /**
+   * Feed the program bytes that are not text.
+   *
+   * Mouse reports in the default encoding are what arrive here: a coordinate
+   * spelled `32 + n`, so past column 95 the report contains bytes above 0x7f
+   * and is not UTF-8 at all. `write` would hand node-pty a string, which it
+   * encodes as UTF-8 on the way to the pty - one byte in, two bytes out, and a
+   * program that prints the wreckage instead of scrolling. A Buffer travels
+   * the same path to the same socket and is written verbatim.
+   *
+   * These are single reports, a handful of bytes each, so there is nothing to
+   * chunk; the queue is still respected so a report cannot overtake a paste
+   * that is still draining.
+   */
+  writeBytes(data: Buffer): void {
+    if (!this.proc) throw new Error(`session ${this.id} is not running`);
+    if (data.length === 0) return;
+    if (this.writeQueue.length === 0) {
+      this.proc.write(data as unknown as string);
+      return;
+    }
+    this.writeQueue.push(data);
+    this.drainWrites();
+  }
+
   /** One chunk per tick until the queue is empty, the process dies, or we do. */
   private drainWrites(): void {
     if (this.writeTimer) return;
@@ -294,7 +319,7 @@ export class PtySession extends EventEmitter {
         this.writeQueue.length = 0;
         return;
       }
-      this.proc.write(chunk);
+      this.proc.write(chunk as unknown as string);
       if (this.writeQueue.length > 0) {
         this.writeTimer = setTimeout(next, WRITE_GAP_MS);
         this.writeTimer.unref?.();

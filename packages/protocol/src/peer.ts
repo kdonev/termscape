@@ -185,6 +185,16 @@ export const PeerRequest = z.discriminatedUnion('t', [
     id: z.string(),
     address: z.string(),
     data: z.string(),
+    /**
+     * How to read `data` before it reaches the pty.
+     *
+     * `utf8`, the default and what every older hub sends, means it is text.
+     * `binary` means it is bytes carried one per code unit - a mouse report in
+     * the default encoding, where a coordinate past column 95 is a byte above
+     * 0x7f and encoding it as text would double it. A remote terminal is on
+     * the same footing as a local one only if this survives the crossing.
+     */
+    encoding: z.enum(['utf8', 'binary']).optional(),
   }),
   z.object({
     t: z.literal('resize'),
@@ -229,4 +239,4 @@ export type PeerResponse = z.infer<typeof PeerResponse>;
  * Bumped whenever the peer protocol or the DB schema changes shape. Hubs
  * refuse to connect across a mismatch rather than corrupting each other.
  */
-export const PEER_SCHEMA_VERSION = 6;
+export const PEER_SCHEMA_VERSION = 7;

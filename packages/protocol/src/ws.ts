@@ -24,7 +24,19 @@ import {
 
 export const BinaryFrameKind = {
   PtyOutput: 0x01,
+  /** Payload is UTF-8 text: keystrokes, pastes, escape sequences. */
   PtyInput: 0x02,
+  /**
+   * Payload is exact bytes, written to the PTY unchanged.
+   *
+   * Mouse reports in the default (X10) encoding are the reason this exists.
+   * They spell a coordinate as `32 + n`, so anything past column or row 95 is
+   * a byte above 0x7f - and a byte above 0x7f is not UTF-8 text. Sent as
+   * `PtyInput` it was re-encoded on the way through and arrived at the program
+   * as two bytes instead of one, which is how moving the mouse over a wide
+   * terminal typed garbage into it. Nothing on this path may decode it.
+   */
+  PtyInputRaw: 0x03,
 } as const;
 export type BinaryFrameKind =
   (typeof BinaryFrameKind)[keyof typeof BinaryFrameKind];

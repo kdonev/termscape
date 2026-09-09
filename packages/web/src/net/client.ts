@@ -155,6 +155,20 @@ export class HubClient {
   }
 
   /**
+   * Input that is bytes rather than text, delivered to the PTY unchanged.
+   *
+   * xterm hands these over as a "binary string": one character per byte, each
+   * in 0..255. UTF-8 encoding it would turn every byte above 0x7f into two,
+   * which is the whole reason this is a separate path - see PtyInputRaw.
+   */
+  sendInputBytes(sessionId: string, data: string): void {
+    if (this.ws?.readyState !== WebSocket.OPEN) return;
+    const bytes = new Uint8Array(data.length);
+    for (let i = 0; i < data.length; i++) bytes[i] = data.charCodeAt(i) & 0xff;
+    this.ws.send(encodeBinaryFrame(BinaryFrameKind.PtyInputRaw, sessionId, bytes));
+  }
+
+  /**
    * Attach to a session's output stream. Returns a detach function. The hub
    * only streams to attached clients, which is what keeps a zoomed-out canvas
    * of many terminals cheap.
