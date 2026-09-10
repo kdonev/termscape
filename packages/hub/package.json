@@ -1,6 +1,6 @@
 {
   "name": "@termscape/hub",
-  "version": "0.2.0",
+  "version": "0.1.3",
   "private": true,
   "description": "Run a crew of AI coding agents on one infinite canvas, and let them talk to each other.",
   "license": "MIT",
