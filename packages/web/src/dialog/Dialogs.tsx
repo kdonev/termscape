@@ -92,31 +92,42 @@ function AddWorkspaceDialog({ hostId }: { hostId: string | null }) {
   const [path, setPath] = useState('');
   const [name, setName] = useState('');
 
+  // Shapes the placeholder to the machine that will actually resolve it: a
+  // Windows canvas adding a workspace on a joined mac should not suggest
+  // `C:\...`, which is exactly the shape of path this fix exists to refuse.
+  const remoteIsWindows = host?.platform?.startsWith('win32') ?? false;
+  const examplePath = host ? (remoteIsWindows ? 'C:\\Users\\you\\project' : '/Users/you/project') : 'folder path';
+
   return (
     <Dialog title={`Add a workspace on ${where}`}>
       <DialogForm
         submitLabel="add workspace"
         canSubmit={path.trim().length > 0 && reachable}
-        onSubmit={() =>
-          request({
+        onSubmit={async () => {
+          // Asked before creating anything: the dialog that types the path
+          // is the only place a wrong-machine or missing folder can be told
+          // apart from any other mistake, rather than surfacing at the first
+          // agent start (issue 15).
+          await request({ t: 'checkFolder', hostId, path: path.trim() });
+          await request({
             t: 'createWorkspace',
             name: name.trim() || path.trim(),
             rootPath: path.trim(),
             hostId,
-          })
-        }
+          });
+        }}
       >
         <Field
           label="folder"
           hint={
             host
-              ? `A path as ${host.label} sees it; this machine cannot check it exists.`
+              ? `A path as ${host.label} sees it — checked on that machine, not this one.`
               : 'An absolute path, or one relative to where the hub was started.'
           }
         >
           <input
             className="input"
-            placeholder={host ? `folder path on ${host.label}` : 'folder path'}
+            placeholder={examplePath}
             value={path}
             onChange={(e) => setPath(e.target.value)}
           />
@@ -163,21 +174,30 @@ function EditWorkspaceDialog({ workspaceId }: { workspaceId: string }) {
   if (!workspace) return <Gone what="workspace" />;
 
   const locked = here.length > 0;
-  const changed = name.trim() !== workspace.name || path.trim() !== workspace.rootPath;
+  const pathChanged = path.trim() !== workspace.rootPath;
+  const changed = name.trim() !== workspace.name || pathChanged;
 
   return (
     <Dialog title={`Edit ${workspace.name}`}>
       <DialogForm
         submitLabel="save"
         canSubmit={changed && name.trim().length > 0 && path.trim().length > 0}
-        onSubmit={() =>
-          request({
+        onSubmit={async () => {
+          // Only asked when the folder itself moved: an unchanged path was
+          // already checked when it was first accepted (or, for a row from
+          // before this fix, is exactly the corrupted value re-entering it
+          // is meant to repair — re-checking a value nobody touched would
+          // only get in the way of that).
+          if (pathChanged) {
+            await request({ t: 'checkFolder', hostId: workspace.hostId, path: path.trim() });
+          }
+          await request({
             t: 'updateWorkspace',
             workspaceId,
             name: name.trim(),
             rootPath: path.trim(),
-          })
-        }
+          });
+        }}
       >
         <Field
           label="name"

@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { homedir } from 'node:os';
 import {
   PeerRequest,
   PEER_SCHEMA_VERSION,
@@ -16,6 +17,7 @@ import type { WebSocket } from 'ws';
 import type { Hub } from '../hub.js';
 import { HUB_VERSION } from '../hub.js';
 import { debug, debugOn } from '../debug.js';
+import { checkFolder } from '../folders.js';
 
 /**
  * The answering half of the hub-to-hub link: it serves requests about *this*
@@ -220,7 +222,17 @@ export function createPeerServer(hub: Hub, clientToken: string): PeerServer {
 
           case 'startSession': {
             let ws = hub.store.getWorkspaceByName(req.workspaceName);
-            if (!ws) ws = hub.createWorkspace(req.workspaceName, req.rootPath, null);
+            if (!ws) {
+              // Resolved against this machine's home, never its cwd — which
+              // the join installer leaves at the hub's own install directory
+              // (join-script.ts), not anywhere a person would mean by a
+              // relative workspace root. Doing it here, before
+              // createWorkspace, means a bad root fails with the real reason
+              // instead of being glued under the wrong base and reported as
+              // one indecipherable path.
+              const { path } = checkFolder(req.rootPath, { base: homedir() });
+              ws = hub.createWorkspace(req.workspaceName, path, null);
+            }
             // `profile` is an agent id here, not a template: the canvas
             // resolved the template on its own side precisely because the two
             // machines do not share config. The model and effort arrive as
@@ -354,6 +366,15 @@ export function createPeerServer(hub: Hub, clientToken: string): PeerServer {
             hub.sessions.resize(t.id, req.cols, req.rows);
             return ok({ ok: true });
           }
+
+          case 'checkFolder':
+            // A throw here is already turned into `err` by the catch below,
+            // which is what lets the Add/Edit-workspace dialog on the canvas
+            // show the real reason — "does not exist", "not a folder", or the
+            // wrong-platform message — instead of a guess made on a machine
+            // that cannot see this one's filesystem. `homedir()`, never
+            // `cwd()`: the same reasoning as `startSession` above.
+            return ok(checkFolder(req.path, { base: homedir() }));
         }
       } catch (e) {
         err((e as Error).message);

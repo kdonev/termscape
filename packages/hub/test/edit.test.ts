@@ -82,6 +82,45 @@ describe('editing a workspace', () => {
   }, 30_000);
 });
 
+describe('a remote workspace root', () => {
+  // A remote root belongs to the machine `hostId` names, not to this
+  // process — resolving it here, as the code before this fix did
+  // unconditionally, is exactly how a correct mac path like
+  // `/Users/test/dev/office` became `D:\Users\test\dev\office` on a Windows
+  // canvas (issue 15). The fix is that it is never touched at all: stored
+  // exactly as typed, trimmed, and left for the owning machine to make sense
+  // of when an agent actually starts.
+  const foreign =
+    process.platform === 'win32' ? '/Users/test/dev/office' : 'C:\\Users\\test\\dev\\office';
+
+  const host = () => hub.addHost({ label: 'far-box', sshHost: 'far.local', sshUser: 'me', sshPort: 22 });
+
+  it('is stored verbatim on create, with no local resolution or existence check', () => {
+    const ws = hub.createWorkspace('remote-office', foreign, host().id);
+    expect(ws.kind).toBe('remote');
+    expect(ws.rootPath).toBe(foreign);
+    expect(hub.store.getWorkspace(ws.id)?.rootPath).toBe(foreign);
+  });
+
+  it('is repointed the same way, still with no local resolution', () => {
+    const ws = hub.createWorkspace('remote-office-2', foreign, host().id);
+    const moved =
+      process.platform === 'win32'
+        ? '/Users/test/dev/elsewhere'
+        : 'C:\\Users\\test\\dev\\elsewhere';
+    expect(hub.updateWorkspace(ws.id, { rootPath: moved }).rootPath).toBe(moved);
+    expect(hub.store.getWorkspace(ws.id)?.rootPath).toBe(moved);
+  });
+
+  it('still refuses a local workspace whose folder is missing', () => {
+    // The other half of the split: a workspace with no hostId is this
+    // machine's to check, exactly as before.
+    expect(() => hub.createWorkspace('local-missing', join(dir, 'nope'))).toThrow(
+      /does not exist/,
+    );
+  });
+});
+
 describe('editing a machine', () => {
   const ssh = () =>
     hub.addHost({ label: 'box', sshHost: 'box.local', sshUser: 'me', sshPort: 22 });

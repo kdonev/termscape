@@ -546,4 +546,18 @@ export class PeerRegistry extends EventEmitter {
     if (!found) throw new Error(`no agent at address "${address}"`);
     return found.peer.request({ t: 'readScreen', id: randomUUID(), address, lines });
   }
+
+  /**
+   * Ask a peer whether a folder makes sense there, before a workspace
+   * pointing at it is created. Only that machine can resolve a path in its
+   * own platform's flavour and stat the result, so this is the
+   * Add/Edit-workspace dialog's pre-flight for a remote workspace, the same
+   * guard `startSession` uses for reachability.
+   */
+  async checkFolder(hostId: string, path: string): Promise<{ path: string }> {
+    const peer = this.peers.get(hostId);
+    if (!peer) throw new Error(`host ${hostId} is not connected`);
+    if (!peer.connected) throw new Error(`host ${hostId} is not connected`);
+    return peer.request<{ path: string }>({ t: 'checkFolder', id: randomUUID(), path });
+  }
 }

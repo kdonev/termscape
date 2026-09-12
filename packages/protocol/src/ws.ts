@@ -95,6 +95,22 @@ export const ClientMsg = z.discriminatedUnion('t', [
   z.object({ t: z.literal('resize'), sessionId: z.string(), cols: z.number().int().positive(), rows: z.number().int().positive() }),
 
   // workspaces
+  /**
+   * Whether a folder makes sense on the machine a workspace would live on,
+   * asked before that workspace is created. `hostId` absent or null means
+   * this machine; either way the answer comes from `Hub.checkHostFolder`,
+   * which resolves and stats the path on whichever machine actually owns it
+   * instead of this hub's own process guessing in its own platform's
+   * flavour. A failure here is the dialog's only signal — there is no
+   * separate success payload, since the dialog already knows the path it
+   * asked about.
+   */
+  z.object({
+    t: z.literal('checkFolder'),
+    requestId,
+    hostId: z.string().nullable().optional(),
+    path: z.string().min(1),
+  }),
   z.object({ t: z.literal('createWorkspace'), requestId, name: z.string().min(1), rootPath: z.string().min(1), hostId: z.string().nullable().optional() }),
   /**
    * Rename a workspace or repoint it at another folder. Both are optional and
@@ -228,7 +244,9 @@ export const ClientMsg = z.discriminatedUnion('t', [
 export type ClientMsg = z.infer<typeof ClientMsg>;
 
 /**
- * The mutations a dialog drives, and so the ones that can be awaited.
+ * The mutations a dialog drives, plus `checkFolder` — a pre-flight question
+ * rather than a mutation, but a dialog awaits it exactly the same way, so it
+ * belongs in the same list rather than a second one.
  *
  * Listed by name rather than derived from the presence of `requestId`,
  * because every message is structurally assignable to "might have a
@@ -238,6 +256,7 @@ export type AckableMsg = Extract<
   ClientMsg,
   {
     t:
+      | 'checkFolder'
       | 'createWorkspace'
       | 'updateWorkspace'
       | 'removeWorkspace'

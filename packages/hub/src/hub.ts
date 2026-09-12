@@ -1,7 +1,6 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
-import { existsSync, readFileSync } from 'node:fs';
-import { basename, resolve } from 'node:path';
+import { readFileSync } from 'node:fs';
 import {
   encodeInjection,
   INJECT_SUBMIT,
@@ -38,6 +37,7 @@ import { SPAWN_RELAY_TIMEOUT_MS, type Uplink } from './remote/peer-serve.js';
 import { deploy, type DeployResult } from './remote/deployer.js';
 import { hubTarballPath } from './remote/tarball.js';
 import { paths } from './paths.js';
+import { checkFolder, folderName } from './folders.js';
 
 export const HUB_VERSION = '0.1.3';
 
@@ -258,20 +258,22 @@ export class Hub extends EventEmitter implements AgentApi {
   /* ---------------------------------------------------------- workspaces */
 
   createWorkspace(name: string, rootPath: string, hostId: string | null = null): Workspace {
-    const abs = resolve(rootPath);
-    if (!hostId && !existsSync(abs)) {
-      throw new Error(`folder does not exist: ${abs}`);
-    }
+    // A remote root belongs to the machine it names, not to this process —
+    // resolving and checking it here, in this platform's own flavour, is
+    // exactly the bug folders.ts exists to fix. It is stored verbatim
+    // (trimmed) and left for that machine to make sense of, the same way
+    // peer-serve does when it is asked to start a session there.
+    const path = hostId ? rootPath.trim() : checkFolder(rootPath).path;
     const existing = this.store.listWorkspaces();
     const wsName = uniqueWorkspaceName(
-      slugify(name || basename(abs)),
+      slugify(name || folderName(path)),
       existing.map((w) => w.name),
     );
     const ws: Workspace = {
       id: randomUUID(),
       name: wsName,
       kind: hostId ? 'remote' : 'local',
-      rootPath: abs,
+      rootPath: path,
       hostId,
       color: WORKSPACE_COLORS[existing.length % WORKSPACE_COLORS.length]!,
       createdAt: Date.now(),
@@ -307,13 +309,11 @@ export class Hub extends EventEmitter implements AgentApi {
     const next: { name?: string; rootPath?: string } = {};
 
     if (patch.rootPath !== undefined) {
-      const abs = resolve(patch.rootPath);
-      // Only a local folder can be checked from here; a remote one is the
-      // other machine's to know about, exactly as it is on create.
-      if (!ws.hostId && !existsSync(abs)) {
-        throw new Error(`folder does not exist: ${abs}`);
-      }
-      if (abs !== ws.rootPath) next.rootPath = abs;
+      // Only a local folder can be resolved and checked from here; a remote
+      // one is the other machine's to know about, exactly as it is on
+      // create.
+      const path = ws.hostId ? patch.rootPath.trim() : checkFolder(patch.rootPath).path;
+      if (path !== ws.rootPath) next.rootPath = path;
     }
 
     if (patch.name !== undefined) {
@@ -340,6 +340,20 @@ export class Hub extends EventEmitter implements AgentApi {
     const updated = this.store.getWorkspace(id)!;
     this.emit('workspace', updated);
     return updated;
+  }
+
+  /**
+   * Resolve and check a folder on whichever machine would own the workspace,
+   * before that workspace exists. The Add/Edit-workspace dialog's pre-flight:
+   * without it, a bad remote root was never checked at all (createWorkspace
+   * cannot check what it cannot resolve), and a bad local one was only
+   * checked after the dialog had already closed. One method either way, so
+   * the dialog does not need to know which kind of workspace it is asking
+   * about.
+   */
+  async checkHostFolder(hostId: string | null, path: string): Promise<{ path: string }> {
+    if (!hostId) return checkFolder(path);
+    return this.peers.checkFolder(hostId, path);
   }
 
   async removeWorkspace(id: string): Promise<void> {

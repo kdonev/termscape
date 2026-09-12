@@ -257,6 +257,14 @@ export const PeerRequest = z.discriminatedUnion('t', [
     cols: z.number().int().positive(),
     rows: z.number().int().positive(),
   }),
+  /**
+   * Whether a workspace folder makes sense there at all. Asked rather than
+   * assumed, for the same reason `listAgents` is: only that machine can
+   * resolve a path in its own platform's flavour and stat the result, so the
+   * Add/Edit-workspace dialog asks before a workspace pointing at it is even
+   * created, instead of an agent finding out at its first start.
+   */
+  z.object({ t: z.literal('checkFolder'), id: z.string(), path: z.string() }),
 ]);
 export type PeerRequest = z.infer<typeof PeerRequest>;
 
@@ -307,5 +315,11 @@ export type PeerResponse = z.infer<typeof PeerResponse>;
 /**
  * Bumped whenever the peer protocol or the DB schema changes shape. Hubs
  * refuse to connect across a mismatch rather than corrupting each other.
+ *
+ * 9: added `checkFolder`. Required, not cosmetic — `peer-serve.ts` drops a
+ * frame it cannot parse silently, so a peer older than this would leave a
+ * `checkFolder` request hanging forever instead of refusing it; the version
+ * gate is what turns that into an honest refusal at the handshake instead.
+ * Consequence: every already-joined machine has to re-run the installer.
  */
-export const PEER_SCHEMA_VERSION = 8;
+export const PEER_SCHEMA_VERSION = 9;

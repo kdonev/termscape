@@ -742,6 +742,65 @@ describe('running agents on an enrolled host', () => {
   it('will not try to dial a host that dials us', async () => {
     await expect(hubA.connectHost(hostId)).rejects.toThrow(/enrolled itself/i);
   });
+
+  /*
+   * The Add/Edit-workspace dialog's pre-flight: the canvas asking the actual
+   * owning machine, over the real peer link, rather than guessing here.
+   * These are what let a bad root be refused at the dialog instead of at the
+   * first agent start, which is what issue 15 reports.
+   */
+  describe('checking a folder on the host before a workspace is created', () => {
+    it("resolves and returns the peer's own path for one that exists", async () => {
+      const result = await hubA.checkHostFolder(hostId, homeB);
+      expect(result.path).toBe(homeB);
+    });
+
+    it('reports the peer\'s own reason for one that does not exist there', async () => {
+      await expect(hubA.checkHostFolder(hostId, join(homeB, 'no-such-folder'))).rejects.toThrow(
+        /does not exist/,
+      );
+    });
+
+    it('names the platform for a path only absolute on the other kind of machine', async () => {
+      // Hub B is a real process on this same test machine, so it runs the
+      // actual folders.ts check for whatever OS this machine is — a foreign
+      // shape is refused there exactly as folders.test.ts checks locally.
+      const foreign =
+        process.platform === 'win32' ? '/Users/test/office' : 'C:\\Users\\test\\office';
+      await expect(hubA.checkHostFolder(hostId, foreign)).rejects.toThrow(
+        process.platform === 'win32' ? /Linux or macOS/ : /Windows/,
+      );
+    });
+  });
+
+  it('fails a start with the peer\'s own reason rather than a cwd-glued path', async () => {
+    // Before this fix, `hostId: null` at the receiving end sent this through
+    // `resolve()` against the peer's cwd (the join installer's install
+    // directory, never a workspace root anyone meant) instead of refusing
+    // it, which is the second half of issue 15's corruption.
+    const missing = join(homeB, 'no-such-folder');
+    const ws = hubA.createWorkspace('badroot', missing, hostId);
+    await expect(hubA.startSession({ workspaceId: ws.id, profile: 'shell' })).rejects.toThrow(
+      missing,
+    );
+  });
+
+  it('refuses a foreign-shaped root over there instead of gluing it under the hub directory', async () => {
+    // The reported symptom itself: a path shape that is not absolute on the
+    // peer's platform used to be treated as one relative segment and glued
+    // under the peer's cwd, producing the unreadable
+    // "/Users/test/.termscape/hub/c:\\Users\\test\\dev\\office" of issue 15.
+    // Now the peer names the platform, and its own install directory appears
+    // nowhere in the answer.
+    const foreign =
+      process.platform === 'win32' ? '/Users/test/dev/office' : 'C:\\Users\\test\\dev\\office';
+    const ws = hubA.createWorkspace('foreignroot', foreign, hostId);
+    const start = hubA.startSession({ workspaceId: ws.id, profile: 'shell' });
+    await expect(start).rejects.toThrow(
+      process.platform === 'win32' ? /Linux or macOS/ : /Windows/,
+    );
+    await expect(start).rejects.not.toThrow(/\.termscape/);
+  });
 });
 
 describe('losing the link', () => {

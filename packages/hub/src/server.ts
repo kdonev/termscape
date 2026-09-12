@@ -524,6 +524,13 @@ export async function serve(opts: ServeOptions): Promise<ServeResult> {
         return;
       }
 
+      case 'checkFolder':
+        // Nothing to hand back beyond ok/err: the dialog already knows the
+        // path it asked about, and a throw here is turned into ack{ok:false}
+        // by handleClientMsg the same way any other refusal is.
+        await hub.checkHostFolder(msg.hostId ?? null, msg.path);
+        return;
+
       case 'createWorkspace':
         hub.createWorkspace(msg.name, msg.rootPath, msg.hostId ?? null);
         return;
