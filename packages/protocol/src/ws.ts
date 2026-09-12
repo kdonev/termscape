@@ -2,6 +2,7 @@ import { z } from 'zod';
 import {
   Host,
   Message,
+  Note,
   Session,
   Viewport,
   Workspace,
@@ -222,6 +223,16 @@ export const ClientMsg = z.discriminatedUnion('t', [
   // canvas layout
   z.object({ t: z.literal('moveWindow'), sessionId: z.string(), rect: WindowRect }),
   z.object({ t: z.literal('setViewport'), viewport: Viewport }),
+  /**
+   * Create or change a sticky note: move, resize, edit its text, or recolour
+   * it. One frame for all of it, same reasoning as `saveTemplate` - a note is
+   * a handful of fields with no separate identity for "just the text changed".
+   * Not ackable: nothing waits on a note write the way a dialog waits on a
+   * mutation, and echoing it back to the sender is exactly what must NOT
+   * happen (see server.ts `broadcastExcept`).
+   */
+  z.object({ t: z.literal('putNote'), note: Note }),
+  z.object({ t: z.literal('removeNote'), noteId: z.string() }),
 
   // hosts
   z.object({
@@ -340,6 +351,12 @@ export const HubState = z.object({
    * reviewer holding one link has no business learning that others exist.
    */
   shares: z.array(ShareInfo),
+  /**
+   * Sticky notes, free-floating on the canvas. Empty on a share-scoped
+   * socket, same as `shares` - a reviewer holding one link sees the one
+   * terminal it names, nothing else on the canvas.
+   */
+  notes: z.array(Note),
 });
 export type HubState = z.infer<typeof HubState>;
 
@@ -366,6 +383,13 @@ export const ServerMsg = z.discriminatedUnion('t', [
   z.object({ t: z.literal('hostRemoved'), hostId: z.string() }),
   /** The whole list, for the same reason `templatesChanged` sends its whole list. */
   z.object({ t: z.literal('sharesChanged'), shares: z.array(ShareInfo) }),
+  /**
+   * A note created, moved, resized, edited or recoloured - one event for all
+   * of it, mirroring `putNote`. Broadcast to every socket *except* the one
+   * that sent the write; see `broadcastExcept` in server.ts.
+   */
+  z.object({ t: z.literal('noteUpserted'), note: Note }),
+  z.object({ t: z.literal('noteRemoved'), noteId: z.string() }),
   // Deploy progress. A remote install rebuilds native modules and takes
   // minutes; without this the panel is a frozen button.
   z.object({ t: z.literal('hostLog'), hostId: z.string(), line: z.string() }),

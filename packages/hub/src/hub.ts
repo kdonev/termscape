@@ -13,6 +13,7 @@ import {
   type HostWorkspaceInfo,
   type Message,
   type Host,
+  type Note,
   type PeerAgent,
   type PeerRelayAsk,
   type Session,
@@ -61,6 +62,17 @@ const WORKSPACE_COLORS = [
 
 /** How many agents one workspace may hold, bounding runaway recursive spawns. */
 export const DEFAULT_SPAWN_CAP = 12;
+
+/**
+ * Floor on a note's size, applied on every write.
+ *
+ * The resize handle in the browser already clamps to this, but the write
+ * still goes through here: a message is a message, not a client's promise to
+ * have behaved, and a note collapsed to nothing is a note nobody can ever
+ * grab again to resize back.
+ */
+const MIN_NOTE_W = 120;
+const MIN_NOTE_H = 80;
 
 export interface HubOptions {
   dbPath?: string;
@@ -1021,6 +1033,37 @@ export class Hub extends EventEmitter implements AgentApi {
 
   setViewport(v: Viewport): void {
     this.store.saveViewport(v);
+  }
+
+  /* ----------------------------------------------------------------- notes */
+
+  /**
+   * Write a note straight to the db, no debounce.
+   *
+   * Windows debounce their layout writes (see `session/manager.ts`), and lose
+   * whichever drag was in flight if the hub is killed inside that window -
+   * `layout.test.ts` covers it, and `notes.test.ts` proves this does not
+   * repeat it. `setViewport` above already writes straight through for the
+   * same reason.
+   *
+   * Non-finite numbers are dropped rather than clamped to some default: a NaN
+   * or Infinity in x/y/w/h/z means the sender computed garbage, and the
+   * previous good rect is a safer answer than inventing one.
+   */
+  saveNote(note: Note): Note | null {
+    const finite = [note.x, note.y, note.w, note.h, note.z].every(Number.isFinite);
+    if (!finite) return null;
+    const clamped: Note = {
+      ...note,
+      w: Math.max(MIN_NOTE_W, note.w),
+      h: Math.max(MIN_NOTE_H, note.h),
+    };
+    this.store.saveNote(clamped);
+    return clamped;
+  }
+
+  removeNote(id: string): void {
+    this.store.removeNote(id);
   }
 
   /* --------------------------------------------------------------- shares */

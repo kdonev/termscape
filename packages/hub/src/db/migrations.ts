@@ -288,6 +288,26 @@ export const MIGRATIONS: Migration[] = [
       CREATE UNIQUE INDEX share_session_idx ON share(session_id);
     `,
   },
+  {
+    version: 10,
+    name: 'notes',
+    up: `
+      -- Sticky notes on the canvas (issue 4). Free-floating like the
+      -- viewport, not owned by a workspace or a session, so there is no
+      -- foreign key here at all - unlike window, which cascades off session.
+      CREATE TABLE note (
+        id         TEXT PRIMARY KEY,
+        x          REAL NOT NULL,
+        y          REAL NOT NULL,
+        w          REAL NOT NULL,
+        h          REAL NOT NULL,
+        z          INTEGER NOT NULL DEFAULT 0,
+        text       TEXT NOT NULL DEFAULT '',
+        color      TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+    `,
+  },
 ];
 
 export function runMigrations(db: Database): number {

@@ -6,6 +6,7 @@ import type {
   TemplateProposal,
   Host,
   Message,
+  Note,
   Session,
   ServerMsg,
   ShareInfo,
@@ -99,9 +100,24 @@ interface AppState {
   hostProfiles: Record<string, AgentProfileInfo[]>;
   /** Which sessions are shared, and the token each link carries. */
   shares: ShareInfo[];
+  /**
+   * Sticky notes, free-floating on the canvas. Not scoped to a workspace or a
+   * session and never sent to a peer hub - see the `Note` doc in the protocol.
+   */
+  notes: Note[];
   viewport: Viewport;
   flashes: MessageFlash[];
   selectedId: string | null;
+  /**
+   * Which note is selected, kept separate from `selectedId`.
+   *
+   * `selectedId` names a session and drives terminal focus and the Ctrl+2
+   * zoom - things a note has no equivalent of. Folding notes into it would
+   * mean every reader of `selectedId` (the terminal that grabs the keyboard
+   * on selection, `toggleMaximize`) now has to first check what kind of thing
+   * it points at. Selecting one clears the other; see `select`/`selectNote`.
+   */
+  selectedNoteId: string | null;
   /**
    * A request from outside the canvas to bring one window into view. The
    * canvas owns the viewport and the animation, so this is a request rather
@@ -129,6 +145,11 @@ interface AppState {
   setViewport: (v: Viewport) => void;
   moveWindow: (sessionId: string, rect: WindowRect) => void;
   select: (id: string | null) => void;
+  selectNote: (id: string | null) => void;
+  putNote: (note: Note) => void;
+  removeNote: (id: string) => void;
+  /** Create a note centred on a world point, put it, and select it. */
+  createNoteAt: (p: { x: number; y: number }) => void;
   requestFocus: (sessionId: string) => void;
   setPanelOpen: (open: boolean) => void;
   openDialog: (spec: DialogSpec) => void;
@@ -162,9 +183,11 @@ export const useStore = create<AppState>((set, get) => ({
   templateProposals: [],
   hostProfiles: {},
   shares: [],
+  notes: [],
   viewport: { panX: 0, panY: 0, zoom: 1 },
   flashes: [],
   selectedId: null,
+  selectedNoteId: null,
   focusRequest: null,
   panelOpen: false,
   dialog: null,
@@ -193,6 +216,7 @@ export const useStore = create<AppState>((set, get) => ({
           templateProposals: m.state.templateProposals,
           hostProfiles: m.state.hostProfiles,
           shares: m.state.shares,
+          notes: m.state.notes,
           viewport: m.state.viewport,
           // This arrives on every reconnect, not only the first, so it can
           // replace the session list under a selection made before the hub
@@ -200,6 +224,9 @@ export const useStore = create<AppState>((set, get) => ({
           // nothing draws any more.
           selectedId: m.state.sessions.some((x) => x.id === s.selectedId)
             ? s.selectedId
+            : null,
+          selectedNoteId: m.state.notes.some((n) => n.id === s.selectedNoteId)
+            ? s.selectedNoteId
             : null,
         }));
         return;
@@ -288,6 +315,21 @@ export const useStore = create<AppState>((set, get) => ({
         set({ shares: m.shares });
         return;
 
+      case 'noteUpserted':
+        // Arrives only from another socket - the hub never echoes a write
+        // back to its sender (see `broadcastExcept` in server.ts) - so this
+        // never overwrites an in-flight drag or an active caret with a stale
+        // copy of itself.
+        set((s) => ({ notes: upsert(s.notes, m.note) }));
+        return;
+
+      case 'noteRemoved':
+        set((s) => ({
+          notes: s.notes.filter((n) => n.id !== m.noteId),
+          selectedNoteId: s.selectedNoteId === m.noteId ? null : s.selectedNoteId,
+        }));
+        return;
+
       case 'hostLog':
         set((s) => ({
           hostLogs: {
@@ -357,10 +399,48 @@ export const useStore = create<AppState>((set, get) => ({
     get().client?.send({ t: 'moveWindow', sessionId, rect });
   },
 
-  select: (selectedId) => set({ selectedId }),
+  // Selecting a session and selecting a note are mutually exclusive - the
+  // canvas has one thing with the keyboard's attention at a time - so each
+  // clears the other rather than leaving a stale note ring or a stale
+  // terminal focus behind.
+  select: (selectedId) => set({ selectedId, selectedNoteId: null }),
+
+  selectNote: (selectedNoteId) => set({ selectedNoteId, selectedId: null }),
+
+  putNote: (note) => {
+    set((s) => ({ notes: upsert(s.notes, note) }));
+    get().client?.send({ t: 'putNote', note });
+  },
+
+  removeNote: (id) => {
+    set((s) => ({
+      notes: s.notes.filter((n) => n.id !== id),
+      selectedNoteId: s.selectedNoteId === id ? null : s.selectedNoteId,
+    }));
+    get().client?.send({ t: 'removeNote', noteId: id });
+  },
+
+  createNoteAt: (p) => {
+    const NOTE_W = 220;
+    const NOTE_H = 180;
+    const z = Math.max(0, ...get().notes.map((n) => n.z)) + 1;
+    const note: Note = {
+      id: crypto.randomUUID(),
+      x: p.x - NOTE_W / 2,
+      y: p.y - NOTE_H / 2,
+      w: NOTE_W,
+      h: NOTE_H,
+      z,
+      text: '',
+      color: 'yellow',
+      updatedAt: Date.now(),
+    };
+    get().putNote(note);
+    get().selectNote(note.id);
+  },
 
   requestFocus: (sessionId) =>
-    set({ selectedId: sessionId, focusRequest: { sessionId, at: Date.now() } }),
+    set({ selectedId: sessionId, selectedNoteId: null, focusRequest: { sessionId, at: Date.now() } }),
 
   openDialog: (dialog) => set({ dialog }),
   closeDialog: () => set((s) => (s.dialog === null ? s : { dialog: null })),

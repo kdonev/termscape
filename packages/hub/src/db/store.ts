@@ -2,6 +2,7 @@ import {
   makeAddress,
   type Host,
   type Message,
+  type Note,
   type Session,
   type ShareInfo,
   type Viewport,
@@ -695,5 +696,39 @@ export class Store {
          VALUES (@id, @fromAddr, @toAddr, @body, @sentAt, @deliveredAt, @deliveryState, @error)`,
       )
       .run(m);
+  }
+
+  /* ----------------------------------------------------------------- notes */
+
+  /** Ordered by z so a freshly reopened canvas stacks them the way it left them. */
+  listNotes(): Note[] {
+    const rows = this.db.prepare('SELECT * FROM note ORDER BY z').all() as any[];
+    return rows.map((r) => ({
+      id: r.id,
+      x: r.x,
+      y: r.y,
+      w: r.w,
+      h: r.h,
+      z: r.z,
+      text: r.text,
+      color: r.color,
+      updatedAt: r.updated_at,
+    }));
+  }
+
+  /** Create or replace one, wholesale - a note is a handful of fields sent as one. */
+  saveNote(n: Note): void {
+    this.db
+      .prepare(
+        `INSERT INTO note (id, x, y, w, h, z, text, color, updated_at)
+         VALUES (@id, @x, @y, @w, @h, @z, @text, @color, @updatedAt)
+         ON CONFLICT(id) DO UPDATE SET
+           x=@x, y=@y, w=@w, h=@h, z=@z, text=@text, color=@color, updated_at=@updatedAt`,
+      )
+      .run(n);
+  }
+
+  removeNote(id: string): void {
+    this.db.prepare('DELETE FROM note WHERE id = ?').run(id);
   }
 }

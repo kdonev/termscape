@@ -246,6 +246,76 @@ a.btn { text-decoration: none; display: inline-block; }
   background: linear-gradient(135deg, transparent 50%, var(--border) 50%);
 }
 
+/* -------------------------------------------------------------- note */
+
+/*
+ * A sticky note is a canvas object, not a window - it has no address, no
+ * status dot, nothing wired to a session - so it gets its own small styling
+ * rather than reusing .window's. Paper tones rather than the app's dark
+ * palette: it reads as paper on a dark desk, and dark text is what makes that
+ * legible, unlike every other panel on the canvas.
+ */
+.note {
+  position: absolute;
+  top: 0; left: 0;
+  display: flex;
+  flex-direction: column;
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  color: #2b2b2b;
+}
+.note.selected { box-shadow: 0 0 0 2px var(--accent), 0 10px 30px rgba(0, 0, 0, 0.55); }
+
+.note[data-color="yellow"] { background: #f5e08c; }
+.note[data-color="pink"]   { background: #f3b6c8; }
+.note[data-color="green"]  { background: #b9e0a5; }
+.note[data-color="blue"]   { background: #a9d3ec; }
+
+.note-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  cursor: grab;
+  user-select: none;
+  flex: 0 0 auto;
+}
+.note-bar:active { cursor: grabbing; }
+.note-bar .btn {
+  padding: 1px 6px;
+  font-size: 11px;
+  /* .btn is styled for the dark chrome elsewhere; on paper it needs its own
+     ink rather than inheriting the app's light-on-dark text colour. */
+  color: #2b2b2b;
+  border-color: rgba(0, 0, 0, 0.25);
+}
+
+.note-swatches { display: flex; gap: 4px; }
+.note-swatch {
+  width: 14px; height: 14px;
+  border-radius: 50%;
+  border: 1px solid rgba(0, 0, 0, 0.35);
+  cursor: pointer;
+  padding: 0;
+}
+.note-swatch[data-color="yellow"] { background: #f5e08c; }
+.note-swatch[data-color="pink"]   { background: #f3b6c8; }
+.note-swatch[data-color="green"]  { background: #b9e0a5; }
+.note-swatch[data-color="blue"]   { background: #a9d3ec; }
+.note-swatch.active { border-color: #2b2b2b; }
+
+.note-text {
+  flex: 1;
+  min-height: 0;
+  resize: none;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: #2b2b2b;
+  font: inherit;
+  padding: 0 8px 8px;
+}
+
 /* ------------------------------------------------------- message log */
 
 .msg-log {

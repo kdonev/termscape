@@ -4,6 +4,7 @@ import type { Session, Viewport, Workspace } from '@termscape/protocol';
 import { useStore } from '../state/store.js';
 import { sessionsIn } from '../state/tree.js';
 import { TerminalWindow } from '../window/TerminalWindow.js';
+import { StickyNote } from './StickyNote.js';
 import { MessageEdges } from './MessageEdges.js';
 import {
   PINCH_GAP_MS,
@@ -95,14 +96,28 @@ export function Canvas() {
   const settleRef = useRef<number | null>(null);
   const [devicePixelRatio, setDevicePixelRatio] = useState(dpr);
 
-  const { sessions, workspaces, viewport, setViewport, selectedId, select, setPanelOpen } = useStore(
+  const {
+    sessions,
+    workspaces,
+    notes,
+    viewport,
+    setViewport,
+    selectedId,
+    selectedNoteId,
+    select,
+    createNoteAt,
+    setPanelOpen,
+  } = useStore(
     useShallow((s) => ({
       sessions: s.sessions,
       workspaces: s.workspaces,
+      notes: s.notes,
       viewport: s.viewport,
       setViewport: s.setViewport,
       selectedId: s.selectedId,
+      selectedNoteId: s.selectedNoteId,
       select: s.select,
+      createNoteAt: s.createNoteAt,
       setPanelOpen: s.setPanelOpen,
     })),
   );
@@ -251,6 +266,40 @@ export function Canvas() {
     setPanning(false);
     markInteracting();
   }, [markInteracting]);
+
+  /* ------------------------------------------------------------- notes */
+
+  /**
+   * Double-click empty canvas to drop a note, centred on the cursor.
+   *
+   * `.canvas` itself is only the hit target when `.world` does not cover it -
+   * true at rest whenever the zoomed world is smaller than the viewport - so
+   * a double-click landing on `.world` (empty space between windows) has to
+   * be accepted too. Anything deeper - a window, a note, the workspace frame
+   * label - has its own element in between and is excluded by construction.
+   */
+  const onDoubleClick = useCallback(
+    (e: React.MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (target !== e.currentTarget && !target.classList.contains('world')) return;
+      const el = ref.current;
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      const world = screenToWorld(
+        { x: e.clientX - rect.left, y: e.clientY - rect.top },
+        viewportRef.current,
+      );
+      createNoteAt(world);
+      // `selectNote` inside createNoteAt runs synchronously, so the new id is
+      // already current by the time this line runs.
+      const id = useStore.getState().selectedNoteId;
+      freshNoteIdRef.current = id;
+      setTimeout(() => {
+        if (freshNoteIdRef.current === id) freshNoteIdRef.current = null;
+      }, 0);
+    },
+    [createNoteAt],
+  );
 
   /* -------------------------------------------------- viewport commands */
 
@@ -553,7 +602,10 @@ export function Canvas() {
       const stream = wheelStream(streamRef.current, {
         now: performance.now(),
         zooming,
-        overTerminal: !!(e.target as Element | null)?.closest?.('.term-host'),
+        // A note's textarea scrolls a long note the same way a terminal
+        // scrolls its own buffer: plain wheel stays with it, Ctrl-wheel still
+        // belongs to the canvas.
+        overTerminal: !!(e.target as Element | null)?.closest?.('.term-host, .note-text'),
       });
       streamRef.current = stream;
       if (!zooming && stream.owner === 'terminal') return;
@@ -597,9 +649,12 @@ export function Canvas() {
       // the native element closes itself on it, and the canvas must not also
       // unwind a level behind it.
       if (useStore.getState().dialog) return;
-      // Never steal keys from a focused terminal.
+      // Never steal keys from a focused terminal, or from a note's textarea -
+      // without this, Escape and Ctrl+0/1/2 got stolen out from under
+      // whoever was mid-sentence in a note.
       const inTerminal = (e.target as HTMLElement)?.closest?.('.term-host');
-      if (inTerminal) return;
+      const inField = (e.target as HTMLElement)?.closest?.('textarea, input');
+      if (inTerminal || inField) return;
 
       if (e.key === '0' && (e.ctrlKey || e.metaKey)) {
         e.preventDefault();
@@ -607,9 +662,12 @@ export function Canvas() {
       }
       if (e.key === '1' && (e.ctrlKey || e.metaKey)) {
         e.preventDefault();
+        // Notes are canvas objects too, so "fit everything" has to mean
+        // everything - a note parked off past the last window would
+        // otherwise be silently left out of frame.
         glideTo(
           fitTo(
-            sessions.map((s) => s.window),
+            [...sessions.map((s) => s.window), ...notes],
             size.w,
             size.h,
           ),
@@ -630,7 +688,7 @@ export function Canvas() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [sessions, size, glideTo, select, selectedId, toggleMaximize, setPanelOpen]);
+  }, [sessions, notes, size, glideTo, select, selectedId, toggleMaximize, setPanelOpen]);
 
   /**
    * The window whose button should offer to go back, rather than the one we
@@ -668,6 +726,24 @@ export function Canvas() {
     [sessions, visible],
   );
 
+  /** Same culling as windows get, and the same reason: a note off screen costs
+   *  nothing, whatever the zoom. */
+  const notesOnScreen = useMemo(
+    () => notes.filter((n) => rectsIntersect(visible, n)),
+    [notes, visible],
+  );
+
+  /**
+   * Which note to open with the keyboard already in its textarea, rather than
+   * making the double-click do that itself.
+   *
+   * Cleared shortly after the note has had its one chance to grab focus on
+   * mount (StickyNote's autoFocus effect runs once, on creation) - a note
+   * that scrolls off screen and back later must not re-steal the keyboard
+   * just because this ref still names it.
+   */
+  const freshNoteIdRef = useRef<string | null>(null);
+
   /* --------------------------------------------- workspace grouping */
 
   /**
@@ -699,6 +775,7 @@ export function Canvas() {
       onPointerMove={onPointerMove}
       onPointerUp={endPan}
       onPointerCancel={endPan}
+      onDoubleClick={onDoubleClick}
     >
       {/*
         `will-change: transform` is applied only while a gesture is in flight.
@@ -747,6 +824,16 @@ export function Canvas() {
             selected={selectedId === session.id}
             maximized={maximizedId === session.id}
             onMaximize={toggleMaximize}
+          />
+        ))}
+
+        {notesOnScreen.map((note) => (
+          <StickyNote
+            key={note.id}
+            note={note}
+            zoom={viewport.zoom}
+            selected={selectedNoteId === note.id}
+            autoFocus={freshNoteIdRef.current === note.id}
           />
         ))}
       </div>

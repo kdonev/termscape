@@ -187,6 +187,48 @@ describe('store round-trips', () => {
     db.close();
   });
 
+  it('round-trips a note: save, update, and remove', () => {
+    const { db, store } = seed();
+    const now = Date.now();
+    store.saveNote({
+      id: 'note1', x: 5, y: 6, w: 220, h: 180, z: 0,
+      text: 'hello', color: 'yellow', updatedAt: now,
+    });
+    expect(store.listNotes()).toEqual([
+      { id: 'note1', x: 5, y: 6, w: 220, h: 180, z: 0, text: 'hello', color: 'yellow', updatedAt: now },
+    ]);
+
+    // Upsert, not duplicate - moving, resizing, retyping and recolouring are
+    // all the same write.
+    store.saveNote({
+      id: 'note1', x: 50, y: 60, w: 300, h: 240, z: 2,
+      text: 'edited', color: 'blue', updatedAt: now + 1,
+    });
+    const notes = store.listNotes();
+    expect(notes).toHaveLength(1);
+    expect(notes[0]).toMatchObject({ x: 50, y: 60, w: 300, h: 240, text: 'edited', color: 'blue' });
+
+    store.removeNote('note1');
+    expect(store.listNotes()).toEqual([]);
+    db.close();
+  });
+
+  it('keeps a note across a db reopen', () => {
+    const path = join(dir, 'state.db');
+    const db1 = openDb(path);
+    new Store(db1).saveNote({
+      id: 'n1', x: 1, y: 2, w: 220, h: 180, z: 0,
+      text: 'sticky', color: 'green', updatedAt: 42,
+    });
+    db1.close();
+
+    const db2 = openDb(path);
+    expect(new Store(db2).listNotes()).toEqual([
+      { id: 'n1', x: 1, y: 2, w: 220, h: 180, z: 0, text: 'sticky', color: 'green', updatedAt: 42 },
+    ]);
+    db2.close();
+  });
+
   it('records message delivery outcomes, including failures', () => {
     const { db, store } = seed();
     store.insertMessage({

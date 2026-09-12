@@ -72,6 +72,32 @@ export const Viewport = z.object({
 });
 export type Viewport = z.infer<typeof Viewport>;
 
+/** The four preset paper colours a note can be. No custom colour picker. */
+export const NoteColor = z.enum(['yellow', 'pink', 'green', 'blue']);
+export type NoteColor = z.infer<typeof NoteColor>;
+
+/**
+ * A sticky note on the canvas.
+ *
+ * Free-floating: unlike a `Session`, it belongs to no workspace and is never
+ * sent to a peer hub - it is a canvas object, like the viewport, not a piece
+ * of an agent's world. The client mints `id` with `crypto.randomUUID()` on
+ * creation, so a note never needs the hub's permission to exist.
+ */
+export const Note = z.object({
+  id: z.string(),
+  x: z.number(),
+  y: z.number(),
+  w: z.number(),
+  h: z.number(),
+  z: z.number(),
+  /** Plain text, no formatting. Bounded so a pasted essay cannot bloat the db. */
+  text: z.string().max(20_000),
+  color: NoteColor,
+  updatedAt: z.number(),
+});
+export type Note = z.infer<typeof Note>;
+
 export const Session = z.object({
   id: z.string(),
   workspaceId: z.string(),

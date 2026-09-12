@@ -260,6 +260,25 @@ export async function serve(opts: ServeOptions): Promise<ServeResult> {
       send(ws, msg);
     }
   };
+  /**
+   * Like `broadcast`, but never back to `origin`.
+   *
+   * Notes are the one thing on the canvas that changes on every keystroke and
+   * every drag frame, sent straight through with no debounce (see
+   * `hub.saveNote`). Echoing the write back to the socket that made it would
+   * land under an active drag or an active caret a moment after it moved,
+   * jittering the drag rect or resetting the textarea's cursor position - the
+   * exact bug `moveWindow` never has to worry about, because nothing ever
+   * broadcasts a window move at all.
+   */
+  const broadcastExcept = (origin: import('ws').WebSocket, msg: ServerMsg): void => {
+    for (const ws of clients) {
+      if (ws === origin) continue;
+      const scope = scopes.get(ws);
+      if (typeof scope === 'string' && !scopedBroadcast(msg, scope)) continue;
+      send(ws, msg);
+    }
+  };
 
   const snapshotState = (): HubState => ({
     hubVersion: HUB_VERSION,
@@ -282,6 +301,7 @@ export async function serve(opts: ServeOptions): Promise<ServeResult> {
     templateProposals: hub.pendingProposals(),
     hostProfiles: hub.peers.agentsByHost(),
     shares: hub.shares.list(),
+    notes: hub.store.listNotes(),
   });
 
   /**
@@ -313,6 +333,9 @@ export async function serve(opts: ServeOptions): Promise<ServeResult> {
       templateProposals: [],
       hostProfiles: {},
       shares: [],
+      // A reviewer holding one share link sees the one terminal it names,
+      // nothing else on the canvas - notes included.
+      notes: [],
     };
   };
 
@@ -760,6 +783,21 @@ export async function serve(opts: ServeOptions): Promise<ServeResult> {
 
       case 'setViewport':
         hub.setViewport(msg.viewport);
+        return;
+
+      case 'putNote': {
+        // Broadcast the note as the hub clamped it, not as the client sent
+        // it - a peer browser applying the raw message would otherwise never
+        // see the size floor take effect. A non-finite write is silently
+        // dropped (see hub.saveNote) rather than broadcast at all.
+        const saved = hub.saveNote(msg.note);
+        if (saved) broadcastExcept(socket, { t: 'noteUpserted', note: saved });
+        return;
+      }
+
+      case 'removeNote':
+        hub.removeNote(msg.noteId);
+        broadcastExcept(socket, { t: 'noteRemoved', noteId: msg.noteId });
         return;
 
       case 'addHost': {
