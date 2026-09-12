@@ -312,6 +312,7 @@ export class SessionManager extends EventEmitter {
         settings_path: w.settingsPath,
         gemini_settings_path: w.geminiSettingsPath,
         opencode_config: w.opencodeConfig,
+        kilocode_config_path: w.kilocodeConfigPath,
         mcp_url: `${this.hubOrigin}/mcp`,
         /*
          * Only ever expanded into a profile's `env`, never its `args`. A CLI

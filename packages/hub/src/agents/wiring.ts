@@ -43,6 +43,14 @@ export interface WiringOutput {
    * it, so their models, themes and their own MCP servers survive the session.
    */
   opencodeConfig: string;
+  /**
+   * One more config file for Kilo, named by `KILO_CONFIG` and appended last
+   * to the list it already layers - the project's kilo.json, then the global
+   * ~/.config/kilo/kilo.json. The layers are deep-merged, so this file holds
+   * only what the hub is adding: the MCP server, and the brief under
+   * `instructions`. The user's own config is neither read nor rewritten.
+   */
+  kilocodeConfigPath: string;
 }
 
 /**
@@ -67,6 +75,7 @@ export function writeWiring(input: WiringInput): WiringOutput {
   const settingsPath = join(dir, 'settings.json');
   const briefPath = briefFileFor(input.sessionId);
   const geminiSettingsPath = join(dir, 'gemini-settings.json');
+  const kilocodeConfigPath = join(dir, 'kilo.json');
   const mcpUrl = `${input.hubOrigin}/mcp`;
   /*
    * Not written anywhere. It is handed to opencode in the environment, which
@@ -94,7 +103,14 @@ export function writeWiring(input: WiringInput): WiringOutput {
   // unwired one gets only the brief: it has no endpoint to be pointed at, and
   // a config naming tools it cannot call is a promise to nobody.
   if (input.profile.mcp) {
-    writeWiredFiles(input, { mcpConfigPath, settingsPath, geminiSettingsPath, mcpUrl });
+    writeWiredFiles(input, {
+      mcpConfigPath,
+      settingsPath,
+      geminiSettingsPath,
+      kilocodeConfigPath,
+      briefPath,
+      mcpUrl,
+    });
   }
 
   writeFileSync(briefPath, renderBrief(input), { mode: 0o600 });
@@ -106,6 +122,7 @@ export function writeWiring(input: WiringInput): WiringOutput {
     briefPath,
     geminiSettingsPath,
     opencodeConfig,
+    kilocodeConfigPath,
   };
 }
 
@@ -116,10 +133,13 @@ function writeWiredFiles(
     mcpConfigPath: string;
     settingsPath: string;
     geminiSettingsPath: string;
+    kilocodeConfigPath: string;
+    briefPath: string;
     mcpUrl: string;
   },
 ): void {
-  const { mcpConfigPath, settingsPath, geminiSettingsPath, mcpUrl } = paths;
+  const { mcpConfigPath, settingsPath, geminiSettingsPath, kilocodeConfigPath, briefPath, mcpUrl } =
+    paths;
 
   // One streamable-HTTP MCP server. The bearer token is what identifies this
   // agent to the hub, so this file is secret.
@@ -236,6 +256,41 @@ function writeWiredFiles(
             description: 'Termscape canvas: your address, your peers, messaging.',
           },
         },
+      },
+      null,
+      2,
+    ),
+  );
+
+  /*
+   * Kilo's layer, and the only one of the four that carries the brief as well
+   * as the server. It holds nothing but what the hub is adding: `KILO_CONFIG`
+   * appends this file to the end of the list Kilo already layers, and the
+   * layers are deep-merged, so the user's own `mcp` entries and their own
+   * `instructions` are still there with ours beside them. Reading their config
+   * to merge it ourselves would only duplicate what Kilo does, and duplicate
+   * their instruction files while doing it.
+   *
+   * `{env:TERMSCAPE_TOKEN}` is Kilo's substitution syntax, not a literal. The
+   * token is handed over in the environment instead, so unlike the three
+   * files above this one has no secret in it - it is still written 0600,
+   * because it names the brief and the brief is this agent's.
+   */
+  writePrivate(
+    kilocodeConfigPath,
+    JSON.stringify(
+      {
+        mcp: {
+          termscape: {
+            type: 'remote',
+            url: mcpUrl,
+            headers: { Authorization: 'Bearer {env:TERMSCAPE_TOKEN}' },
+          },
+        },
+        // Kilo has no flag that appends to its system prompt; this is the
+        // config key that does, and an absolute path from a config the
+        // environment named is loaded as trusted.
+        instructions: [briefPath],
       },
       null,
       2,

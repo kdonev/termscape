@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
-import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -58,6 +58,7 @@ const varsFor = (w: ReturnType<typeof wire>) => ({
   brief_path: w.briefPath,
   gemini_settings_path: w.geminiSettingsPath,
   opencode_config: w.opencodeConfig,
+  kilocode_config_path: w.kilocodeConfigPath,
   mcp_url: `${HUB}/mcp`,
   token: TOKEN,
 });
@@ -186,6 +187,105 @@ describe('opencode', () => {
     // no config at all, and detection runs on machines whose owner may never
     // have run opencode by hand. An empty config is still a config.
     expect(opencode.probeEnv).toEqual({ OPENCODE_CONFIG_CONTENT: '{}' });
+  });
+});
+
+describe('kilocode', () => {
+  const kilocode = BUILTIN_PROFILES.kilocode!;
+
+  it('starts the TUI bare and carries everything in one layered config file', () => {
+    const w = wire();
+    // No flags at all. Every invented flag this profile could have taken was
+    // checked against `kilo --help` and `kilo run --help`; the ones that
+    // exist are on `run`, not on the TUI.
+    expect(kilocode.args).toEqual([]);
+    expect(templateAll([kilocode.env.KILO_CONFIG!], varsFor(w))).toEqual([w.kilocodeConfigPath]);
+    expect(w.kilocodeConfigPath).toContain('sess-1');
+  });
+
+  it('names the brief under instructions, having no flag that appends one', () => {
+    // Kilo's top-level parser is not strict: `--append-system-prompt-file`
+    // is accepted, ignored and exits 0, so an agent briefed that way would
+    // launch with no brief and no error. `instructions` is the real route.
+    const w = wire();
+    const cfg = JSON.parse(readFileSync(w.kilocodeConfigPath, 'utf8'));
+    expect(cfg.instructions).toEqual([w.briefPath]);
+    expect(kilocode.args.join(' ')).not.toContain('append-system-prompt');
+    // Still `flag` rather than `typed`: the brief is in the system prompt
+    // before the first turn, which is what the value promises.
+    expect(briefMode(kilocode)).toBe('flag');
+  });
+
+  it('keeps the bearer token out of the config file and in the environment', () => {
+    const w = wire();
+    const raw = readFileSync(w.kilocodeConfigPath, 'utf8');
+    const cfg = JSON.parse(raw);
+    expect(cfg.mcp.termscape.type).toBe('remote');
+    expect(cfg.mcp.termscape.url).toBe(`${HUB}/mcp`);
+    // `{env:...}` is Kilo's own substitution, so the file names the variable
+    // and never the secret - and the variable has to actually be exported,
+    // which is the half that is easy to forget.
+    expect(cfg.mcp.termscape.headers.Authorization).toBe('Bearer {env:TERMSCAPE_TOKEN}');
+    expect(raw).not.toContain(TOKEN);
+    expect(templateAll([kilocode.env.TERMSCAPE_TOKEN!], varsFor(w))).toEqual([TOKEN]);
+  });
+
+  it('leaves the user config alone rather than merging it in', () => {
+    // `KILO_CONFIG` is appended last to the list Kilo already layers, and the
+    // layers are deep-merged. Copying the user's config into ours would only
+    // repeat what Kilo does - and would duplicate their instruction files,
+    // because instruction lists concatenate across layers.
+    writeFileSync(
+      join(dir, 'kilo.json'),
+      JSON.stringify({ model: 'kilo/~anthropic/claude-opus-latest', instructions: ['USER.md'] }),
+    );
+
+    const cfg = JSON.parse(readFileSync(wire().kilocodeConfigPath, 'utf8'));
+    expect(cfg.model).toBeUndefined();
+    expect(cfg.instructions).not.toContain('USER.md');
+    expect(Object.keys(cfg).sort()).toEqual(['instructions', 'mcp']);
+  });
+
+  it('probes without leaving a config file behind', () => {
+    // The opposite variable, and the opposite meaning: KILO_CONFIG_CONTENT
+    // replaces the effective config instead of layering onto it. Wrong for a
+    // session, right for a probe on a machine whose owner may never have run
+    // Kilo by hand.
+    expect(kilocode.probeEnv).toEqual({ KILO_CONFIG_CONTENT: '{}' });
+  });
+
+  it('asks the CLI for its models rather than declaring a list', () => {
+    // `kilo models` prints one provider/model per line, the same shape
+    // opencode answers with, so detection reads it directly.
+    expect(kilocode.modelsArgs).toEqual(['models']);
+    expect(kilocode.models).toBeUndefined();
+    expect(kilocode.modelArgs).toEqual(['-m', '{{model}}']);
+  });
+
+  it('takes no effort and is not resumable, and says so by declaring neither', () => {
+    // `--variant` lives under `kilo run`, not on the TUI - the same split
+    // opencode has. A template asking for an effort is refused at load.
+    expect(kilocode.effortArgs).toBeUndefined();
+    expect(kilocode.efforts).toBeUndefined();
+    // `--session` wants an id Kilo mints itself, and `--continue` resolves to
+    // the newest session in the cwd, which is the wrong agent once a
+    // workspace holds two.
+    expect(kilocode.resumeArgs).toBeUndefined();
+  });
+
+  it('writes no config at all for a profile that is not wired', () => {
+    const unwired = { ...kilocode, id: 'plain', mcp: false, brief: 'typed' as const };
+    const w = writeWiring({
+      sessionId: 'sess-3',
+      address: 'crew/plain',
+      workspace: 'crew',
+      cwd: dir,
+      profile: unwired,
+      token: TOKEN,
+      hubOrigin: HUB,
+      peers: [],
+    });
+    expect(existsSync(w.kilocodeConfigPath)).toBe(false);
   });
 });
 

@@ -199,10 +199,10 @@ text arriving as `[from <address>] ...` is a colleague rather than the human.
 ## Agent profiles
 
 An agent CLI is configuration, not code. Built-ins are `claude`, `codex`,
-`gemini`, `opencode` and `shell`.
+`gemini`, `kilocode`, `opencode` and `shell`.
 
 Every one of them except `shell` is wired to the hub's MCP endpoint: each gets an
-address, a brief and the `send_message` tool set. They arrive there by four
+address, a brief and the `send_message` tool set. They arrive there by five
 different routes, because no two of these CLIs configure an MCP server the same
 way — and **none of them writes to a file you own**, so there is nothing left
 behind when a session ends or when the hub is killed rather than stopped.
@@ -210,6 +210,7 @@ behind when a session ends or when the hub is killed rather than stopped.
 | agent | how it reaches the hub | brief | resume |
 | --- | --- | --- | --- |
 | `claude` | `--mcp-config` on a generated file | `--append-system-prompt-file` | `--resume <uuid>` |
+| `kilocode` | `KILO_CONFIG` at a generated file, layered under yours | `instructions` in that file | restarts clean |
 | `codex` | `-c mcp_servers.…` overrides, one run only | typed in at startup | restarts clean |
 | `gemini` | `GEMINI_CLI_SYSTEM_SETTINGS_PATH` at a generated file | typed in at startup | restarts clean |
 | `opencode` | `OPENCODE_CONFIG_CONTENT`, no file anywhere | typed in at startup | restarts clean |
@@ -226,6 +227,15 @@ Two details worth knowing, because both are easy to get wrong:
 - **Codex's bearer token goes in the environment, never `-c`.** Config
   overrides land in the command line, where any other user on the machine can
   read them. `bearer_token_env_var` exists precisely for this.
+- **Kilo's config variable is the opposite of opencode's.** They look alike
+  and behave inversely: `OPENCODE_CONFIG_CONTENT` merges, `KILO_CONFIG_CONTENT`
+  *replaces*, so handing Kilo an MCP section that way would cost the user every
+  provider and model they had configured. `KILO_CONFIG` instead names one more
+  file, appended last to the list Kilo already layers and deep-merges — your
+  `mcp` entries keep their keys beside `termscape`, and your instruction files
+  are still loaded alongside the brief. Kilo also has no flag that appends to
+  its system prompt, which is why the brief is named under `instructions` in
+  that same file rather than on the command line.
 - **opencode is configured entirely from the environment.** Its config is
   handed over as a string, merged with your own rather than replacing it, so
   your models, themes and your own MCP servers survive the session. Note that
@@ -345,7 +355,7 @@ where the error reads like the hub is broken.
   naming the command that was not found — rather than vanishing, which looks
   like the config was ignored.
 - Models are enumerated where the CLI can be asked (`opencode models` returns
-  a few hundred) and declared in the profile where it cannot. Claude Code has
+  a few hundred, `kilo models` around a hundred) and declared in the profile where it cannot. Claude Code has
   no listing command; its `--help` documents the aliases instead, and it takes
   a full model name as readily as an alias. Codex is declared too, for a
   different reason: `codex debug models` does render the real catalog, but it

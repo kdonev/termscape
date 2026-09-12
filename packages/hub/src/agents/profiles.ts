@@ -24,9 +24,13 @@ export interface AgentProfile {
   /**
    * How the brief reaches the agent.
    *
-   * `flag` - the profile's own args point at `{{brief_path}}`, the way Claude
-   * Code's `--append-system-prompt-file` does. The brief is part of the
-   * system prompt and the agent never sees it as a turn.
+   * `flag` - the brief reaches the system prompt before the first turn, so
+   * the agent never sees it as one. Usually that is a flag in the profile's
+   * own args pointing at `{{brief_path}}`, the way Claude Code's
+   * `--append-system-prompt-file` does; Kilo has no such flag and names the
+   * same file under `instructions` in the config the hub generates for it,
+   * which arrives at the same place by a different road. What the value
+   * promises is the timing, not the mechanism.
    *
    * `typed` - the CLI has no way to *append* to its system prompt, so the
    * brief is typed into the terminal once the CLI is up, ahead of any opening
@@ -149,6 +153,17 @@ function defaultShell(): string {
  *   `opencode mcp add` - which does write to the user's file, and ignores
  *   `OPENCODE_CONFIG` when it does - and mistaking that command for the only
  *   way in.
+ * - **Kilo** is an opencode fork whose variable of the same shape means the
+ *   opposite: `KILO_CONFIG_CONTENT` *replaces* the config rather than merging
+ *   with it. `KILO_CONFIG` is the one to use - it appends one more file to
+ *   the list Kilo already layers and deep-merges, so a session adds its
+ *   server and its brief on top of the user's config without reading it.
+ *   Verified against @kilocode/cli 7.5.16, which is also how three flags that
+ *   read like they should exist turned out not to: Kilo has no
+ *   `--append-system-prompt-file` (the brief goes under `instructions` in
+ *   that config), and `--variant` and `--session` are `kilo run` options
+ *   rather than top-level ones. Its parser accepts an unknown top-level flag
+ *   and exits 0, so each of those would have failed silently.
  *
  * `shell` and `powershell` are the two profiles left that are not agents, and
  * they are not agents in a way no flag can fix: they run a shell, so text
@@ -239,6 +254,81 @@ export const BUILTIN_PROFILES: Record<string, AgentProfile> = {
     // No effortArgs on purpose: `--variant` is documented under `opencode run`
     // and is not a top-level option, so the TUI this profile starts does not
     // take one. A template asking for an effort here is refused at load.
+  },
+  kilocode: {
+    id: 'kilocode',
+    description: 'Kilo Code CLI, wired to the hub MCP endpoint',
+    command: 'kilo',
+    // Bare, which is its default subcommand and starts the TUI. `kilo run` is
+    // the one-shot form and is not what a window on the canvas wants.
+    args: [],
+    /*
+     * Kilo is an opencode fork and reaches the hub by a fourth route again,
+     * because the variable opencode uses has the opposite meaning here.
+     *
+     * `KILO_CONFIG` names one more config file, appended *last* to the list
+     * Kilo already layers - the project's own kilo.json, then the global
+     * ~/.config/kilo/kilo.json - and the layers are deep-merged. So the file
+     * this points at adds our MCP server and our brief on top of the user's
+     * config without the hub reading or rewriting a byte of it: their `mcp`
+     * entries keep their own keys beside `termscape`, their models and themes
+     * survive, and their `instructions` list simply gains one entry.
+     *
+     * The token is not in that file. It goes in the environment, and the file
+     * refers to it as `{env:TERMSCAPE_TOKEN}` - Kilo's own substitution
+     * syntax, verified resolving against a live `kilo debug config`. Same
+     * reasoning as Codex's `bearer_token_env_var`, with one more benefit
+     * here: nothing secret is written to disk at all.
+     */
+    env: {
+      KILO_CONFIG: '{{kilocode_config_path}}',
+      TERMSCAPE_TOKEN: '{{token}}',
+    },
+    /*
+     * `KILO_CONFIG_CONTENT` is the other one, and it *replaces* the effective
+     * config rather than layering onto it - which is exactly wrong for a
+     * session and exactly right for a probe. `kilo --version` and
+     * `kilo models` need no config, and this stops Kilo writing a default one
+     * on a machine whose owner may never have run it by hand.
+     */
+    probeEnv: { KILO_CONFIG_CONTENT: '{}' },
+    mcp: true,
+    /*
+     * `flag` without a flag. Kilo has no `--append-system-prompt-file`; what
+     * it has is `instructions` in config, a list of files folded into the
+     * system prompt. The brief is named there, in the same generated config
+     * that carries the MCP server, so it arrives as context and the agent
+     * never sees it as a turn - which is the whole of what `flag` means to
+     * the hub.
+     *
+     * Worth saying why this is not `typed`: Kilo's top-level parser is not
+     * strict, so an invented flag is accepted, ignored, and exits 0. An agent
+     * briefed by a flag that does not exist launches with no brief and no
+     * error, which is the failure this profile is written to avoid.
+     */
+    brief: 'flag',
+    status: 'heuristic',
+    inject: 'bracketed',
+    versionArgs: ['--version'],
+    // Real enumeration: `kilo models` prints one provider/model per line, 102
+    // of them on the machine this was written on - the same plain-text shape
+    // opencode answers with, so there is nothing to declare here.
+    modelsArgs: ['models'],
+    // `-m provider/model` is a top-level option, so it applies to the TUI and
+    // not only to `kilo run`. Verified against `kilo --help`.
+    modelArgs: ['-m', '{{model}}'],
+    /*
+     * No effortArgs, for precisely the reason opencode has none: `--variant`
+     * is documented under `kilo run` and is not a top-level option, so the
+     * TUI this profile starts does not take one. A template asking for an
+     * effort here is refused at load rather than dropped at launch.
+     *
+     * No resumeArgs either. `-s/--session` exists, but it takes an id Kilo
+     * mints for itself rather than one the hub could record up front, and
+     * `-c/--continue` resolves to "the most recent session in this cwd",
+     * which is the wrong agent as soon as a workspace holds two of them.
+     * Better to restart clean and say so.
+     */
   },
   codex: {
     id: 'codex',

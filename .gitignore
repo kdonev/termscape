@@ -34,3 +34,6 @@ Thumbs.db
 coverage/
 playwright-report/
 test-results/
+
+# agent scratch (Kilo Code plans, local agent config)
+.kilo/
