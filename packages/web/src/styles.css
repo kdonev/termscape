@@ -196,9 +196,24 @@ a.btn { text-decoration: none; display: inline-block; }
   flex: 0 0 auto;
 }
 .share-header .dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; }
-.share-header .addr { font-weight: 600; }
+/* A program's title can be a whole command line; on one row, cut rather than
+   wrapped, or the header grows and takes the terminal's height with it. */
+.share-header .addr {
+  font-weight: 600;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.share-header .meta { flex: 0 0 auto; }
 .share-header .meta { color: var(--muted); font-size: 12px; }
 .share-body { flex: 1; min-height: 0; background: #0e1117; position: relative; }
+/* The share view's stand-in for the canvas world layer: the terminal at its
+   natural size, zoomed to fit (fitGrid). The terminal fills it exactly - the
+   inset a canvas window gives .term-host would only be one more thing for the
+   zoom to shrink. */
+.share-stage { position: absolute; top: 0; left: 0; transform-origin: 0 0; }
+.share-stage .term-host { inset: 0; }
 .share-message {
   flex: 1;
   display: flex;

@@ -1,12 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
   TERMINAL_LINE_HEIGHT,
+  fitGrid,
   gridFor,
   normalisedCell,
   widestCell,
   type BaseCell,
 } from '../src/window/grid.js';
-import { MAX_DEVICE_FONT, MIN_DEVICE_FONT } from '../src/canvas/viewport.js';
+import { BASE_FONT_SIZE, MAX_DEVICE_FONT, MIN_DEVICE_FONT } from '../src/canvas/viewport.js';
 
 /** Consolas-ish, plus a few deliberately awkward metrics. */
 const FONTS: BaseCell[] = [
@@ -105,5 +106,72 @@ describe('gridFor', () => {
 
   it('survives an unmeasurable font without dividing by zero', () => {
     expect(gridFor(400, 300, { charW: 0, charH: 0 })).toEqual({ cols: 2, rows: 1 });
+  });
+});
+
+describe('fitGrid', () => {
+  /*
+   * What a share view is built on. The owner's grid is fixed, so the only
+   * question is how much the reviewer's browser has to scale it - and the
+   * failure it exists to prevent is a wide terminal running off the edge of a
+   * smaller screen, which is exactly what a render scale alone produced.
+   */
+  const dpr = 1;
+  const BASE = FONTS[0]!;
+
+  it('shrinks a grid too wide for the viewport until the whole of it fits', () => {
+    const fit = fitGrid(220, 60, 1000, 600, dpr, BASE);
+    expect(fit.w * fit.zoom).toBeLessThanOrEqual(1000);
+    expect(fit.h * fit.zoom).toBeLessThanOrEqual(600);
+    expect(fit.zoom).toBeLessThan(1);
+  });
+
+  it('enlarges a small grid to use the space it has', () => {
+    const fit = fitGrid(40, 10, 1600, 900, dpr, BASE);
+    expect(fit.zoom).toBeGreaterThan(1);
+    expect(fit.w * fit.zoom).toBeLessThanOrEqual(1600);
+    expect(fit.h * fit.zoom).toBeLessThanOrEqual(900);
+  });
+
+  it('makes the area big enough for the grid at the render scale it picks, and no bigger', () => {
+    for (const base of FONTS) {
+      for (const [cols, rows, w, h] of [[120, 40, 1400, 900], [200, 55, 982, 480], [80, 24, 1920, 1000]]) {
+        const fit = fitGrid(cols!, rows!, w!, h!, dpr, base);
+        const cell = normalisedCell(base, Math.round(fit.renderScale * BASE_FONT_SIZE * dpr));
+        expect(cols! * cell.w).toBeLessThanOrEqual(fit.w);
+        expect(rows! * cell.h).toBeLessThanOrEqual(fit.h);
+        // Tight: no more than the one pixel ceil() can add.
+        expect(fit.w - cols! * cell.w).toBeLessThan(1);
+        expect(fit.h - rows! * cell.h).toBeLessThan(1);
+      }
+    }
+  });
+
+  it('picks the largest legible text that still fits', () => {
+    const fit = fitGrid(100, 30, 1200, 700, dpr, BASE);
+    const device = Math.round(fit.zoom * BASE_FONT_SIZE * dpr);
+    if (device < MAX_DEVICE_FONT) {
+      const next = fitGrid(100, 30, 1200, 700, dpr, BASE);
+      expect(next.zoom).toBe(fit.zoom);
+      const bigger = normalisedCell(BASE, device + 1);
+      const z = (device + 1) / (BASE_FONT_SIZE * dpr);
+      const overflows = Math.ceil(100 * bigger.w) * z > 1200 || Math.ceil(30 * bigger.h) * z > 700;
+      expect(overflows).toBe(true);
+    }
+  });
+
+  it('lands the text on a whole device pixel where the text is legible', () => {
+    for (const d of [1, 1.25, 2]) {
+      const fit = fitGrid(160, 48, 1300, 760, d, BASE);
+      const device = fit.zoom * BASE_FONT_SIZE * d;
+      expect(Math.abs(device - Math.round(device))).toBeLessThan(1e-9);
+      expect(fit.renderScale).toBeCloseTo(fit.zoom, 9);
+    }
+  });
+
+  it('minifies rather than overflowing once the text is below legible', () => {
+    const fit = fitGrid(300, 100, 400, 300, dpr, BASE);
+    expect(fit.w * fit.zoom).toBeLessThanOrEqual(400 + 1e-9);
+    expect(fit.h * fit.zoom).toBeLessThanOrEqual(300 + 1e-9);
   });
 });

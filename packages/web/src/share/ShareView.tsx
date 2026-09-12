@@ -3,6 +3,10 @@ import { useShallow } from 'zustand/react/shallow';
 import { useStore } from '../state/store.js';
 import { TerminalView } from '../window/Terminal.js';
 import { statusColor, statusLabel } from '../window/status.js';
+import { fitGrid, measureBaseCell } from '../window/grid.js';
+
+/** Breathing room around the terminal, so it does not touch the page edge. */
+const GUTTER = 8;
 
 /**
  * What a share link opens: one terminal, full page, nothing else.
@@ -70,6 +74,24 @@ export function ShareView() {
     return <Message>This terminal no longer exists.</Message>;
   }
 
+  /*
+   * The canvas's arrangement, reproduced: a stage at the grid's natural size
+   * with a zoom around it, and a render scale matched to that zoom. Size on
+   * screen comes only from the zoom - see fitGrid for why a render scale on
+   * its own could never make the whole screen fit.
+   */
+  const dpr = window.devicePixelRatio || 1;
+  const availW = size.w - 2 * GUTTER;
+  const availH = size.h - 2 * GUTTER;
+  const fit =
+    availW > 0 && availH > 0
+      ? fitGrid(session.cols, session.rows, availW, availH, dpr, measureBaseCell())
+      : null;
+  // Centred, and on a whole device pixel for the same reason the canvas pan is.
+  const snap = (v: number) => Math.round(v * dpr) / dpr;
+  const x = fit ? snap(GUTTER + (availW - fit.w * fit.zoom) / 2) : 0;
+  const y = fit ? snap(GUTTER + (availH - fit.h * fit.zoom) / 2) : 0;
+
   return (
     <div className="share-app">
       <header className="share-header">
@@ -78,17 +100,26 @@ export function ShareView() {
         <span className="meta">{session.statusText ?? statusLabel(session)}</span>
       </header>
       <div className="share-body" ref={setBody}>
-        {size.w > 0 && size.h > 0 && (
-          <TerminalView
-            sessionId={session.id}
-            w={size.w}
-            h={size.h}
-            renderScale={1}
-            focused
-            grid="follow"
-            cols={session.cols}
-            rows={session.rows}
-          />
+        {fit && (
+          <div
+            className="share-stage"
+            style={{
+              width: fit.w,
+              height: fit.h,
+              transform: `translate(${x}px, ${y}px) scale(${fit.zoom})`,
+            }}
+          >
+            <TerminalView
+              sessionId={session.id}
+              w={fit.w}
+              h={fit.h}
+              renderScale={fit.renderScale}
+              focused
+              grid="follow"
+              cols={session.cols}
+              rows={session.rows}
+            />
+          </div>
         )}
       </div>
     </div>

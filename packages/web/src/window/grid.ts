@@ -2,6 +2,7 @@ import {
   BASE_FONT_SIZE,
   MAX_DEVICE_FONT,
   MIN_DEVICE_FONT,
+  renderScaleFor,
 } from '../canvas/viewport.js';
 
 /** Shared by the live terminals and the measurement that sizes their grid. */
@@ -94,31 +95,65 @@ export function gridFor(
   };
 }
 
+/** How a share view lays out a terminal it does not size. See fitGrid. */
+export interface GridFit {
+  /** The terminal area at zoom 1, in world pixels: exactly big enough for the grid. */
+  w: number;
+  h: number;
+  /** The CSS scale that fits that area into the viewport. */
+  zoom: number;
+  /** The raster scale to go with it, as the canvas pairs one with its zoom. */
+  renderScale: number;
+}
+
 /**
- * The render scale that fits a fixed `cols`x`rows` grid into a
- * `frameW`x`frameH` viewport, without changing that grid.
+ * Fit a fixed `cols`x`rows` grid into an `availW`x`availH` viewport.
  *
- * The inverse of `gridFor`: that derives a grid from a frame size, this
- * derives the largest scale a frame can show a *given* grid at. It exists
- * for `TerminalView`'s `'follow'` mode - a share view, which must never send
- * a `resize` of its own (see the note on that prop) and instead fits itself
- * to whatever grid the owner's window is already driving.
+ * On the canvas a terminal's size on screen comes from the world layer's
+ * `scale(zoom)`; `renderScale` only makes the raster match that zoom, and
+ * never changes how big anything is. A share view has no world layer, so it
+ * needs a zoom of its own - without one the terminal paints at the base font
+ * whatever it is told, and a wide owner window runs off the edge of a smaller
+ * browser. This supplies that zoom.
+ *
+ * The area is sized from the cell at the render scale actually chosen, not
+ * from `widestCell`. `gridFor` has to use the widest because a canvas window
+ * is seen at every zoom; a share view is seen at one, and the widest bound
+ * left a fifth of the screen empty beside the last column.
+ *
+ * So each device font size is tried, largest first, and the first whose zoomed
+ * area fits wins. Whole device pixels of text height fall out of that for free,
+ * which is what keeps the raster from being resampled into blur. Below
+ * legibility there is nothing to align to: the raster stays at the smallest
+ * legible size and the zoom shrinks freely, so a grid too large for the screen
+ * minifies the way a zoomed-out canvas does instead of running off the edge.
  */
-export function renderScaleToFit(
+export function fitGrid(
   cols: number,
   rows: number,
-  frameW: number,
-  frameH: number,
+  availW: number,
+  availH: number,
   dpr: number,
   base: BaseCell,
   lineHeight = TERMINAL_LINE_HEIGHT,
-): number {
-  let best = MIN_DEVICE_FONT;
-  for (let deviceFont = MIN_DEVICE_FONT; deviceFont <= MAX_DEVICE_FONT; deviceFont++) {
+): GridFit {
+  const unit = BASE_FONT_SIZE * dpr;
+  const areaAt = (deviceFont: number) => {
     const cell = normalisedCell(base, deviceFont, lineHeight);
-    if (cols * cell.w <= frameW && rows * cell.h <= frameH) best = deviceFont;
+    return { w: Math.ceil(cols * cell.w), h: Math.ceil(rows * cell.h) };
+  };
+
+  for (let deviceFont = MAX_DEVICE_FONT; deviceFont >= MIN_DEVICE_FONT; deviceFont--) {
+    const { w, h } = areaAt(deviceFont);
+    const zoom = deviceFont / unit;
+    if (w * zoom <= availW && h * zoom <= availH) {
+      return { w, h, zoom, renderScale: renderScaleFor(zoom, dpr) };
+    }
   }
-  return best / (BASE_FONT_SIZE * dpr);
+
+  const { w, h } = areaAt(MIN_DEVICE_FONT);
+  const zoom = w > 0 && h > 0 ? Math.min(availW / w, availH / h) : 1;
+  return { w, h, zoom, renderScale: MIN_DEVICE_FONT / unit };
 }
 
 let cached: BaseCell | null = null;
