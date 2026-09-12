@@ -36,6 +36,14 @@ import { debug, debugOn } from '../debug.js';
 
 /** How long a relayed ask waits for the canvas to report what happened. */
 const RELAY_TIMEOUT_MS = 15_000;
+/**
+ * A relayed spawn waits for a real PTY to start, possibly on a third machine
+ * the canvas still has to reach — longer than any other ask gets. No deadlock
+ * from holding it open that long: when the canvas turns this into a
+ * `startSession` frame down the same socket, this hub's own message handler
+ * serves that independently of the relay awaiting its result.
+ */
+export const SPAWN_RELAY_TIMEOUT_MS = 60_000;
 
 /**
  * The link back to the canvas, as the rest of this hub needs it. Separated
@@ -47,8 +55,15 @@ export interface Uplink {
   readonly attached: boolean;
   /** Agents the canvas has told us about. Never this hub's own. */
   agents(): PeerAgent[];
-  /** Ask the canvas to act on an address we cannot resolve ourselves. */
-  ask<T>(ask: PeerRelayAsk): Promise<T>;
+  /**
+   * What the canvas calls this machine, or null before its first `directory`
+   * has arrived. This hub holds no row for itself — only the canvas does —
+   * so this is the only way it can answer `host: 'local'`/`'self'` about its
+   * own agents, or recognise a spawn_agent `host` naming itself.
+   */
+  hostLabel(): string | null;
+  /** Ask the canvas to act on something we cannot resolve ourselves. */
+  ask<T>(ask: PeerRelayAsk, opts?: { timeoutMs?: number }): Promise<T>;
 }
 
 export interface PeerServer extends Uplink {
@@ -69,6 +84,8 @@ export function createPeerServer(hub: Hub, clientToken: string): PeerServer {
    * cannot linger here.
    */
   let directory: PeerAgent[] = [];
+  /** What the canvas calls this machine, from the same `directory` frame. */
+  let youAre: string | null = null;
   /** Asks sent to the canvas and still waiting for their answer. */
   const relays = new Map<
     string,
@@ -169,6 +186,7 @@ export function createPeerServer(hub: Hub, clientToken: string): PeerServer {
             // Replaced wholesale: this is the canvas's whole view, minus our
             // own agents, and a merge would keep agents it has dropped.
             directory = req.agents;
+            if (req.youAre !== undefined) youAre = req.youAre;
             return ok({ agents: req.agents.length });
 
           case 'relayResult': {
@@ -349,6 +367,8 @@ export function createPeerServer(hub: Hub, clientToken: string): PeerServer {
       // otherwise sit there until the timeout for no reason.
       if (sockets.size === 0) {
         directory = [];
+        // Not `youAre`: a link drop is not the canvas renaming this machine,
+        // and the next reconnect gets a fresh `directory` anyway.
         for (const [, p] of relays) {
           clearTimeout(p.timer);
           p.reject(new Error('the link to the canvas closed'));
@@ -370,12 +390,16 @@ export function createPeerServer(hub: Hub, clientToken: string): PeerServer {
       return sockets.size > 0 ? directory : [];
     },
 
+    hostLabel(): string | null {
+      return youAre;
+    },
+
     /**
      * Hand something to the canvas to do. Only the canvas knows where every
      * address on it lives, so this is the only way an agent here reaches one
      * anywhere else — including on the machine the canvas itself runs on.
      */
-    ask<T>(ask: PeerRelayAsk): Promise<T> {
+    ask<T>(ask: PeerRelayAsk, opts: { timeoutMs?: number } = {}): Promise<T> {
       const socket = [...sockets].find((ws) => ws.readyState === ws.OPEN);
       if (!socket) return Promise.reject(new Error('not attached to a canvas'));
 
@@ -384,7 +408,7 @@ export function createPeerServer(hub: Hub, clientToken: string): PeerServer {
         const timer = setTimeout(() => {
           relays.delete(relayId);
           reject(new Error('the canvas did not answer'));
-        }, RELAY_TIMEOUT_MS);
+        }, opts.timeoutMs ?? RELAY_TIMEOUT_MS);
         relays.set(relayId, { resolve: (v) => resolve(v as T), reject, timer });
         send(socket, { t: 'relay', relayId, ask });
       });

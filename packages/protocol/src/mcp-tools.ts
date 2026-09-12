@@ -48,15 +48,29 @@ export const SendMessageInput = z.object({
 export const SpawnAgentInput = z.object({
   profile: z.string().optional().describe('Agent profile id. Defaults to your own profile.'),
   name: z.string().optional().describe('Name for the new agent. Auto-generated if omitted.'),
+  host: z
+    .string()
+    .optional()
+    .describe(
+      'Machine to start it on, by the label list_hosts gives. The machine that ' +
+        'owns the canvas is called "canvas"; "local" always means your own. ' +
+        'Defaults to your own machine.',
+    ),
   workspace: z
     .string()
     .optional()
-    .describe('Workspace to spawn into. Defaults to your own workspace.'),
+    .describe(
+      'Workspace to spawn into. Defaults to your own workspace if it exists on the ' +
+        'target machine, else the only workspace there.',
+    ),
   prompt: z
     .string()
     .optional()
     .describe('First instruction, injected once the new agent is ready.'),
 });
+
+/** No input: list_hosts always reports the whole canvas from wherever it is called. */
+export const ListHostsInput = z.object({});
 
 export const ReadScreenInput = z.object({
   address: z.string().describe('Agent address to inspect.'),
@@ -115,6 +129,7 @@ export const ProposeTemplateInput = z.object({
 });
 
 export type WhoamiInput = z.infer<typeof WhoamiInput>;
+export type ListHostsInput = z.infer<typeof ListHostsInput>;
 export type ListAgentsInput = z.infer<typeof ListAgentsInput>;
 export type ListTemplatesInput = z.infer<typeof ListTemplatesInput>;
 export type SendMessageInput = z.infer<typeof SendMessageInput>;

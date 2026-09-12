@@ -247,3 +247,45 @@ export const AgentProfileInfo = z.object({
   efforts: z.array(z.string()),
 });
 export type AgentProfileInfo = z.infer<typeof AgentProfileInfo>;
+
+export const HostWorkspaceInfo = z.object({
+  name: z.string(),
+  /** Null for a workspace only seen through a running agent's address: the
+   *  canvas holds no row for it and cannot spawn into it. */
+  rootPath: z.string().nullable(),
+  agents: z.number().int(),
+});
+export type HostWorkspaceInfo = z.infer<typeof HostWorkspaceInfo>;
+
+/**
+ * A machine on the canvas, as `list_hosts` reports it: enough to pick one by
+ * name, know whether it can be reached, and see what it could run something
+ * with.
+ */
+export const HostInfo = z.object({
+  /** '' for the canvas-owning machine, which has no host row. */
+  id: z.string(),
+  label: z.string(),
+  kind: z.enum(['canvas', 'ssh', 'enrolled']),
+  state: z.enum(['disconnected', 'connecting', 'connected', 'error']),
+  /** True for the machine the *calling* agent is running on. */
+  you: z.boolean(),
+  platform: z.string().nullable(),
+  error: z.string().nullable(),
+  workspaces: z.array(HostWorkspaceInfo),
+  /**
+   * The agent CLIs that machine has, as it last reported them. An empty list
+   * means "no `agents` frame yet", never "has none" — see resolution rule 5
+   * in spawn_agent's `host` handling, which is the only place this is acted
+   * on and where the invariant is spelled out.
+   */
+  agents: z.array(
+    z.object({
+      id: z.string(),
+      available: z.boolean().nullable(),
+      version: z.string().nullable(),
+      detail: z.string().nullable(),
+    }),
+  ),
+});
+export type HostInfo = z.infer<typeof HostInfo>;

@@ -173,6 +173,7 @@ tunnel. Same protocol, opposite direction.
 |---|---|
 | `whoami` | your address, workspace and working directory |
 | `list_agents` | everyone on the canvas, across every host, and whether they are busy |
+| `list_hosts` | every machine on the canvas, its workspaces, and the agent CLIs it has |
 | `list_templates` | the saved ways of starting an agent, and what each one runs |
 | `send_message` | type a message into another agent's terminal, right now |
 | `spawn_agent` | start a helper in your workspace, with an optional first task |
@@ -185,6 +186,12 @@ tunnel. Same protocol, opposite direction.
 CLI: its `profile` takes a template id, and this is how an agent finds out
 which ids exist. It reports the *names* of the environment variables a template
 sets and never their values, which are credentials more often than not.
+
+`list_hosts` is the same idea for `spawn_agent`'s `host`: without it, nothing
+tells an agent what other machines are even on the canvas, let alone which of
+them are reachable or have the CLI it wants to start. An agent started on
+another machine cannot be stopped with `stop_agent` yet — that gap is tracked
+as a follow-up rather than silently left unsaid.
 
 `propose_template` is the only one that asks rather than does. A template
 changes how *future* agents are launched, on every machine, with nobody

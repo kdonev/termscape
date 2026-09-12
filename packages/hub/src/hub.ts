@@ -10,6 +10,8 @@ import {
   slugify,
   type AgentProfileInfo,
   type AgentTemplateInfo,
+  type HostInfo,
+  type HostWorkspaceInfo,
   type Message,
   type Host,
   type PeerAgent,
@@ -32,7 +34,7 @@ import { SessionManager } from './session/manager.js';
 import { briefFileFor } from './agents/wiring.js';
 import type { AgentApi } from './mcp/server.js';
 import { PeerRegistry } from './remote/registry.js';
-import type { Uplink } from './remote/peer-serve.js';
+import { SPAWN_RELAY_TIMEOUT_MS, type Uplink } from './remote/peer-serve.js';
 import { deploy, type DeployResult } from './remote/deployer.js';
 import { hubTarballPath } from './remote/tarball.js';
 import { paths } from './paths.js';
@@ -162,14 +164,16 @@ export class Hub extends EventEmitter implements AgentApi {
       this.emit('data', address, data);
     });
 
-    // A host asking us to act on an address it cannot resolve itself. We are
-    // the only hub that knows where every address on this canvas lives, and
-    // the answer travels back the way the question came.
+    // A host asking us to act on something it cannot resolve itself. We are
+    // the only hub that knows what every machine on this canvas is and where
+    // every address on it lives, and the answer travels back the way the
+    // question came.
     this.peers.on(
       'relay',
       (
         ask: PeerRelayAsk,
         reply: (ok: boolean, result: unknown, error: string | null) => void,
+        fromHostId: string,
       ) => {
         const done = (p: Promise<unknown>) =>
           p.then(
@@ -177,8 +181,16 @@ export class Hub extends EventEmitter implements AgentApi {
             (err: Error) => reply(false, null, err.message),
           );
 
-        if (ask.t === 'deliver') return void done(this.deliverFrom(ask.from, ask.to, ask.body));
-        return void done(this.readScreenAt(ask.address, ask.lines));
+        switch (ask.t) {
+          case 'deliver':
+            return void done(this.deliverFrom(ask.from, ask.to, ask.body));
+          case 'readScreen':
+            return void done(this.readScreenAt(ask.address, ask.lines));
+          case 'listHosts':
+            return void done(Promise.resolve(this.hostsView(fromHostId)));
+          case 'spawn':
+            return void done(this.spawnFrom(ask, fromHostId));
+        }
       },
     );
 
@@ -1050,9 +1062,284 @@ export class Hub extends EventEmitter implements AgentApi {
     return one;
   }
 
+  /**
+   * Every machine on the canvas, for `spawn_agent`'s `host` to name and
+   * `list_hosts` to report. Relayed rather than answered locally on an
+   * attached hub: it holds rows for nothing but itself, so only the canvas
+   * can say what else exists, whether it is reachable, or what it has
+   * installed.
+   */
+  async listHosts(sessionId: string): Promise<HostInfo[]> {
+    this.requireSession(sessionId);
+    if (this.uplink?.attached) return this.uplink.ask<HostInfo[]>({ t: 'listHosts' });
+    return this.hostsView(null);
+  }
+
+  /**
+   * Every machine on the canvas as the canvas itself sees it: the canvas
+   * machine (which has no host row of its own — synthesised here with the
+   * same empty id the web tree already gives it), then every host row, each
+   * with the workspaces it has and the agent CLIs it last reported.
+   *
+   * `callerHostId` marks `you`: null for the canvas hub's own agents, a host
+   * id for a relayed caller elsewhere on the canvas. Only ever called here,
+   * on the canvas — an attached hub has nothing to build this from.
+   */
+  private hostsView(callerHostId: string | null): HostInfo[] {
+    const remoteSessions = this.peers.sessions();
+    const remoteAgentCount = (workspaceName: string) =>
+      remoteSessions.filter((s) => s.address.startsWith(`${workspaceName}/`)).length;
+    const localAgentCount = (workspaceId: string) =>
+      this.sessions.list().filter((s) => s.workspaceId === workspaceId).length;
+    const agentInfo = (a: AgentProfileInfo) => ({
+      id: a.id,
+      available: a.available,
+      version: a.version,
+      detail: a.detail,
+    });
+
+    const canvasWorkspaces: HostWorkspaceInfo[] = this.store
+      .listWorkspaces()
+      .filter((w) => w.hostId === null)
+      .map((w) => ({ name: w.name, rootPath: w.rootPath, agents: localAgentCount(w.id) }));
+
+    const canvasEntry: HostInfo = {
+      id: '',
+      label: 'canvas',
+      kind: 'canvas',
+      state: 'connected',
+      you: callerHostId === null,
+      platform: null,
+      error: null,
+      workspaces: canvasWorkspaces,
+      agents: this.agents.snapshot().map(agentInfo),
+    };
+
+    const remoteAgentsByHost = this.peers.agentsByHost();
+    const hostRows: HostInfo[] = this.store.listHosts().map((h) => {
+      const rowed: HostWorkspaceInfo[] = this.store
+        .listWorkspaces()
+        .filter((w) => w.hostId === h.id)
+        .map((w) => ({ name: w.name, rootPath: w.rootPath, agents: remoteAgentCount(w.name) }));
+      const rowedNames = new Set(rowed.map((w) => w.name));
+
+      // A workspace on that machine seen only through a running agent's
+      // address, with no row here: the canvas never created one for it — an
+      // older client, say, or a row removed locally while the peer kept
+      // running it. Listed, so an agent can see it exists, but `rootPath`
+      // stays null: spawn_agent has nothing to spawn into.
+      const rowlessNames = new Set(
+        remoteSessions
+          .filter((s) => this.peers.hostIdFor(s.address) === h.id)
+          .map((s) => parseAddress(s.address)?.workspace)
+          .filter((name): name is string => !!name && !rowedNames.has(name)),
+      );
+      const rowless: HostWorkspaceInfo[] = [...rowlessNames].map((name) => ({
+        name,
+        rootPath: null,
+        agents: remoteAgentCount(name),
+      }));
+
+      return {
+        id: h.id,
+        label: h.label,
+        kind: h.kind,
+        state: h.state,
+        you: callerHostId === h.id,
+        platform: h.platform,
+        error: h.error,
+        workspaces: [...rowed, ...rowless],
+        agents: (remoteAgentsByHost[h.id] ?? []).map(agentInfo),
+      };
+    });
+
+    return [canvasEntry, ...hostRows];
+  }
+
+  /**
+   * Whether a spawn_agent `host` names the machine this hub itself runs on:
+   * 'local', 'self', or the label the canvas last told an attached hub it is
+   * called. An attached hub holds no id worth matching for itself — only the
+   * canvas holds a row for it — so these are the only ways it can recognise
+   * itself.
+   */
+  private namesThisMachine(host: string): boolean {
+    const h = host.trim().toLowerCase();
+    if (h === 'local' || h === 'self') return true;
+    const mine = this.uplink?.hostLabel();
+    return !!mine && h === mine.toLowerCase();
+  }
+
+  /**
+   * Turn a spawn_agent `host` (plus an optional `workspace`) into the
+   * `Workspace` to start into. Shared by a local call naming a `host` and a
+   * relayed one: the two must fail identically, since either can be what a
+   * spawn_agent call elsewhere on the canvas turns into by the time it
+   * reaches here. Only ever called on the canvas — it is the one hub these
+   * rules can be evaluated on.
+   */
+  private resolveSpawnTarget(opts: {
+    host: string;
+    workspace?: string;
+    /** The calling agent's own workspace name, for the "same name" fallback. */
+    callerWorkspaceName: string | null;
+    /** Whose machine the caller is on: null for the canvas itself. */
+    callerHostId: string | null;
+    /** The already-resolved CLI id, for the "can it even run this" check. */
+    agent: string;
+  }): Workspace {
+    const hosts = this.hostsView(opts.callerHostId);
+    const wanted = opts.host.trim();
+    const asSelf = wanted.toLowerCase() === 'local' || wanted.toLowerCase() === 'self';
+
+    // Pick the machine. 'local'/'self' first, then an exact id, and only
+    // then a label matched case-insensitively — in that order, so a label
+    // can never shadow an id and 'local' is never read as someone's actual
+    // label.
+    let matches: HostInfo[];
+    if (asSelf) {
+      matches = hosts.filter((h) => h.you);
+    } else {
+      const byId = hosts.filter((h) => h.id === wanted);
+      matches =
+        byId.length > 0 ? byId : hosts.filter((h) => h.label.toLowerCase() === wanted.toLowerCase());
+    }
+    if (matches.length === 0) {
+      throw new Error(
+        `unknown host "${opts.host}"; hosts are: ${hosts.map((h) => h.label).join(', ')} ` +
+          '(call list_hosts)',
+      );
+    }
+    if (matches.length > 1) {
+      throw new Error(
+        `host "${opts.host}" names more than one machine; pass the id instead: ` +
+          matches.map((h) => h.id).join(', '),
+      );
+    }
+    const target = matches[0]!;
+
+    // Reachability. The canvas entry is always reachable; a host row is only
+    // as reachable as its live connection right now.
+    if (target.kind !== 'canvas' && this.peers.peer(target.id)?.connected !== true) {
+      throw new Error(
+        `host "${target.label}" is not connected; nothing can be started there right now`,
+      );
+    }
+
+    // Pick the workspace. Only rows the canvas actually holds can be spawned
+    // into — a rowless one, seen only through a running agent's address,
+    // is something list_hosts can show but not something this can start.
+    const rowed = target.workspaces.filter((w) => w.rootPath !== null);
+    let chosenName: string;
+    if (opts.workspace) {
+      const here = target.workspaces.find((w) => w.name === opts.workspace);
+      if (here && here.rootPath !== null) {
+        chosenName = here.name;
+      } else if (here) {
+        throw new Error(
+          `workspace "${opts.workspace}" exists on "${target.label}" but the canvas holds no ` +
+            'folder for it; ask the human to add it from the canvas',
+        );
+      } else {
+        const elsewhere = hosts.find(
+          (h) => h.id !== target.id && h.workspaces.some((w) => w.name === opts.workspace),
+        );
+        if (elsewhere) {
+          throw new Error(
+            `workspace "${opts.workspace}" is on host "${elsewhere.label}", not "${target.label}"`,
+          );
+        }
+        throw new Error(
+          `no workspace "${opts.workspace}" on host "${target.label}"` +
+            (rowed.length ? `; workspaces there are: ${rowed.map((w) => w.name).join(', ')}` : ''),
+        );
+      }
+    } else {
+      const sameName = opts.callerWorkspaceName
+        ? rowed.find((w) => w.name === opts.callerWorkspaceName)
+        : undefined;
+      if (sameName) {
+        chosenName = sameName.name;
+      } else if (rowed.length === 1) {
+        chosenName = rowed[0]!.name;
+      } else if (rowed.length === 0) {
+        throw new Error(
+          `host "${target.label}" has no workspace on the canvas; ask the human to add one there first`,
+        );
+      } else {
+        throw new Error(
+          `host "${target.label}" has several workspaces (${rowed.map((w) => w.name).join(', ')}); ` +
+            'pass workspace: one of them',
+        );
+      }
+    }
+
+    /*
+     * The CLI check, last — the one thing that can be refused before an
+     * irreversible spawn. An empty list is not "confirmed zero CLIs":
+     * `AgentDetector.snapshot()` is documented "never async, and never
+     * empty: a profile that has not been probed yet is reported with
+     * `available: null`" (detect.ts:69-71), and `shell` is unconditional in
+     * `BUILTIN_PROFILES` (profiles.ts:470), so a machine that has synced its
+     * CLIs at all reports at least one entry, probed or not. An empty array
+     * here can therefore only be the `?? []` fallback firing because no
+     * `agents` frame has arrived from that host yet — not a machine that has
+     * reported having none.
+     */
+    if (target.agents.length > 0) {
+      const known = target.agents.find((a) => a.id === opts.agent);
+      if (!known || known.available === false) {
+        const has = target.agents.filter((a) => a.available !== false).map((a) => a.id);
+        throw new Error(
+          `host "${target.label}" cannot run "${opts.agent}"` +
+            (known?.detail ? `: ${known.detail}` : '') +
+            (has.length ? `; it has: ${has.join(', ')}` : ''),
+        );
+      }
+    }
+
+    const hostId = target.kind === 'canvas' ? null : target.id;
+    const ws = this.store
+      .listWorkspaces()
+      .find((w) => (w.hostId ?? null) === hostId && w.name === chosenName);
+    if (!ws) {
+      // Cannot happen outside a race: `chosenName` came from `hostsView`,
+      // which read these same store rows a moment ago.
+      throw new Error(`workspace "${chosenName}" on "${target.label}" vanished mid-request`);
+    }
+    return ws;
+  }
+
+  /**
+   * What this hub's own machine is called: 'canvas' when it owns the canvas,
+   * or the label the canvas gave an attached one — the same name list_hosts
+   * and list_agents both use, so every tool agrees on what a machine is
+   * called. Before the canvas's first `directory` arrives, an attached hub
+   * has not been told yet; 'local' is the fallback list_agents always
+   * answered with.
+   */
+  private thisMachineLabel(): string {
+    return this.uplink?.attached ? (this.uplink.hostLabel() ?? 'local') : 'canvas';
+  }
+
+  /**
+   * What a workspace's machine is called, for a spawn reply's `host` field.
+   * `ws.hostId` set means a *remote* machine as this hub's own store knows
+   * it — true whether this hub is the canvas resolving a peer, or a peer
+   * itself (which holds no host rows of its own, so this branch never
+   * triggers for it). Null means local to whichever hub is asking, which is
+   * only 'canvas' when that hub is the canvas.
+   */
+  private hostLabelForWorkspace(ws: Workspace): string {
+    if (ws.hostId) return this.store.getHost(ws.hostId)?.label ?? 'remote';
+    return this.thisMachineLabel();
+  }
+
   async listAgents(sessionId: string, workspace?: string) {
     const me = this.requireSession(sessionId);
     const wsById = new Map(this.store.listWorkspaces().map((w) => [w.id, w]));
+
+    const myLabel = this.thisMachineLabel();
 
     const local = this.sessions.list().map((s) => ({
       address: s.address,
@@ -1061,7 +1348,7 @@ export class Hub extends EventEmitter implements AgentApi {
       state: s.state,
       status: s.status,
       statusText: s.statusText,
-      host: 'local' as string,
+      host: myLabel,
       isYou: s.id === me.id,
     }));
 
@@ -1207,13 +1494,9 @@ export class Hub extends EventEmitter implements AgentApi {
 
   async spawnAgent(
     sessionId: string,
-    opts: { profile?: string; name?: string; workspace?: string; prompt?: string },
+    opts: { profile?: string; name?: string; host?: string; workspace?: string; prompt?: string },
   ) {
     const me = this.requireSession(sessionId);
-    const ws = opts.workspace
-      ? this.store.getWorkspaceByName(opts.workspace)
-      : this.store.getWorkspace(me.workspaceId);
-    if (!ws) throw new Error(`unknown workspace "${opts.workspace}"`);
 
     // The child starts the way its parent did: from the same template, so the
     // model and effort the template chose are not silently dropped in favour
@@ -1226,16 +1509,72 @@ export class Hub extends EventEmitter implements AgentApi {
       opts.profile ?? (inherited && !inherited.error ? me.template! : me.profile);
 
     /*
-     * One injection, delivered once, by the hub that owns the child's PTY: the
-     * template's opening instruction first, then what the spawning agent asked
-     * for, attributed. Delivering them separately would race two injections on
-     * the same ready-signal, landing back to back in undefined order, so the
-     * opening merges here and rides to the child through startSession — which
-     * also means the remote path needs no delivery of its own.
+     * Resolved, and the opening instruction built, ahead of the workspace: a
+     * `host` needs the resolved agent id before it can even ask whether that
+     * machine can run it, and a relay carries only resolved values, never a
+     * template name — the two hubs do not share config. One injection,
+     * delivered once, by whichever hub ends up owning the child's PTY: the
+     * template's opening instruction first, then what the spawning agent
+     * asked for, attributed. Delivering them separately would race two
+     * injections on the same ready-signal, landing back to back in undefined
+     * order, so the opening merges here and rides to the child however it
+     * gets there.
      */
-    const templatePrompt = inherit ? (this.templates.get(inherit)?.prompt ?? null) : null;
+    const picked = this.resolveTemplate({ profile: inherit });
     const instruction = opts.prompt ? `[from ${me.address}] ${opts.prompt}` : null;
-    const opening = [templatePrompt, instruction].filter(Boolean).join('\n\n') || undefined;
+    const opening = [picked.prompt, instruction].filter(Boolean).join('\n\n') || undefined;
+
+    // A `host` naming something beyond this hub's own machine has to go up
+    // the link: an attached hub holds rows for nothing but itself, and only
+    // the canvas can say whether the machine exists, is reachable, or can
+    // run this agent.
+    if (opts.host !== undefined && this.uplink?.attached && !this.namesThisMachine(opts.host)) {
+      return this.uplink.ask<{
+        address: string;
+        workspace: string;
+        profile: string;
+        host: string;
+        promptQueued: boolean;
+      }>(
+        {
+          t: 'spawn',
+          from: me.address,
+          host: opts.host,
+          workspace: opts.workspace,
+          name: opts.name,
+          agent: picked.agent,
+          template: picked.template,
+          model: picked.model,
+          effort: picked.effort,
+          env: picked.env,
+          opening,
+          promptGiven: !!opts.prompt,
+        },
+        { timeoutMs: SPAWN_RELAY_TIMEOUT_MS },
+      );
+    }
+
+    let ws: Workspace;
+    if (opts.host !== undefined && !this.uplink?.attached) {
+      // The canvas, resolving a `host` for real — itself included, since it
+      // is the one hub these rules can even be evaluated on.
+      ws = this.resolveSpawnTarget({
+        host: opts.host,
+        workspace: opts.workspace,
+        callerWorkspaceName: this.store.getWorkspace(me.workspaceId)?.name ?? null,
+        callerHostId: null,
+        agent: picked.agent,
+      });
+    } else {
+      // No `host`, unchanged — or an attached hub naming its own machine,
+      // which needs none of resolveSpawnTarget's cross-machine knowledge,
+      // because this hub does not have any.
+      const found = opts.workspace
+        ? this.store.getWorkspaceByName(opts.workspace)
+        : this.store.getWorkspace(me.workspaceId);
+      if (!found) throw new Error(`unknown workspace "${opts.workspace}"`);
+      ws = found;
+    }
 
     const child = await this.startSession({
       workspaceId: ws.id,
@@ -1249,7 +1588,75 @@ export class Hub extends EventEmitter implements AgentApi {
       address: child.address,
       workspace: ws.name,
       profile: child.profile,
+      host: this.hostLabelForWorkspace(ws),
       promptQueued: !!opts.prompt,
+    };
+  }
+
+  /**
+   * Execute a spawn_agent relayed from another hub, exactly as a local call
+   * naming the same `host` would: resolve the target with
+   * `resolveSpawnTarget`, then land it directly rather than through
+   * `startSession` — the values already came out of `resolveTemplate` on the
+   * asking hub, and re-resolving `ask.agent` as a template id here could hit
+   * a stored template of the same name that means something else entirely on
+   * this hub. Never re-resolves a template and never re-prefixes the
+   * opening, for the same reason `startSession`'s own peer request does not:
+   * a template is config, and the two hubs do not share it.
+   */
+  private async spawnFrom(
+    ask: Extract<PeerRelayAsk, { t: 'spawn' }>,
+    fromHostId: string,
+  ): Promise<{
+    address: string;
+    workspace: string;
+    profile: string;
+    host: string;
+    promptQueued: boolean;
+  }> {
+    const ws = this.resolveSpawnTarget({
+      host: ask.host,
+      workspace: ask.workspace,
+      callerWorkspaceName: ask.from.split('/')[0] ?? null,
+      callerHostId: fromHostId,
+      agent: ask.agent,
+    });
+
+    const child = ws.hostId
+      ? await this.peers.startSession(ws.hostId, {
+          workspaceName: ws.name,
+          rootPath: ws.rootPath,
+          profile: ask.agent,
+          template: ask.template ?? null,
+          model: ask.model,
+          effort: ask.effort,
+          prompt: ask.opening,
+          env: ask.env,
+          name: ask.name,
+          // See the known gap noted on spawn_agent's `host`: the spawner
+          // lives on a hub this canvas has no local id for, and the
+          // canvas-local branch below cannot take one either — the session
+          // table's foreign key would reject it.
+          spawnedByAddress: null,
+        })
+      : await this.startResolved({
+          workspaceId: ws.id,
+          agent: ask.agent,
+          template: ask.template ?? null,
+          model: ask.model,
+          effort: ask.effort,
+          prompt: ask.opening,
+          env: ask.env,
+          name: ask.name,
+          spawnedBy: null,
+        });
+
+    return {
+      address: child.address,
+      workspace: ws.name,
+      profile: child.profile,
+      host: this.hostLabelForWorkspace(ws),
+      promptQueued: ask.promptGiven,
     };
   }
 

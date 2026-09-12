@@ -188,9 +188,12 @@ export class PeerRegistry extends EventEmitter {
       this.emit('output', address, data);
     });
 
-    // An agent over there acting on an address its own hub cannot resolve.
-    // We do it — we are the only hub that knows where every address on this
-    // canvas lives — and the answer goes back over the same link.
+    // An agent over there acting on something its own hub cannot resolve.
+    // We do it — we are the only hub that knows what every machine on this
+    // canvas is and where every address on it lives — and the answer goes
+    // back over the same link. `host.id` travels with it so the handler can
+    // mark `you` and apply the `local` alias for a caller that is not on this
+    // machine at all.
     peer.on('relay', (relayId: string, ask: PeerRelayAsk) => {
       this.emit('relay', ask, (ok: boolean, result: unknown, error: string | null) => {
         void peer
@@ -200,7 +203,7 @@ export class PeerRegistry extends EventEmitter {
             // relay timeout is what tells its agent, and there is nothing
             // useful to do about it here.
           });
-      });
+      }, host.id);
     });
 
     this.peers.set(host.id, peer);
@@ -321,8 +324,16 @@ export class PeerRegistry extends EventEmitter {
   announce(forHost: (hostId: string) => PeerAgent[]): void {
     for (const [hostId, peer] of this.peers) {
       if (!peer.connected) continue;
+      const host = this.store.listHosts().find((h) => h.id === hostId);
       void peer
-        .request({ t: 'directory', id: randomUUID(), agents: forHost(hostId) })
+        .request({
+          t: 'directory',
+          id: randomUUID(),
+          agents: forHost(hostId),
+          // What that host is called, so it can answer for itself without a
+          // row of its own — only the canvas holds one.
+          youAre: host?.label,
+        })
         .catch(() => {
           // A host that dropped mid-announce gets the current directory when
           // it reconnects, which is the same thing a moment later.

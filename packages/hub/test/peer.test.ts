@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeAll, afterAll } from 'vitest';
-import { mkdtempSync } from 'node:fs';
+import { mkdirSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -472,6 +472,162 @@ ${screen.screen}`).toContain(
     await expect(
       hubB.sendMessage(there.id, 'localws/nobody', 'into the void'),
     ).rejects.toThrow(/no agent/);
+  });
+});
+
+/**
+ * `list_hosts`, and `spawn_agent`'s `host`, across a real second machine:
+ * the one thing hosts.test.ts's single hub cannot exercise — reachability,
+ * relaying an ask through `relayResult`, an attached hub learning its own
+ * label, and the lineage gap spawning across the link deliberately leaves
+ * open.
+ */
+describe("list_hosts and spawn_agent's host, across the link", () => {
+  let hostId: string;
+  let hostWsName: string;
+
+  beforeAll(async () => {
+    hostId = hubA.store.listHosts()[0]!.id;
+    // A row the canvas actually holds for the host, so it is something
+    // spawn_agent can target rather than a rowless entry list_hosts can only
+    // show. Reused from an earlier test would work too, but a name of its
+    // own keeps this block independent of what ran before it.
+    hostWsName = hubA.createWorkspace('hostcrew', homeB, hostId).name;
+
+    // B needs to have learned its own label from the canvas before a spawn
+    // naming it by that label can take the local shortcut rather than
+    // relaying to itself — see spawn_agent's `host: 'test-remote'` test below.
+    await waitForAsync(
+      async () =>
+        (await hubB.listAgents(hubB.sessions.getByAddress('remotews/there')!.id)).find(
+          (a) => a.address === 'remotews/there',
+        )?.host === 'test-remote',
+      15_000,
+      "B to learn its own label from the canvas's directory",
+    );
+  }, 30_000);
+
+  it('lists both machines from the canvas, marking test-remote as itself only from over there', async () => {
+    const here = hubA.sessions.getByAddress('localws/here')!;
+    const hosts = await hubA.listHosts(here.id);
+
+    expect(hosts).toHaveLength(2);
+    const canvas = hosts.find((h) => h.id === '')!;
+    expect(canvas.label).toBe('canvas');
+    expect(canvas.you).toBe(true);
+
+    const remote = hosts.find((h) => h.id === hostId)!;
+    expect(remote.label).toBe('test-remote');
+    expect(remote.you).toBe(false);
+    expect(remote.state).toBe('connected');
+    expect(remote.workspaces.some((w) => w.name === hostWsName)).toBe(true);
+    expect(remote.agents.some((a) => a.id === 'shell' && a.available === true)).toBe(true);
+  });
+
+  it('relays from the attached side, marking test-remote as itself there instead', async () => {
+    const there = hubB.sessions.getByAddress('remotews/there')!;
+    const hosts = await hubB.listHosts(there.id);
+
+    expect(hosts).toHaveLength(2);
+    // The assertion that proves `host.id` survives the trip through
+    // registry.ts's relay event: without it every relayed caller looks like
+    // nobody in particular, and this could never be true from over here.
+    expect(hosts.find((h) => h.id === '')!.you).toBe(false);
+    expect(hosts.find((h) => h.label === 'test-remote')!.you).toBe(true);
+  });
+
+  it('spawns onto a named host from the canvas', async () => {
+    const here = hubA.sessions.getByAddress('localws/here')!;
+    const result = await hubA.spawnAgent(here.id, {
+      host: 'test-remote',
+      workspace: hostWsName,
+      name: 'byhost',
+    });
+    expect(result.host).toBe('test-remote');
+    expect(hubB.sessions.getByAddress(`${hostWsName}/byhost`)).not.toBeNull();
+  });
+
+  it('refuses an unknown host from the canvas, naming what exists', async () => {
+    const here = hubA.sessions.getByAddress('localws/here')!;
+    await expect(hubA.spawnAgent(here.id, { host: 'nope' })).rejects.toThrow(/unknown host/i);
+  });
+
+  it('refuses to guess between several workspaces on the canvas when the caller is elsewhere', async () => {
+    const there = hubB.sessions.getByAddress('remotews/there')!;
+    // Neither name has anything to do with 'remotews', the caller's own —
+    // the one case a single-hub rig cannot produce, because a caller there
+    // is always itself one of the candidates being disambiguated.
+    mkdirSync(join(homeA, 'ambigA'), { recursive: true });
+    mkdirSync(join(homeA, 'ambigB'), { recursive: true });
+    hubA.createWorkspace('ambigA', join(homeA, 'ambigA'));
+    hubA.createWorkspace('ambigB', join(homeA, 'ambigB'));
+
+    await expect(hubB.spawnAgent(there.id, { host: 'canvas' })).rejects.toThrow(
+      /several workspaces/,
+    );
+  });
+
+  it('spawns onto the canvas from the attached side, with the prompt attributed once', async () => {
+    const there = hubB.sessions.getByAddress('remotews/there')!;
+    const result = await hubB.spawnAgent(there.id, {
+      host: 'canvas',
+      workspace: 'localws',
+      name: 'fromb',
+      prompt: 'hello from the attached side',
+    });
+    expect(result.host).toBe('canvas');
+
+    await waitFor(
+      () => hubA.sessions.getByAddress('localws/fromb') !== null,
+      15_000,
+      'the relayed spawn to land on the canvas',
+    );
+    const child = hubA.sessions.getByAddress('localws/fromb')!;
+
+    await waitFor(
+      () => (outputA.get(child.id) ?? '').includes('hello from the attached side'),
+      15_000,
+      'the prompt to reach the new terminal',
+    );
+    const text = outputA.get(child.id) ?? '';
+    expect(text.split(`[from ${there.address}]`).length - 1).toBe(1);
+  });
+
+  it(
+    'spawns onto its own machine by label and stays local — the regression guard for the ' +
+      'lineage gap',
+    async () => {
+      const there = hubB.sessions.getByAddress('remotews/there')!;
+      const result = await hubB.spawnAgent(there.id, { host: 'test-remote', name: 'ownlabel' });
+      expect(result.host).toBe('test-remote');
+
+      const child = hubB.sessions.getByAddress('remotews/ownlabel')!;
+      // A relayed spawn cannot keep this — see the known gap on spawn_agent's
+      // `host` — so proving it survives here is what shows the self-shortcut
+      // actually took the local path rather than relaying to itself.
+      expect(child.spawnedBy).toBe(there.id);
+      expect((await hubB.stopAgent(there.id, child.address)).stopped).toBe(child.address);
+    },
+  );
+
+  it("propagates the canvas's own refusal through relayResult", async () => {
+    const there = hubB.sessions.getByAddress('remotews/there')!;
+    await expect(hubB.spawnAgent(there.id, { host: 'nope' })).rejects.toThrow(/unknown host/i);
+  });
+
+  it('spawns with no host at all without ever touching the link', async () => {
+    const there = hubB.sessions.getByAddress('remotews/there')!;
+    hubA.peers.peer(hostId)!.close();
+    try {
+      const result = await hubB.spawnAgent(there.id, { name: 'nolink' });
+      expect(result.workspace).toBe('remotews');
+      expect(hubB.sessions.getByAddress('remotews/nolink')).not.toBeNull();
+    } finally {
+      // Reconnect for everything after this block, mirroring the recovery
+      // pattern the peer-loss tests further down use themselves.
+      hubA.peers.add(hubA.store.listHosts()[0]!, peerUrlB, PEER_TOKEN);
+      await waitFor(() => hubA.peers.peer(hostId)?.connected === true, 15_000, 'peer link');
+    }
   });
 });
 

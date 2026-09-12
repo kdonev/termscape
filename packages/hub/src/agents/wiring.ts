@@ -347,13 +347,17 @@ always \`workspace/name\`, and every one of them appears in
 
 - \`whoami\` — your own address and workspace.
 - \`list_agents\` — who else exists, and whether they are idle or busy.
+- \`list_hosts\` — every machine on the canvas: this one, and any others
+  attached to it, with their workspaces and the agent CLIs each has
+  installed. Call this before passing \`host\` to \`spawn_agent\`.
 - \`send_message\` — send text to another agent. It is typed directly into
   their terminal, as if a user had pasted it.
 - \`list_templates\` — the saved ways of starting an agent: what CLI each one
   runs, on what model, with what opening instruction. A template id is what
   \`spawn_agent\` takes as its \`profile\`.
 - \`spawn_agent\` — start a new agent in your workspace and optionally give it
-  a first instruction. Use this to delegate work you want done in parallel.
+  a first instruction. Use this to delegate work you want done in parallel —
+  or on another machine, with \`host\`.
 - \`read_screen\` — a one-off look at another agent's terminal without
   interrupting it, for before you hand someone work or when an answer has not
   come and you want to know why. It is not a way to wait for a reply: see

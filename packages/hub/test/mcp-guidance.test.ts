@@ -14,6 +14,7 @@ import { buildMcpServer, type AgentApi } from '../src/mcp/server.js';
 const stubApi: AgentApi = {
   whoami: async () => ({}),
   listAgents: async () => [],
+  listHosts: async () => [],
   listTemplates: async () => [],
   sendMessage: async () => ({ delivered: true }),
   spawnAgent: async () => ({}),
@@ -54,6 +55,17 @@ describe('MCP-level guidance against polling read_screen', () => {
     const instructions = client.getInstructions();
     expect(instructions).toBeTruthy();
     expect(instructions).toMatch(/typed/);
+    await client.close();
+  });
+});
+
+describe('list_hosts and spawn_agent host', () => {
+  it('exposes list_hosts, and a host parameter on spawn_agent', async () => {
+    const client = await connectedClient();
+    const { tools } = await client.listTools();
+    expect(tools.some((t) => t.name === 'list_hosts')).toBe(true);
+    const spawnAgent = tools.find((t) => t.name === 'spawn_agent')!;
+    expect(spawnAgent.inputSchema.properties).toHaveProperty('host');
     await client.close();
   });
 });

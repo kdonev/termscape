@@ -65,6 +65,35 @@ export const PeerRelayAsk = z.discriminatedUnion('t', [
     address: z.string(),
     lines: z.number().int().positive().optional(),
   }),
+  z.object({ t: z.literal('listHosts') }),
+  // A spawn_agent naming a `host`, from a hub with no local knowledge of one
+  // (the canvas machine itself, or a third machine). Everything here arrives
+  // already resolved, for the reason startSession's own peer request does
+  // (peer.ts, startSession req below): a template is config, the two hubs do
+  // not share config, and the asking hub is the only one that knows what its
+  // caller's template meant — `agent` is the CLI id it resolved to, `opening`
+  // is the template's prompt and the caller's own instruction already merged
+  // into one injection, and `template` travels only so the child's window can
+  // say which one was picked.
+  z.object({
+    t: z.literal('spawn'),
+    // Authenticated by the asking hub from the sender's own bearer token,
+    // exactly as `deliver`'s `from` is.
+    from: z.string(),
+    // Never omitted: a spawn_agent with no `host`, or one naming the asking
+    // hub's own machine, is handled entirely on that hub and never relays.
+    host: z.string(),
+    workspace: z.string().optional(),
+    name: z.string().optional(),
+    agent: z.string(),
+    template: z.string().nullable().optional(),
+    model: z.string().optional(),
+    effort: z.string().optional(),
+    env: z.record(z.string(), z.string()).optional(),
+    opening: z.string().optional(),
+    /** Whether the caller passed a `prompt`, for the reply's `promptQueued`. */
+    promptGiven: z.boolean(),
+  }),
 ]);
 export type PeerRelayAsk = z.infer<typeof PeerRelayAsk>;
 
@@ -163,7 +192,19 @@ export const PeerRequest = z.discriminatedUnion('t', [
   // The canvas telling a host who else is on it. Sent whenever that set
   // changes, and it is the whole set minus the receiving host's own agents,
   // which it already knows about and would otherwise list twice.
-  z.object({ t: z.literal('directory'), id: z.string(), agents: z.array(PeerAgent) }),
+  z.object({
+    t: z.literal('directory'),
+    id: z.string(),
+    agents: z.array(PeerAgent),
+    /**
+     * What the canvas calls this host, so it can answer `list_hosts` and
+     * `host: 'local'`/`'self'` for its own agents without a row for itself —
+     * it has none, the same way the canvas has none for its own machine. A
+     * label edited from the canvas panel after enrollment is not something
+     * this host would otherwise ever learn.
+     */
+    youAre: z.string().optional(),
+  }),
   // The answer to a `relay`, matched by the id the host chose for it. A
   // separate frame rather than an `ok`, because the two ends do not share a
   // request channel: the canvas asks, the host answers, and this is the canvas
@@ -267,4 +308,4 @@ export type PeerResponse = z.infer<typeof PeerResponse>;
  * Bumped whenever the peer protocol or the DB schema changes shape. Hubs
  * refuse to connect across a mismatch rather than corrupting each other.
  */
-export const PEER_SCHEMA_VERSION = 7;
+export const PEER_SCHEMA_VERSION = 8;

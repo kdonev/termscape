@@ -2,6 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import {
   ListAgentsInput,
+  ListHostsInput,
   ListTemplatesInput,
   ReadScreenInput,
   SendMessageInput,
@@ -19,11 +20,12 @@ import {
 export interface AgentApi {
   whoami(sessionId: string): Promise<unknown>;
   listAgents(sessionId: string, workspace?: string): Promise<unknown>;
+  listHosts(sessionId: string): Promise<unknown>;
   listTemplates(sessionId: string, id?: string): Promise<unknown>;
   sendMessage(sessionId: string, to: string, text: string): Promise<unknown>;
   spawnAgent(
     sessionId: string,
-    opts: { profile?: string; name?: string; workspace?: string; prompt?: string },
+    opts: { profile?: string; name?: string; host?: string; workspace?: string; prompt?: string },
   ): Promise<unknown>;
   readScreen(sessionId: string, address: string, lines?: number): Promise<unknown>;
   setStatus(sessionId: string, text: string): Promise<unknown>;
@@ -135,10 +137,27 @@ export function buildMcpServer(callerSessionId: string, api: AgentApi): McpServe
     'spawn_agent',
     {
       description:
-        'Start a new agent, by default in your own workspace, and optionally give it a first instruction. Use this to delegate work you want done in parallel.',
+        'Start a new agent, by default in your own workspace, and optionally give it a ' +
+        'first instruction. Use this to delegate work you want done in parallel. Pass ' +
+        '`host` to start it on another machine on the canvas — call list_hosts first to ' +
+        'see what exists, what is reachable, and what each one has installed. An agent ' +
+        'started on another machine cannot be stopped with stop_agent yet.',
       inputSchema: SpawnAgentInput.shape,
     },
     (opts) => guard(() => api.spawnAgent(callerSessionId, opts)),
+  );
+
+  server.registerTool(
+    'list_hosts',
+    {
+      description:
+        'List every machine on the canvas: the one it runs on (called "canvas"), and every ' +
+        'host attached to it — its label, whether it is reachable, its workspaces, and the ' +
+        'agent CLIs it has installed. Call this before passing `host` to spawn_agent, the ' +
+        'way list_templates is called before passing `profile`.',
+      inputSchema: ListHostsInput.shape,
+    },
+    () => guard(() => api.listHosts(callerSessionId)),
   );
 
   server.registerTool(
