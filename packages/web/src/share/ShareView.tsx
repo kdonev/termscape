@@ -29,16 +29,31 @@ export function ShareView() {
   const everConnectedRef = useRef(false);
   if (connected) everConnectedRef.current = true;
 
-  const bodyRef = useRef<HTMLDivElement>(null);
+  /*
+   * The body is held in state through a callback ref, not read off a ref in a
+   * mount-once effect - and the difference is the whole of a bug that shipped.
+   *
+   * This component's first render is almost never the terminal: the socket
+   * has not said `ready` yet, so it returns "Connecting…" and the body does
+   * not exist. A `useRef` plus a `[]` effect measured on that first render,
+   * found nothing, and never ran again; when the session arrived the body
+   * appeared with its size stuck at 0x0, and the terminal - gated on a real
+   * size - never mounted. The link showed a header over an empty page.
+   *
+   * Keyed on the element itself, observation starts whenever the body
+   * actually appears, and stops when it goes away again (a reconnect swaps
+   * it back out for the message).
+   */
+  const [body, setBody] = useState<HTMLDivElement | null>(null);
   const [size, setSize] = useState({ w: 0, h: 0 });
   useEffect(() => {
-    const el = bodyRef.current;
-    if (!el) return;
-    const ro = new ResizeObserver(() => setSize({ w: el.clientWidth, h: el.clientHeight }));
-    ro.observe(el);
-    setSize({ w: el.clientWidth, h: el.clientHeight });
+    if (!body) return;
+    const measure = () => setSize({ w: body.clientWidth, h: body.clientHeight });
+    const ro = new ResizeObserver(measure);
+    ro.observe(body);
+    measure();
     return () => ro.disconnect();
-  }, []);
+  }, [body]);
 
   // The hub says so once, right before closing the socket - see the note in
   // net/client.ts on why this is latched rather than read off `connected`
@@ -62,7 +77,7 @@ export function ShareView() {
         <span className="addr">{session.title || session.address}</span>
         <span className="meta">{session.statusText ?? statusLabel(session)}</span>
       </header>
-      <div className="share-body" ref={bodyRef}>
+      <div className="share-body" ref={setBody}>
         {size.w > 0 && size.h > 0 && (
           <TerminalView
             sessionId={session.id}
