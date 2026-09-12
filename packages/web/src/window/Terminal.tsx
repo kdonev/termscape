@@ -7,6 +7,8 @@ import { useStore } from '../state/store.js';
 import { debug, debugOn } from '../debug.js';
 import { terminalFontSize } from '../canvas/viewport.js';
 import { wheelAction, wheelKey } from './wheel.js';
+import { rightClickAction } from './rightClick.js';
+import { readClipboard, writeClipboard } from './clipboard.js';
 import {
   TERMINAL_FONT_FAMILY,
   TERMINAL_LINE_HEIGHT,
@@ -274,6 +276,69 @@ convertEol: false,
     frame?.addEventListener('wheel', onWheelBubble, { passive: true });
 
     /*
+     * Right-click, decided the way rightClick.ts decides it and executed
+     * here because that is where the clipboard and the terminal both live.
+     *
+     * Capture is what puts this ahead of xterm's own listener on the
+     * `.xterm-screen` descendant, for the same reason onWheelCapture does -
+     * without it, a program with mouse tracking on would already have
+     * consumed the event by the time it reached here. `mousedown` rather than
+     * `contextmenu` because that is the event xterm itself listens for when
+     * deciding whether to encode a button-2 report; matching it means the
+     * two can never disagree about which button 2 this frame is looking at.
+     */
+    const onRightClickMouseDown = (e: MouseEvent) => {
+      if (e.button !== 2) return;
+      const action = rightClickAction({
+        mouseTracking: term.modes.mouseTrackingMode,
+        hasSelection: term.hasSelection(),
+        shift: e.shiftKey,
+      });
+      if (action === 'program') {
+        // xterm still gets to encode this as a mouse report; staying out of
+        // its way is the whole point of this branch.
+        debug('input', sessionId, 'right-click -> program (mouse tracking on)');
+        return;
+      }
+      e.preventDefault();
+      // Also keeps xterm from clearing the selection out from under a copy -
+      // its own mousedown handler runs right after this one in capture order.
+      e.stopPropagation();
+      if (action === 'copy') {
+        const text = term.getSelection();
+        void writeClipboard(text).then((wrote) => {
+          debug(
+            'input',
+            sessionId,
+            wrote
+              ? `right-click -> copied ${text.length} char(s)`
+              : 'right-click -> copy failed; selection kept',
+          );
+          if (wrote) term.clearSelection();
+        });
+      } else {
+        void readClipboard().then((text) => {
+          if (text === null) {
+            // The one a LAN user will hit: navigator.clipboard.readText does
+            // not exist outside a secure context, so a plain-http canvas
+            // opened from another machine cannot read the clipboard at all.
+            // Traced rather than thrown, because there is nothing to recover
+            // into - Ctrl+V still works, since it never touches this API.
+            debug('input', sessionId, 'right-click -> paste: clipboard unreadable (non-secure context?)');
+            return;
+          }
+          if (text.length === 0) {
+            debug('input', sessionId, 'right-click -> paste: clipboard empty');
+            return;
+          }
+          debug('input', sessionId, `right-click -> pasted ${text.length} char(s)`);
+          term.paste(text);
+        });
+      }
+    };
+    frame?.addEventListener('mousedown', onRightClickMouseDown, { capture: true });
+
+    /*
      * The last resort, for a window that would otherwise ignore the wheel.
      *
      * See wheel.ts for when this applies and why it has to exist at all. It
@@ -327,6 +392,7 @@ convertEol: false,
     return () => {
       frame?.removeEventListener('wheel', onWheelCapture, { capture: true });
       frame?.removeEventListener('wheel', onWheelBubble);
+      frame?.removeEventListener('mousedown', onRightClickMouseDown, { capture: true });
       unwatchSnapshot();
       onData.dispose();
       onBinary.dispose();
@@ -366,9 +432,11 @@ convertEol: false,
       className="term-host"
       ref={frameRef}
       /*
-       * Right-click belongs to the program, not to the browser. xterm already
-       * encodes button 2 for a program that asked for mouse reports; all that
-       * was in the way was the context menu opening over the top of it.
+       * The menu is still suppressed, but now because the mousedown listener
+       * above has already turned button 2 into a program report, a copy, or
+       * a paste - not because a program is assumed to always own it. Letting
+       * the browser's menu through on top of any of those would just cover
+       * up whichever one happened.
        */
       onContextMenu={(e) => e.preventDefault()}
     >
