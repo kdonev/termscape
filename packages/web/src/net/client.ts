@@ -38,6 +38,9 @@ export class HubClient {
   private readonly attached = new Set<string>();
   private reconnectDelay = 500;
   private closed = false;
+  /** Set once the hub has said `unauthorized`, so `onclose` stops reconnecting
+   * into the same refusal - see the note where it is set, in `onmessage`. */
+  private unauthorized = false;
   private queue: ClientMsg[] = [];
   private readonly pending = new Map<string, Pending>();
   private nextRequest = 0;
@@ -99,6 +102,14 @@ export class HubClient {
         this.queue = [];
         for (const m of q) this.rawSend(m);
       }
+      // The hub says so once, right before it closes the socket - on a stale
+      // canvas token, and on a share link that was just revoked. Reconnecting
+      // into the same refusal forever is what used to make a revoked link
+      // spin instead of saying so; latching here is what `onclose` reads to
+      // tell the two apart from an ordinary dropped connection.
+      if (parsed.data.t === 'error' && parsed.data.message === 'unauthorized') {
+        this.unauthorized = true;
+      }
       this.onServerMsg(parsed.data);
     };
 
@@ -109,7 +120,7 @@ export class HubClient {
       // forever. The mutation may well have landed, so say what is actually
       // known rather than that it failed.
       this.failPending('lost the connection to the hub before it answered');
-      if (this.closed) return;
+      if (this.closed || this.unauthorized) return;
       setTimeout(() => this.connect(), this.reconnectDelay);
       this.reconnectDelay = Math.min(this.reconnectDelay * 2, 10_000);
     };
@@ -240,5 +251,15 @@ export class HubClient {
     this.closed = true;
     this.failPending('the connection was closed');
     this.ws?.close();
+  }
+
+  /**
+   * Whether the hub has refused this token outright rather than merely being
+   * unreachable right now. `ShareView` reads this to tell "still connecting"
+   * apart from "this link no longer works" - both look identical as
+   * `connected: false` otherwise.
+   */
+  get rejected(): boolean {
+    return this.unauthorized;
   }
 }

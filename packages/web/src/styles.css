@@ -81,6 +81,9 @@ a.btn { text-decoration: none; display: inline-block; }
 .btn.primary { background: #1e2a45; border-color: #33406a; }
 .btn.danger:hover { border-color: var(--danger); color: var(--danger); }
 .btn.wide { min-width: 56px; }
+/* A window's share button while its terminal has a live link - same treatment
+   as an active tab, so "on" reads the same way everywhere it appears. */
+.btn.on { background: #1e2a45; border-color: var(--accent); color: var(--accent); }
 
 /* ------------------------------------------------------------ canvas */
 
@@ -177,6 +180,34 @@ a.btn { text-decoration: none; display: inline-block; }
 .window-bar .btn { padding: 2px 7px; font-size: 11px; }
 
 .window-body { flex: 1; min-height: 0; background: #0e1117; position: relative; }
+
+/* ------------------------------------------------------------- share view */
+
+/* A share link's whole page: header plus one terminal, nothing else - the
+   layout `.app` gives the canvas, minus the canvas. */
+.share-app { display: flex; flex-direction: column; height: 100%; }
+.share-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
+}
+.share-header .dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; }
+.share-header .addr { font-weight: 600; }
+.share-header .meta { color: var(--muted); font-size: 12px; }
+.share-body { flex: 1; min-height: 0; background: #0e1117; position: relative; }
+.share-message {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  padding: 16px;
+  text-align: center;
+}
 
 /* .term-host is the terminal's true content box; the inset reproduces what used
    to be its padding, while leaving it with none so .term-scale's percentages

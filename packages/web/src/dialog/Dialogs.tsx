@@ -11,6 +11,7 @@ import { pickValid } from '../state/selection.js';
 import { agentDetail, agentsOn, startableAgent } from '../state/agents.js';
 import { sessionsIn } from '../state/tree.js';
 import type { RequestResult } from '../net/client.js';
+import { writeClipboard } from '../window/clipboard.js';
 import { Dialog, DialogForm, Field } from './Dialog.js';
 import { JoinInstructions, SshForm } from './MachineForms.js';
 
@@ -45,6 +46,8 @@ function keyOf(spec: DialogSpec): string {
       return 'addMachine';
     case 'editMachine':
       return `editMachine:${spec.hostId}`;
+    case 'share':
+      return `share:${spec.sessionId}`;
     case 'confirm':
       return `confirm:${spec.title}`;
   }
@@ -66,6 +69,8 @@ function Body({ spec }: { spec: DialogSpec }) {
       return <AddMachineDialog />;
     case 'editMachine':
       return <EditMachineDialog hostId={spec.hostId} />;
+    case 'share':
+      return <ShareDialog sessionId={spec.sessionId} />;
     case 'confirm':
       return <ConfirmDialog spec={spec} />;
   }
@@ -830,6 +835,130 @@ function EditMachineDialog({ hostId }: { hostId: string }) {
           </p>
         )}
       </DialogForm>
+    </Dialog>
+  );
+}
+
+/* ------------------------------------------------------------------ share */
+
+/**
+ * A per-terminal link (issue 14). Mirrors `JoinInstructions` for the
+ * copy-link row and the "if that machine cannot resolve this one" fallback,
+ * but this is a stronger grant than joining a machine - the holder can type
+ * into a running agent - so it says that plainly and offers to revoke, which
+ * a join link has no equivalent of.
+ *
+ * Reactive to the store rather than to a local "just created" flag: sharing
+ * from a different browser tab, or the link already existing from before this
+ * dialog was opened, both have to land on the same copy-link view.
+ */
+function ShareDialog({ sessionId }: { sessionId: string }) {
+  const request = useRequest();
+  const closeDialog = useStore((s) => s.closeDialog);
+  const { session, share, lanOrigin, lanAltOrigin } = useStore(
+    useShallow((s) => ({
+      session: s.sessions.find((x) => x.id === sessionId),
+      share: s.shares.find((sh) => sh.sessionId === sessionId),
+      lanOrigin: s.lanOrigin,
+      lanAltOrigin: s.lanAltOrigin,
+    })),
+  );
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  if (!session) return <Gone what="terminal" />;
+
+  const run = (msg: AckableMsg, onOk?: () => void) => {
+    setBusy(true);
+    setError(null);
+    request(msg).then(
+      () => {
+        setBusy(false);
+        onOk?.();
+      },
+      (err: Error) => {
+        setBusy(false);
+        setError(err.message);
+      },
+    );
+  };
+
+  const urlFor = (origin: string) => `${origin}/t/${share!.token}`;
+
+  return (
+    <Dialog title={`Share ${session.title || session.address}`}>
+      <div className="dialog-body">
+        <p className="dialog-note">
+          Anyone with this link sees this one terminal live and can type into it -
+          a real keyboard on an agent that can run commands, not a read-only view.
+          They see nothing else: no canvas, no other agent, no panel.
+        </p>
+        {share ? (
+          lanOrigin ? (
+            <>
+              <div className="join-url">
+                <code>{urlFor(lanOrigin)}</code>
+                <button
+                  className="btn"
+                  type="button"
+                  onClick={() => {
+                    void writeClipboard(urlFor(lanOrigin)).then((wrote) => {
+                      if (!wrote) return;
+                      setCopied(true);
+                      setTimeout(() => setCopied(false), 1500);
+                    });
+                  }}
+                >
+                  {copied ? 'copied' : 'copy'}
+                </button>
+              </div>
+              {lanAltOrigin && (
+                <p className="dialog-note">
+                  If that machine cannot resolve this one by name, use{' '}
+                  <code>{urlFor(lanAltOrigin)}</code> instead.
+                </p>
+              )}
+            </>
+          ) : (
+            <p className="dialog-note">
+              This hub is bound to loopback, so nothing else on the network can
+              reach this link - only a browser on this same machine.
+            </p>
+          )
+        ) : (
+          <p className="dialog-note">Not shared yet.</p>
+        )}
+        {error && (
+          <p className="dialog-error" role="alert">
+            {error}
+          </p>
+        )}
+        <footer className="dialog-actions">
+          <button className="btn" type="button" onClick={closeDialog}>
+            close
+          </button>
+          {share ? (
+            <button
+              className="btn danger-solid"
+              type="button"
+              disabled={busy}
+              onClick={() => run({ t: 'unshareSession', sessionId }, closeDialog)}
+            >
+              {busy ? 'working…' : 'stop sharing'}
+            </button>
+          ) : (
+            <button
+              className="btn primary"
+              type="button"
+              disabled={busy}
+              onClick={() => run({ t: 'shareSession', sessionId })}
+            >
+              {busy ? 'working…' : 'share it'}
+            </button>
+          )}
+        </footer>
+      </div>
     </Dialog>
   );
 }

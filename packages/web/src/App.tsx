@@ -6,6 +6,13 @@ import { Panel } from './panel/Panel.js';
 import { Dialogs } from './dialog/Dialogs.js';
 import { useStore } from './state/store.js';
 import { HubClient } from './net/client.js';
+import { shareTokenFromPath } from './share/route.js';
+import { ShareView } from './share/ShareView.js';
+
+/** Set once at load and never re-read: the route a page opened with is the
+ * route it stays on, the same way the canvas token in resolveToken is only
+ * ever read once. */
+const shareToken = shareTokenFromPath(window.location.pathname);
 
 /** Token comes from the URL the hub printed, then is kept in session storage. */
 function resolveToken(): string {
@@ -44,7 +51,11 @@ export function App() {
   );
 
   useEffect(() => {
-    const token = resolveToken();
+    // A share link carries its own token in the path and skips resolveToken
+    // entirely - that helper's job is stripping a `?token=` into
+    // sessionStorage, which is exactly the durability a bookmarked share link
+    // must not have (see route.ts).
+    const token = shareToken ?? resolveToken();
     const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
     const client = new HubClient(
       `${proto}://${window.location.host}/ws`,
@@ -56,6 +67,12 @@ export function App() {
     client.connect();
     return () => client.close();
   }, [init, apply, setConnected]);
+
+  // A share link renders nothing else - no canvas, no panel, no toolbar - by
+  // construction: it is the same `HubClient`, the same store, the same
+  // `apply`, but `ready` for a scoped socket already holds exactly one
+  // session, so there would be nothing else on the canvas to show anyway.
+  if (shareToken) return <ShareView />;
 
   return (
     <div className="app">

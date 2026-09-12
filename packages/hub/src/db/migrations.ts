@@ -260,6 +260,34 @@ export const MIGRATIONS: Migration[] = [
       CREATE INDEX IF NOT EXISTS host_machine_id_idx ON host(machine_id);
     `,
   },
+  {
+    version: 9,
+    name: 'shares',
+    up: `
+      -- A per-terminal link (issue 14): the holder sees one session live and
+      -- can type into it, nothing else. Persisted rather than in-memory like
+      -- the per-agent bearer tokens in tokens.ts, because a link mailed to a
+      -- reviewer is meant to survive a hub restart until someone revokes it.
+      --
+      -- Deliberately NO foreign key to session(id). A peer hub's session has
+      -- no row in this table at all - it is keyed by its address, not a local
+      -- id (see the note at server.ts about hub.peers.find) - and an FK would
+      -- make a remote window the one kind of window that cannot be shared.
+      -- Validity is checked at mint and at resolve instead, against
+      -- hub.allSessions(); a stale row left behind by a session removed
+      -- without going through removeSession/removeRemoteWindow is harmless
+      -- because a uuid is never reused.
+      CREATE TABLE share (
+        token      TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      );
+
+      -- One share per session, which is what makes "is this shared" and
+      -- "revoke" unambiguous.
+      CREATE UNIQUE INDEX share_session_idx ON share(session_id);
+    `,
+  },
 ];
 
 export function runMigrations(db: Database): number {

@@ -561,10 +561,22 @@ export class SessionManager extends EventEmitter {
     this.store.updateSession(sessionId, { lastActiveAt: Date.now() });
   }
 
+  /**
+   * A share view follows this rather than driving it (see `TerminalView`'s
+   * `grid` prop), and it learns of a later resize only through
+   * `sessionUpserted` - there is no dedicated message for it. So the guard
+   * here matters, not just as an optimisation: `applyGrid` already suppresses
+   * a resize that would not change anything, but a caller that sends one
+   * anyway (a second owner window, a stale retry) must not turn that into a
+   * broadcast every follower has to redraw for.
+   */
   resize(sessionId: string, cols: number, rows: number): void {
     const p = this.live.get(sessionId);
     p?.resize(cols, rows);
+    const current = this.get(sessionId);
+    if (current && current.cols === cols && current.rows === rows) return;
     this.store.updateSession(sessionId, { cols, rows });
+    this.emitSession(sessionId);
   }
 
   setStatusText(sessionId: string, text: string): void {

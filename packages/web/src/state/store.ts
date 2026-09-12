@@ -8,6 +8,7 @@ import type {
   Message,
   Session,
   ServerMsg,
+  ShareInfo,
   Viewport,
   WindowRect,
   Workspace,
@@ -47,6 +48,8 @@ export type DialogSpec =
   | { kind: 'reviewTemplate'; proposalId: string }
   | { kind: 'addMachine' }
   | { kind: 'editMachine'; hostId: string }
+  /** The link for one session: copy it, or stop sharing. */
+  | { kind: 'share'; sessionId: string }
   /**
    * Destructive confirmation. The message to send is carried rather than a
    * callback, so the dialog needs to know nothing about what it is confirming
@@ -67,6 +70,15 @@ interface AppState {
   enrollUrl: string | null;
   /** The same page by IP, for a network that cannot resolve the name. */
   enrollAltUrl: string | null;
+  /**
+   * Where another machine can reach this hub at all, or null when it is
+   * bound to loopback. What a share link is built from - unlike `enrollUrl`,
+   * it exists whether or not enrollment is on: sharing one terminal is a
+   * different grant with a different audience.
+   */
+  lanOrigin: string | null;
+  /** The same origin by IP, when `lanOrigin` uses this machine's name. */
+  lanAltOrigin: string | null;
   hosts: Host[];
   /** Deploy output per host, newest last. Cleared when a host is removed. */
   hostLogs: Record<string, string[]>;
@@ -85,6 +97,8 @@ interface AppState {
    * it does not have only fails later, in a terminal window, as a spawn error.
    */
   hostProfiles: Record<string, AgentProfileInfo[]>;
+  /** Which sessions are shared, and the token each link carries. */
+  shares: ShareInfo[];
   viewport: Viewport;
   flashes: MessageFlash[];
   selectedId: string | null;
@@ -136,6 +150,8 @@ export const useStore = create<AppState>((set, get) => ({
   hubVersion: '',
   enrollUrl: null,
   enrollAltUrl: null,
+  lanOrigin: null,
+  lanAltOrigin: null,
   hosts: [],
   hostLogs: {},
   workspaces: [],
@@ -145,6 +161,7 @@ export const useStore = create<AppState>((set, get) => ({
   templates: [],
   templateProposals: [],
   hostProfiles: {},
+  shares: [],
   viewport: { panX: 0, panY: 0, zoom: 1 },
   flashes: [],
   selectedId: null,
@@ -165,6 +182,8 @@ export const useStore = create<AppState>((set, get) => ({
           hubVersion: m.state.hubVersion,
           enrollUrl: m.state.enrollUrl,
           enrollAltUrl: m.state.enrollAltUrl,
+          lanOrigin: m.state.lanOrigin,
+          lanAltOrigin: m.state.lanAltOrigin,
           hosts: m.state.hosts,
           workspaces: m.state.workspaces,
           sessions: m.state.sessions,
@@ -173,6 +192,7 @@ export const useStore = create<AppState>((set, get) => ({
           templates: m.state.templates,
           templateProposals: m.state.templateProposals,
           hostProfiles: m.state.hostProfiles,
+          shares: m.state.shares,
           viewport: m.state.viewport,
           // This arrives on every reconnect, not only the first, so it can
           // replace the session list under a selection made before the hub
@@ -259,6 +279,13 @@ export const useStore = create<AppState>((set, get) => ({
           const { [m.hostId]: _gone, ...hostLogs } = s.hostLogs;
           return { hosts: s.hosts.filter((x) => x.id !== m.hostId), hostLogs };
         });
+        return;
+
+      case 'sharesChanged':
+        // The whole list, same reasoning as `templatesChanged`: it is a
+        // handful of small records, recomputed on the hub rather than
+        // patched, so there is nothing here to diff against.
+        set({ shares: m.shares });
         return;
 
       case 'hostLog':

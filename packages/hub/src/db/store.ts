@@ -3,6 +3,7 @@ import {
   type Host,
   type Message,
   type Session,
+  type ShareInfo,
   type Viewport,
   type WindowRect,
   type Workspace,
@@ -506,6 +507,10 @@ export class Store {
   }
 
   removeSession(id: string): void {
+    // No FK from share to session (see migration 9), so this is the one
+    // place that keeps a removed session from leaving a dead link the panel
+    // would still draw as live.
+    this.db.prepare('DELETE FROM share WHERE session_id = ?').run(id);
     this.db.prepare('DELETE FROM session WHERE id = ?').run(id);
   }
 
@@ -566,6 +571,10 @@ export class Store {
   }
 
   removeRemoteWindow(address: string): void {
+    // Same reasoning as removeSession: a remote window is addressed the same
+    // way a share row is keyed, and forgetting it here is the only place that
+    // happens.
+    this.db.prepare('DELETE FROM share WHERE session_id = ?').run(address);
     this.db.prepare('DELETE FROM remote_window WHERE address = ?').run(address);
   }
 
@@ -619,6 +628,44 @@ export class Store {
       .prepare('SELECT serialized, cols, rows FROM session_snapshot WHERE session_id = ?')
       .get(sessionId) as { serialized: string; cols: number; rows: number } | undefined;
     return r ?? null;
+  }
+
+  /* --------------------------------------------------------------- shares */
+
+  /** Every session currently shared, for the panel to mark them and the
+   * scoped-socket broadcast filter to send its list to. */
+  listShares(): ShareInfo[] {
+    return (
+      this.db.prepare('SELECT session_id, token FROM share').all() as {
+        session_id: string;
+        token: string;
+      }[]
+    ).map((r) => ({ sessionId: r.session_id, token: r.token }));
+  }
+
+  getShare(sessionId: string): ShareInfo | null {
+    const r = this.db
+      .prepare('SELECT session_id, token FROM share WHERE session_id = ?')
+      .get(sessionId) as { session_id: string; token: string } | undefined;
+    return r ? { sessionId: r.session_id, token: r.token } : null;
+  }
+
+  insertShare(share: ShareInfo): void {
+    this.db
+      .prepare('INSERT INTO share (token, session_id, created_at) VALUES (@token, @sessionId, @createdAt)')
+      .run({ ...share, createdAt: Date.now() });
+  }
+
+  removeShare(sessionId: string): void {
+    this.db.prepare('DELETE FROM share WHERE session_id = ?').run(sessionId);
+  }
+
+  /** The session a token grants a socket, or null for an unknown or revoked one. */
+  resolveShare(token: string): string | null {
+    const r = this.db.prepare('SELECT session_id FROM share WHERE token = ?').get(token) as
+      | { session_id: string }
+      | undefined;
+    return r?.session_id ?? null;
   }
 
   /* ------------------------------------------------------------- messages */

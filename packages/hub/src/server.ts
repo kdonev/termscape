@@ -223,18 +223,50 @@ export async function serve(opts: ServeOptions): Promise<ServeResult> {
   /* ---------------------------------------------------------- WebSocket */
 
   const clients = new Set<import('ws').WebSocket>();
+  /**
+   * What a socket may see and touch: `null` for the canvas token (today's
+   * full-canvas behaviour, unchanged), or one session id for a share link.
+   * Absent entirely before `hello` lands.
+   */
+  const scopes = new Map<import('ws').WebSocket, string | null>();
 
   const send = (ws: import('ws').WebSocket, msg: ServerMsg): void => {
     if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(msg));
   };
+  /**
+   * Whether a scoped socket may be told this. Only the messages about its own
+   * session pass; everything else - another agent's title, a host, a
+   * template - is exactly what a reviewer holding one link must not learn.
+   * `snapshot`, `error` and `ack` never go through here: they are already
+   * addressed to one socket at the point they are sent.
+   */
+  const scopedBroadcast = (msg: ServerMsg, scope: string): boolean => {
+    switch (msg.t) {
+      case 'sessionUpserted':
+        return msg.session.id === scope;
+      case 'sessionRemoved':
+        return msg.sessionId === scope;
+      default:
+        return false;
+    }
+  };
   const broadcast = (msg: ServerMsg): void => {
-    for (const ws of clients) send(ws, msg);
+    for (const ws of clients) {
+      // Not yet authenticated: unset, not null, and left alone rather than
+      // filtered - the same as it was before scoping existed. `hello` is the
+      // very next thing such a socket will send.
+      const scope = scopes.get(ws);
+      if (typeof scope === 'string' && !scopedBroadcast(msg, scope)) continue;
+      send(ws, msg);
+    }
   };
 
   const snapshotState = (): HubState => ({
     hubVersion: HUB_VERSION,
     enrollUrl: enrollOrigin ? `${enrollOrigin}/join` : null,
     enrollAltUrl: enrollAltOrigin ? `${enrollAltOrigin}/join` : null,
+    lanOrigin,
+    lanAltOrigin,
     hosts: hub.store.listHosts(),
     workspaces: hub.store.listWorkspaces(),
     sessions: hub.allSessions(),
@@ -249,7 +281,40 @@ export async function serve(opts: ServeOptions): Promise<ServeResult> {
     // see it, and the agent that asked is still waiting on an answer.
     templateProposals: hub.pendingProposals(),
     hostProfiles: hub.peers.agentsByHost(),
+    shares: hub.shares.list(),
   });
+
+  /**
+   * What a share-scoped socket is told on `hello`: the one session it names,
+   * its workspace if this hub can resolve one for it, and empty everything
+   * else. The browser's own `apply('ready')` needs no change at all - it
+   * already replaces its state wholesale on every `ready`, so a state this
+   * thin just means a canvas of one window.
+   */
+  const scopedState = (sessionId: string): HubState => {
+    const session = hub.allSessions().find((s) => s.id === sessionId) ?? null;
+    // A remote session's workspaceId is the *peer's* local id, meaningless
+    // here (see the note on peer-serve's startSession) - getWorkspace simply
+    // returns null for it, which is exactly "nothing to show".
+    const workspace = session ? hub.store.getWorkspace(session.workspaceId) : null;
+    return {
+      hubVersion: HUB_VERSION,
+      enrollUrl: null,
+      enrollAltUrl: null,
+      lanOrigin: null,
+      lanAltOrigin: null,
+      hosts: [],
+      workspaces: workspace ? [workspace] : [],
+      sessions: session ? [session] : [],
+      messages: [],
+      viewport: { panX: 0, panY: 0, zoom: 1 },
+      profiles: [],
+      templates: [],
+      templateProposals: [],
+      hostProfiles: {},
+      shares: [],
+    };
+  };
 
   hub.on('session', (s) => broadcast({ t: 'sessionUpserted', session: s }));
   hub.on('removed', (id) => broadcast({ t: 'sessionRemoved', sessionId: id }));
@@ -263,6 +328,16 @@ export async function serve(opts: ServeOptions): Promise<ServeResult> {
   hub.on('message', (m) => broadcast({ t: 'messageSent', message: m }));
   hub.on('host', (h) => broadcast({ t: 'hostUpserted', host: h }));
   hub.on('hostRemoved', (id) => broadcast({ t: 'hostRemoved', hostId: id }));
+  hub.on('shares', (shares) => broadcast({ t: 'sharesChanged', shares }));
+  // Revocation has to reach an already-open tab, not just the row that let it
+  // in - otherwise "revoked" is untrue for the one case it exists for.
+  hub.on('shareRevoked', (sessionId: string) => {
+    for (const [ws, scope] of scopes) {
+      if (scope !== sessionId) continue;
+      send(ws, { t: 'error', message: 'unauthorized' });
+      ws.close();
+    }
+  });
   hub.on('agents', (profiles) =>
     broadcast({ t: 'agentsDetected', hostId: null, profiles }),
   );
@@ -320,6 +395,11 @@ export async function serve(opts: ServeOptions): Promise<ServeResult> {
           const isInput =
             f.kind === BinaryFrameKind.PtyInput ||
             f.kind === BinaryFrameKind.PtyInputRaw;
+          // The gate that matters most: this is the only path that writes to
+          // a PTY, and a share link is otherwise indistinguishable from the
+          // canvas token once a socket is past `hello`.
+          const scope = scopes.get(socket);
+          if (isInput && typeof scope === 'string' && f.sessionId !== scope) return;
           if (isInput) {
             // Raw frames are bytes and stay bytes: latin1 is the encoding that
             // survives a JSON hop to a peer without inventing code points, and
@@ -393,13 +473,27 @@ export async function serve(opts: ServeOptions): Promise<ServeResult> {
         const msg = parsed.data;
 
         if (!authed) {
-          if (msg.t !== 'hello' || msg.token !== clientToken) {
+          if (msg.t !== 'hello') {
             send(socket, { t: 'error', message: 'unauthorized' });
             socket.close();
             return;
           }
-          authed = true;
-          send(socket, { t: 'ready', state: snapshotState() });
+          if (msg.token === clientToken) {
+            authed = true;
+            scopes.set(socket, null);
+            send(socket, { t: 'ready', state: snapshotState() });
+            return;
+          }
+          // Not the canvas token; try it as a share link before giving up.
+          const sharedSessionId = hub.resolveShareToken(msg.token);
+          if (sharedSessionId) {
+            authed = true;
+            scopes.set(socket, sharedSessionId);
+            send(socket, { t: 'ready', state: scopedState(sharedSessionId) });
+            return;
+          }
+          send(socket, { t: 'error', message: 'unauthorized' });
+          socket.close();
           return;
         }
 
@@ -413,6 +507,7 @@ export async function serve(opts: ServeOptions): Promise<ServeResult> {
       clients.delete(socket);
       hub.setViewers(clients.size);
       attached.delete(socket);
+      scopes.delete(socket);
     });
   });
 
@@ -443,6 +538,29 @@ export async function serve(opts: ServeOptions): Promise<ServeResult> {
     socket: import('ws').WebSocket,
     msg: ClientMsg,
   ): Promise<string | void> {
+    /*
+     * A share-scoped socket may only ask about the one session it was
+     * handed. Everything downstream of `hello` for the canvas token is a
+     * permission system nobody asked for; this is deliberately not that -
+     * one value, checked once, before the switch below ever sees the
+     * message. Each allowed message still names its own sessionId, which is
+     * checked against the scope rather than trusted.
+     *
+     * `resize` is deliberately NOT on this list. A share view renders with
+     * `grid: 'follow'` and never sends one - it fits itself to the grid the
+     * owner's window drives, precisely so two browsers do not fight over one
+     * PTY's size and leave the *owner* rendering on a grid the PTY no longer
+     * has. Accepting a resize here would be a permission nothing uses whose
+     * only effect is to reopen that.
+     */
+    const scope = scopes.get(socket);
+    if (typeof scope === 'string') {
+      const allowed = msg.t === 'hello' || msg.t === 'attach' || msg.t === 'detach';
+      if (!allowed || ('sessionId' in msg && msg.sessionId !== scope)) {
+        throw new Error('not permitted on a shared-session link');
+      }
+    }
+
     switch (msg.t) {
       case 'hello':
         return;
@@ -619,6 +737,18 @@ export async function serve(opts: ServeOptions): Promise<ServeResult> {
 
       case 'resumeWorkspace':
         await hub.resumeWorkspace(msg.workspaceId);
+        return;
+
+      case 'shareSession':
+        // The token itself does not ride the ack: it arrives on the
+        // `sharesChanged` broadcast that `hub.shareSession` triggers before
+        // this even returns, the same way `saveTemplate` answers through
+        // `templatesChanged` rather than the ack.
+        hub.shareSession(msg.sessionId);
+        return;
+
+      case 'unshareSession':
+        hub.unshareSession(msg.sessionId);
         return;
 
       case 'moveWindow':

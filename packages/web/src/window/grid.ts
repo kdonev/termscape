@@ -94,6 +94,33 @@ export function gridFor(
   };
 }
 
+/**
+ * The render scale that fits a fixed `cols`x`rows` grid into a
+ * `frameW`x`frameH` viewport, without changing that grid.
+ *
+ * The inverse of `gridFor`: that derives a grid from a frame size, this
+ * derives the largest scale a frame can show a *given* grid at. It exists
+ * for `TerminalView`'s `'follow'` mode - a share view, which must never send
+ * a `resize` of its own (see the note on that prop) and instead fits itself
+ * to whatever grid the owner's window is already driving.
+ */
+export function renderScaleToFit(
+  cols: number,
+  rows: number,
+  frameW: number,
+  frameH: number,
+  dpr: number,
+  base: BaseCell,
+  lineHeight = TERMINAL_LINE_HEIGHT,
+): number {
+  let best = MIN_DEVICE_FONT;
+  for (let deviceFont = MIN_DEVICE_FONT; deviceFont <= MAX_DEVICE_FONT; deviceFont++) {
+    const cell = normalisedCell(base, deviceFont, lineHeight);
+    if (cols * cell.w <= frameW && rows * cell.h <= frameH) best = deviceFont;
+  }
+  return best / (BASE_FONT_SIZE * dpr);
+}
+
 let cached: BaseCell | null = null;
 
 /**

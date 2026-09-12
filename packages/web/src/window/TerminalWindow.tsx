@@ -32,10 +32,12 @@ export const TerminalWindow = memo(function TerminalWindow({
   maximized,
   onMaximize,
 }: Props) {
-  const { moveWindow, select, client } = useStore(useShallow((s) => ({
+  const { moveWindow, select, client, shared, openDialog } = useStore(useShallow((s) => ({
     moveWindow: s.moveWindow,
     select: s.select,
     client: s.client,
+    shared: s.shares.some((sh) => sh.sessionId === session.id),
+    openDialog: s.openDialog,
   })));
   const [drag, setDrag] = useState<null | { mode: 'move' | 'resize'; ox: number; oy: number }>(
     null,
@@ -129,6 +131,21 @@ export const TerminalWindow = memo(function TerminalWindow({
           onClick={() => onMaximize(session.id)}
         >
           {maximized ? '⤡' : '⤢'}
+        </button>
+        {/*
+          Opens a dialog rather than acting immediately - this is a real grant
+          of a keyboard on an agent that can run commands, and the dialog is
+          where that gets said plainly. `on` reflects whether a link already
+          exists so a second click finds the same one rather than looking like
+          nothing happened.
+        */}
+        <button
+          className={`btn${shared ? ' on' : ''}`}
+          title={shared ? 'Manage this terminal’s share link' : 'Share this terminal by link'}
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={() => openDialog({ kind: 'share', sessionId: session.id })}
+        >
+          share
         </button>
         {stopped && (
           // Both paths call resumeSession. For a resumable profile the hub

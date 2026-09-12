@@ -205,6 +205,20 @@ export const ClientMsg = z.discriminatedUnion('t', [
   z.object({ t: z.literal('resumeSession'), sessionId: z.string() }),
   z.object({ t: z.literal('resumeWorkspace'), workspaceId: z.string() }),
 
+  /**
+   * Grant or revoke a link that opens one session, and nothing else, in
+   * another browser. Minted lazily: sharing a session that already has a
+   * token returns the same one rather than invalidating whatever tab already
+   * holds it.
+   */
+  z.object({ t: z.literal('shareSession'), requestId, sessionId: z.string() }),
+  /**
+   * Revoking closes every socket already scoped to the token, not merely
+   * the row that let it in - an open reviewer tab is the one case revocation
+   * exists for, and "revoked" would otherwise be untrue for it.
+   */
+  z.object({ t: z.literal('unshareSession'), requestId, sessionId: z.string() }),
+
   // canvas layout
   z.object({ t: z.literal('moveWindow'), sessionId: z.string(), rect: WindowRect }),
   z.object({ t: z.literal('setViewport'), viewport: Viewport }),
@@ -267,9 +281,15 @@ export type AckableMsg = Extract<
       | 'removeSession'
       | 'addHost'
       | 'updateHost'
-      | 'removeHost';
+      | 'removeHost'
+      | 'shareSession'
+      | 'unshareSession';
   }
 >;
+
+/** A share link, as the wire carries it: the token, not a finished URL. */
+export const ShareInfo = z.object({ sessionId: z.string(), token: z.string() });
+export type ShareInfo = z.infer<typeof ShareInfo>;
 
 export const HubState = z.object({
   hubVersion: z.string(),
@@ -284,6 +304,15 @@ export const HubState = z.object({
    * numeric form is always offered rather than assumed unnecessary.
    */
   enrollAltUrl: z.string().nullable(),
+  /**
+   * Where another machine can reach this hub at all, or null when it is
+   * bound to loopback. `serve()` already computes this for the join page,
+   * but a share link needs the reachable origin whether or not enrollment is
+   * on - it is a different grant with a different audience.
+   */
+  lanOrigin: z.string().nullable(),
+  /** The same origin by IP, when `lanOrigin` uses this machine's name. */
+  lanAltOrigin: z.string().nullable(),
   hosts: z.array(Host),
   workspaces: z.array(Workspace),
   sessions: z.array(Session),
@@ -306,6 +335,11 @@ export const HubState = z.object({
    * rather than this one's.
    */
   hostProfiles: z.record(z.string(), z.array(AgentProfileInfo)),
+  /**
+   * Which sessions are shared. Empty on a socket scoped to a share token: a
+   * reviewer holding one link has no business learning that others exist.
+   */
+  shares: z.array(ShareInfo),
 });
 export type HubState = z.infer<typeof HubState>;
 
@@ -330,6 +364,8 @@ export const ServerMsg = z.discriminatedUnion('t', [
   z.object({ t: z.literal('workspaceRemoved'), workspaceId: z.string() }),
   z.object({ t: z.literal('hostUpserted'), host: Host }),
   z.object({ t: z.literal('hostRemoved'), hostId: z.string() }),
+  /** The whole list, for the same reason `templatesChanged` sends its whole list. */
+  z.object({ t: z.literal('sharesChanged'), shares: z.array(ShareInfo) }),
   // Deploy progress. A remote install rebuilds native modules and takes
   // minutes; without this the panel is a frozen button.
   z.object({ t: z.literal('hostLog'), hostId: z.string(), line: z.string() }),

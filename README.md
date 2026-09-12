@@ -54,6 +54,9 @@ the field, with what you typed still in it.
 - Clicking an agent in the panel brings the canvas to it
 - Clicking the canvas closes the panel, as does **Escape** — which closes the
   panel first and clears the selection only once it is shut
+- **share** on a window's title bar hands a reviewer a link to that one
+  terminal, live, with nothing else on the canvas visible to them — see
+  [Security](#security) for what the link actually grants
 
 ## Requirements
 
@@ -428,6 +431,15 @@ could be talked into sending an attacker's text to a peer.
   machine to death.
 - An agent may only stop agents it spawned.
 - `--dangerously-skip-permissions` is never a default.
+- A share link is a real grant of a keyboard on an agent that can run
+  commands, not a read-only view — the dialog says so before you copy one.
+  It opens exactly one terminal and nothing else: no canvas, no other agent's
+  name, no panel. It is scoped to that one session everywhere the canvas
+  token is checked, stored in `state.db` so it survives a hub restart, and
+  reachable only on the interfaces the hub bound — a hub started with
+  `--listen loopback` has no `lanOrigin` to build one from. **stop sharing**,
+  in the same dialog, revokes it and disconnects any tab that already had it
+  open — immediately, not on that tab's next reload.
 
 ## Contributing
 

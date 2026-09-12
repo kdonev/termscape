@@ -27,6 +27,7 @@ import { briefMode, ProfileRegistry } from './agents/profiles.js';
 import { AgentDetector } from './agents/detect.js';
 import { TemplateRegistry, validate as validateTemplate } from './agents/templates.js';
 import { TokenRegistry } from './agents/tokens.js';
+import { Shares } from './agents/shares.js';
 import { MessageRouter } from './agents/router.js';
 import { PollWatch } from './agents/polling.js';
 import { SessionManager } from './session/manager.js';
@@ -85,6 +86,8 @@ export class Hub extends EventEmitter implements AgentApi {
   /** What of those profiles this machine actually has installed. */
   readonly agents: AgentDetector;
   readonly tokens: TokenRegistry;
+  /** Per-session share links (issue 14). Persisted, unlike `tokens`. */
+  readonly shares: Shares;
   readonly sessions: SessionManager;
   readonly router: MessageRouter;
   readonly peers: PeerRegistry;
@@ -125,6 +128,7 @@ export class Hub extends EventEmitter implements AgentApi {
     // canvas the same way it forwards session changes.
     this.agents.on('changed', (found: AgentProfileInfo[]) => this.emit('agents', found));
     this.tokens = new TokenRegistry();
+    this.shares = new Shares(this.store);
     this.spawnCap = opts.spawnCap ?? DEFAULT_SPAWN_CAP;
 
     // Origin is corrected once the server binds and knows its port.
@@ -1017,6 +1021,51 @@ export class Hub extends EventEmitter implements AgentApi {
 
   setViewport(v: Viewport): void {
     this.store.saveViewport(v);
+  }
+
+  /* --------------------------------------------------------------- shares */
+
+  /**
+   * Grant a link that opens `sessionId` alone in another browser.
+   *
+   * Checked against `allSessions()` rather than trusted from the caller,
+   * because there is deliberately no foreign key holding the share table to
+   * this: a remote window's session lives on a peer, not in this database
+   * (see migration 9), so the only way to refuse an id that names nothing is
+   * to ask the same place the canvas itself would.
+   */
+  shareSession(sessionId: string): string {
+    if (!this.allSessions().some((s) => s.id === sessionId)) {
+      throw new Error(`unknown session ${sessionId}`);
+    }
+    const token = this.shares.share(sessionId);
+    this.emit('shares', this.shares.list());
+    return token;
+  }
+
+  /**
+   * Revoke a share link. `/ws` listens for `shareRevoked` and closes every
+   * socket already scoped to this session - without that, "revoked" would be
+   * untrue for a reviewer tab that is already open, which is the one case
+   * revocation exists for.
+   */
+  unshareSession(sessionId: string): void {
+    this.shares.unshare(sessionId);
+    this.emit('shares', this.shares.list());
+    this.emit('shareRevoked', sessionId);
+  }
+
+  /**
+   * Resolve a share token to the session it grants, re-checking against
+   * `allSessions()` the same way `shareSession` does at mint time. Not
+   * expected to ever disagree - `removeSession` and `removeRemoteWindow` both
+   * delete the row when a session goes - but a socket presenting a token is
+   * exactly the moment to distrust a row rather than the moment to assume it.
+   */
+  resolveShareToken(token: string): string | null {
+    const sessionId = this.shares.resolve(token);
+    if (!sessionId) return null;
+    return this.allSessions().some((s) => s.id === sessionId) ? sessionId : null;
   }
 
   /* ------------------------------------------------- AgentApi (MCP tools) */

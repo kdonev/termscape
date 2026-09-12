@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Terminal as XTerm } from '@xterm/xterm';
 import { WebglAddon } from '@xterm/addon-webgl';
 import '@xterm/xterm/css/xterm.css';
@@ -14,6 +14,7 @@ import {
   TERMINAL_LINE_HEIGHT,
   gridFor,
   measureBaseCell,
+  renderScaleToFit,
 } from './grid.js';
 
 interface Props {
@@ -23,10 +24,28 @@ interface Props {
   h: number;
   /**
    * The canvas zoom, quantised to a whole device pixel of text height and
-   * shared by every terminal. See the host scaling note below.
+   * shared by every terminal. See the host scaling note below. Ignored in
+   * `grid: 'follow'`, which computes its own to fit the given grid instead.
    */
   renderScale: number;
   focused: boolean;
+  /**
+   * `'drive'` (default, every existing call site): size the PTY from this
+   * window's own geometry and send `resize` when it changes - today's
+   * behaviour, unchanged.
+   *
+   * `'follow'`: never touch the PTY's size. Two browsers attached to one PTY
+   * both wanting to set it would fight, and the owner's window would lose -
+   * left rendering on a grid the PTY no longer has, which reads as garbled
+   * output on the *owner's* screen with nothing on the sharer's side to
+   * explain it. So a share view takes `cols`/`rows` from the session (driven
+   * by the owner) and only picks a `renderScale` to fit that grid into its
+   * own viewport, using the same counter-scale machinery below.
+   */
+  grid?: 'drive' | 'follow';
+  /** Required when `grid: 'follow'`: the grid to display, not to request. */
+  cols?: number;
+  rows?: number;
 }
 
 const THEME = {
@@ -105,24 +124,40 @@ function mouseState(term: XTerm): Record<string, unknown> {
  * cols/rows are computed from the window's own size, so zooming never reflows
  * the agent's output.
  */
-export function TerminalView({ sessionId, w, h, renderScale, focused }: Props) {
+export function TerminalView({
+  sessionId,
+  w,
+  h,
+  renderScale,
+  focused,
+  grid = 'drive',
+  cols: followCols,
+  rows: followRows,
+}: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
   const frameRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<XTerm | null>(null);
   const client = useStore((s) => s.client);
+  const follow = grid === 'follow';
 
-  // Read through a ref inside the mount effect: the initial font size must
-  // match the current zoom (a terminal mounted while zoomed in has to start
-  // sharp) without renderScale becoming a remount trigger.
-  const scaleRef = useRef(renderScale);
-  scaleRef.current = renderScale;
+  // Read through a ref inside the mount effect: the initial grid must match
+  // the current one (a share view mounted mid-session has to start at the
+  // owner's actual size) without followCols/followRows becoming a remount
+  // trigger - the same reasoning effectiveScaleRef documents below for the
+  // font size.
+  const followGridRef = useRef({ cols: followCols, rows: followRows });
+  followGridRef.current = { cols: followCols, rows: followRows };
 
   /**
    * Size the PTY from the window geometry. The frame's clientWidth/Height are
    * layout sizes, unaffected by the world transform or by the host's own
    * counter-scale, so this is world pixels at any zoom.
+   *
+   * Never called in 'follow' mode - see the prop's own comment for why a
+   * share view must not do this.
    */
   const applyGrid = useCallback(() => {
+    if (follow) return;
     const term = termRef.current;
     const frame = frameRef.current;
     if (!term || !frame || !client) return;
@@ -141,21 +176,46 @@ export function TerminalView({ sessionId, w, h, renderScale, focused }: Props) {
     debug('attach', sessionId, `grid ${term.cols}x${term.rows} -> ${cols}x${rows}`);
     term.resize(cols, rows);
     client.send({ t: 'resize', sessionId, cols, rows });
-  }, [client, sessionId]);
+  }, [client, sessionId, follow]);
+
+  // The render scale that fits the owner's grid into this view's own
+  // viewport, recomputed whenever that grid or the viewport changes. Seeded
+  // synchronously from props rather than starting at 1 and correcting a
+  // frame later: the grid is already known the moment a share view has a
+  // session to show at all.
+  const [followScale, setFollowScale] = useState(() =>
+    follow && followCols && followRows
+      ? renderScaleToFit(followCols, followRows, w, h, window.devicePixelRatio || 1, measureBaseCell())
+      : renderScale,
+  );
+  const effectiveScale = follow ? followScale : renderScale;
+  // Read through a ref for the same reason followGridRef is: the mount
+  // effect below reads this once, at creation, for the initial font size -
+  // not a value it should chase afterward, and not a remount trigger either.
+  const effectiveScaleRef = useRef(effectiveScale);
+  effectiveScaleRef.current = effectiveScale;
 
   useEffect(() => {
     const host = hostRef.current;
     if (!host || !client) return;
 
+    // In 'follow' mode the terminal is created at the owner's grid directly,
+    // rather than at xterm's 80x24 default and resized a moment later -
+    // otherwise the very first thing written into it (the snapshot below)
+    // would wrap against the wrong width for one frame.
+    const initialGrid = follow ? followGridRef.current : null;
     const term = new XTerm({
       theme: THEME,
       fontFamily: TERMINAL_FONT_FAMILY,
-      fontSize: terminalFontSize(scaleRef.current),
+      fontSize: terminalFontSize(effectiveScaleRef.current),
       lineHeight: TERMINAL_LINE_HEIGHT,
       cursorBlink: focused,
       scrollback: 5000,
       allowProposedApi: true,
-convertEol: false,
+      convertEol: false,
+      ...(initialGrid?.cols && initialGrid?.rows
+        ? { cols: initialGrid.cols, rows: initialGrid.rows }
+        : {}),
     });
     term.open(host);
 
@@ -406,19 +466,40 @@ convertEol: false,
   }, [sessionId, client]);
 
   // Only the window geometry changes the grid. Zoom deliberately does not.
+  // No-op in 'follow' mode; kept unconditional so this hook never changes
+  // count between renders.
   useEffect(() => {
     const id = requestAnimationFrame(applyGrid);
     return () => cancelAnimationFrame(id);
   }, [w, h, applyGrid]);
+
+  /**
+   * The 'follow' half of resizing: apply the owner's grid to this terminal -
+   * a local `resize()`, never a `resize` message - and refit the render scale
+   * to whatever viewport this view actually has. This is how a share view
+   * ever learns the owner changed the grid at all: `SessionManager.resize`
+   * emits `sessionUpserted` when cols/rows actually change, and that is the
+   * only signal that reaches here.
+   */
+  useEffect(() => {
+    if (!follow || !followCols || !followRows) return;
+    const term = termRef.current;
+    if (term && (term.cols !== followCols || term.rows !== followRows)) {
+      term.resize(followCols, followRows);
+    }
+    setFollowScale(
+      renderScaleToFit(followCols, followRows, w, h, window.devicePixelRatio || 1, measureBaseCell()),
+    );
+  }, [follow, followCols, followRows, w, h]);
 
   // Re-rasterize at the new resolution, keeping the same grid. No resize is
   // sent: the PTY's view of the terminal has not changed, only its sharpness.
   useEffect(() => {
     const term = termRef.current;
     if (!term) return;
-    const fontSize = terminalFontSize(renderScale);
+    const fontSize = terminalFontSize(effectiveScale);
     if (term.options.fontSize !== fontSize) term.options.fontSize = fontSize;
-  }, [renderScale]);
+  }, [effectiveScale]);
 
   useEffect(() => {
     const term = termRef.current;
@@ -444,9 +525,9 @@ convertEol: false,
         className="term-scale"
         ref={hostRef}
         style={{
-          width: `${100 * renderScale}%`,
-          height: `${100 * renderScale}%`,
-          transform: `scale(${1 / renderScale})`,
+          width: `${100 * effectiveScale}%`,
+          height: `${100 * effectiveScale}%`,
+          transform: `scale(${1 / effectiveScale})`,
         }}
       />
     </div>
