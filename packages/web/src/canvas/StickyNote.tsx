@@ -167,10 +167,14 @@ export const StickyNote = memo(function StickyNote({ note, zoom, selected, autoF
         className="note-text"
         value={note.text}
         placeholder="Type something…"
-        // Stops the canvas from panning under a drag-select of the text, and
-        // keeps a click here from re-triggering the outer onSelect's z-bump
-        // math twice for the one gesture.
-        onPointerDown={(e) => e.stopPropagation()}
+        // Stops the canvas from panning under a drag-select of the text. That
+        // also stops the note's own onPointerDown, so select here instead -
+        // otherwise clicking into the text of a note leaves it unselected,
+        // under its neighbours, and a terminal still holding the selection.
+        onPointerDown={(e) => {
+          e.stopPropagation();
+          onSelect();
+        }}
         onChange={(e) => putNote({ ...note, text: e.target.value, updatedAt: Date.now() })}
       />
 
