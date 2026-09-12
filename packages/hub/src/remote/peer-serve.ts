@@ -7,10 +7,15 @@ import {
   type AgentProfileInfo,
   type PeerResponse,
   type Session,
+  describeInput,
+  describeLatin1,
+  describeModeChanges,
+  describeSnapshotModes,
 } from '@termscape/protocol';
 import type { WebSocket } from 'ws';
 import type { Hub } from '../hub.js';
 import { HUB_VERSION } from '../hub.js';
+import { debug, debugOn } from '../debug.js';
 
 /**
  * The answering half of the hub-to-hub link: it serves requests about *this*
@@ -93,6 +98,14 @@ export function createPeerServer(hub: Hub, clientToken: string): PeerServer {
     if (sockets.size === 0) return;
     const s = hub.sessions.get(sessionId);
     if (!s) return;
+    // Logged before the attachment check, deliberately: a program that turned
+    // mouse tracking on while no canvas was watching still turned it on, and
+    // a trace that only shows what was forwarded cannot tell that from a
+    // program that never asked.
+    if (debugOn('output')) {
+      const modes = describeModeChanges(chunk);
+      if (modes) debug('output', `${s.address} program set ${modes}`);
+    }
     for (const ws of sockets) {
       if (attached.get(ws)?.has(s.address)) {
         send(ws, { t: 'output', address: s.address, data: chunk });
@@ -251,7 +264,23 @@ export function createPeerServer(hub: Hub, clientToken: string): PeerServer {
             const t = hub.sessions.getByAddress(req.address);
             if (t) {
               const snap = hub.sessions.snapshotForAttach(t.id);
-              if (snap) send(socket, { t: 'output', address: req.address, data: snap.serialized });
+              if (snap) {
+                // What the canvas's window will be holding the moment it
+                // opens. The serializer replays the tracking mode but not the
+                // encoding one, so a snapshot can restore `?1003h` without
+                // `?1006h` and leave the window sending X10 reports to a
+                // program that had been getting SGR.
+                debug(
+                  'attach',
+                  `attach ${req.address} ${snap.cols}x${snap.rows} ` +
+                    `snapshot restores: ${describeSnapshotModes(snap.serialized)}`,
+                );
+                send(socket, { t: 'output', address: req.address, data: snap.serialized });
+              } else {
+                debug('attach', `attach ${req.address}, no snapshot`);
+              }
+            } else {
+              debug('attach', `attach ${req.address} REFUSED: no such agent here`);
             }
             return ok({ attached: req.address });
           }
@@ -262,6 +291,29 @@ export function createPeerServer(hub: Hub, clientToken: string): PeerServer {
 
           case 'input': {
             const t = hub.sessions.getByAddress(req.address);
+            /*
+             * The far end of a remote wheel, and the last place it can be
+             * lost quietly.
+             *
+             * `req.id` is the id the canvas minted for this request, so this
+             * line and the canvas's `hub -> peer` line are the same event
+             * seen from both machines. If the canvas logged the send and this
+             * never appears, the loss is on the link; if this appears with a
+             * different byte count or a doubled coordinate, the loss is the
+             * encoding.
+             */
+            if (debugOn('input')) {
+              const what =
+                req.encoding === 'binary'
+                  ? describeLatin1(req.data)
+                  : describeInput(Buffer.from(req.data, 'utf8'));
+              debug(
+                'input',
+                `peer -> pty ${req.id} ${req.address} ` +
+                  `encoding=${req.encoding ?? 'utf8(default)'} ` +
+                  `${t ? `session=${t.id}` : 'NO SUCH AGENT'}: ${what}`,
+              );
+            }
             if (!t) return err(`no agent at address "${req.address}"`);
             // `binary` carries bytes one per code unit; anything else, including
             // an older canvas that sends no encoding at all, is text.
@@ -275,6 +327,11 @@ export function createPeerServer(hub: Hub, clientToken: string): PeerServer {
 
           case 'resize': {
             const t = hub.sessions.getByAddress(req.address);
+            debug(
+              'attach',
+              `resize ${req.address} -> ${req.cols}x${req.rows}` +
+                (t ? '' : ' REFUSED: no such agent here'),
+            );
             if (!t) return err(`no agent at address "${req.address}"`);
             hub.sessions.resize(t.id, req.cols, req.rows);
             return ok({ ok: true });

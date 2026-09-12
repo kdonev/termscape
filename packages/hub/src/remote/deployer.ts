@@ -240,9 +240,13 @@ export async function startRemoteHub(
     if (m) return { port: existingPort, version: m[1]! };
   }
 
+  // `--token=<t>`, not `--token <t>`: the token is base64url and may begin
+  // with a dash, which Node's strict parseArgs rejects as a value that looks
+  // like another option. The shell quotes protect the *shell*; this protects
+  // the argument parser on the other side of it.
   await exec(
     conn,
-    `cd ${remoteDir}/hub && TERMSCAPE_HOME=${remoteDir} nohup node dist/cli.js --headless --port 0 --token '${opts.token}' > ${logFile} 2>&1 &`,
+    `cd ${remoteDir}/hub && TERMSCAPE_HOME=${remoteDir} nohup node dist/cli.js --headless --port 0 --token='${opts.token}' > ${logFile} 2>&1 &`,
   );
 
   // The CLI prints TERMSCAPE_PORT=<n> precisely so this can be parsed.

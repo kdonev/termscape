@@ -10,6 +10,9 @@ import { joinCanvas, type JoinLink } from './remote/join.js';
 import { openInBrowser } from './browser.js';
 import { ProfileRegistry } from './agents/profiles.js';
 import { which } from './agents/resolve.js';
+import { debugTopics } from './debug.js';
+import { CLI_OPTIONS } from './cli-args.js';
+import { teeConsoleTo } from './log-file.js';
 
 /**
  * Warn when no agent CLI is installed.
@@ -35,23 +38,7 @@ function preflightAgents(): void {
 }
 
 async function main(): Promise<void> {
-  const { values } = parseArgs({
-    options: {
-      port: { type: 'string' },
-      headless: { type: 'boolean', default: false },
-      token: { type: 'string' },
-      listen: { type: 'string' },
-      join: { type: 'string' },
-      'join-token': { type: 'string' },
-      label: { type: 'string' },
-      open: { type: 'boolean', default: false },
-      // parseArgs has no --no-x negation, so the opt-out is its own flag.
-      'no-open': { type: 'boolean', default: false },
-      version: { type: 'boolean', default: false },
-      help: { type: 'boolean', default: false },
-    },
-    strict: true,
-  });
+  const { values } = parseArgs({ options: CLI_OPTIONS, strict: true });
 
   if (values.version) {
     console.log(HUB_VERSION);
@@ -69,6 +56,9 @@ async function main(): Promise<void> {
                     this machine, and turns that page off with it
   --headless        serve no web UI; used when running as a remote hub
   --token <t>       client token to use instead of generating one
+  --log-file <p>    also write this hub's output to a file, keeping the
+                    console. Used by the join installer, which waits on a
+                    line in it
   --open            open the UI in the browser even when not on a terminal
   --no-open         do not open the browser; just print the url
 
@@ -81,6 +71,12 @@ Joining another machine's canvas:
 `);
     return;
   }
+
+  // Before anything is printed, so the file holds the whole run and not the
+  // tail of it. Deliberately not wrapped in a try: the installer waits on a
+  // line in this file, and a hub that cannot write it would hang that wait
+  // for six minutes and then report something misleading.
+  if (values['log-file']) teeConsoleTo(values['log-file']);
 
   preflightAgents();
 
@@ -118,6 +114,13 @@ Joining another machine's canvas:
   // A remote hub is parsed by the deployer, so keep this line machine-readable.
   console.log(`termscape hub ${HUB_VERSION} listening on ${origin}`);
   console.log(`TERMSCAPE_PORT=${port}`);
+  // Said out loud because it is easy to leave on, and because a remote
+  // session only traces if the hub on the *other* machine was started with
+  // it too - a half-traced path is what makes an input look lost.
+  const traced = debugTopics();
+  if (traced.length > 0) {
+    console.log(`  tracing: ${traced.join(', ')} (TERMSCAPE_DEBUG)`);
+  }
 
   /*
    * Binding wide and answering the join page is the default now, which makes

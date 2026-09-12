@@ -2,8 +2,9 @@ import { EventEmitter } from 'node:events';
 import { createRequire } from 'node:module';
 import { basename } from 'node:path';
 import { platform } from 'node:process';
-import type { AgentStatus } from '@termscape/protocol';
+import { describeInput, type AgentStatus } from '@termscape/protocol';
 import { buildAgentEnv } from '../agents/env.js';
+import { debug, debugOn } from '../debug.js';
 // Type-only imports are erased at compile time, so they are safe against the
 // CJS interop problem described below while still typing the values.
 import type { IPty } from 'node-pty';
@@ -292,6 +293,12 @@ export class PtySession extends EventEmitter {
   write(data: string): void {
     if (!this.proc) throw new Error(`session ${this.id} is not running`);
     if (data.length === 0) return;
+    // The last hop. Everything above this is transport; if a report reaches
+    // here intact and the program still does not scroll, the program is the
+    // one that has to explain itself.
+    if (debugOn('input')) {
+      debug('input', `pty <- ${this.id} text: ${describeInput(Buffer.from(data, 'utf8'))}`);
+    }
     if (this.writeQueue.length === 0 && data.length <= WRITE_CHUNK) {
       this.proc.write(data);
       return;
@@ -317,6 +324,15 @@ export class PtySession extends EventEmitter {
   writeBytes(data: Buffer): void {
     if (!this.proc) throw new Error(`session ${this.id} is not running`);
     if (data.length === 0) return;
+    // Byte for byte, next to the pty's own grid: a report is only meaningful
+    // against the size the program believes it has, and a coordinate outside
+    // that is the shape of a resize that did not arrive.
+    if (debugOn('input')) {
+      debug(
+        'input',
+        `pty <- ${this.id} bytes (grid ${this.cols}x${this.rows}): ${describeInput(data)}`,
+      );
+    }
     if (this.writeQueue.length === 0) {
       this.proc.write(data as unknown as string);
       return;

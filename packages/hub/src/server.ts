@@ -13,8 +13,12 @@ import {
   encodeBinaryFrame,
   type HubState,
   type ServerMsg,
+  describeInput,
+  describeModeChanges,
+  describeSnapshotModes,
 } from '@termscape/protocol';
 import { Hub, HUB_VERSION } from './hub.js';
+import { debug, debugOn } from './debug.js';
 import { createPeerServer, type PeerServer } from './remote/peer-serve.js';
 import { registerEnrollment, type Enrollment } from './remote/enroll.js';
 import {
@@ -278,6 +282,19 @@ export async function serve(opts: ServeOptions): Promise<ServeResult> {
   // so a canvas showing 20 terminals zoomed out is not paying for 20 streams.
   const attached = new Map<import('ws').WebSocket, Set<string>>();
   hub.on('data', (sessionId: string, chunk: string) => {
+    /*
+     * Not the output itself - only the moments a program changes the terms.
+     *
+     * Whether a wheel belongs to the program or to xterm's own scrollback is
+     * decided entirely by these modes, and they are set once, early, in a
+     * chunk indistinguishable from any other. Logging the flips gives a trace
+     * the one fact the input side cannot supply: whether the program ever
+     * asked for mouse reports at all.
+     */
+    if (debugOn('output')) {
+      const modes = describeModeChanges(chunk);
+      if (modes) debug('output', `${sessionId} program set ${modes}`);
+    }
     const frame = encodeBinaryFrame(
       BinaryFrameKind.PtyOutput,
       sessionId,
@@ -310,22 +327,55 @@ export async function serve(opts: ServeOptions): Promise<ServeResult> {
             const bytes = Buffer.from(f.payload);
             const isRaw = f.kind === BinaryFrameKind.PtyInputRaw;
             const remote = hub.peers.find(f.sessionId);
+            /*
+             * Where a wheel goes, and whether it is still the same bytes.
+             *
+             * The local and remote branches below are the whole of the
+             * asymmetry a scroll bug has to be somewhere in: one of them
+             * hands a Buffer to a pty in this process, the other spells it as
+             * a string, puts it through JSON, and waits for another machine
+             * to answer. Both are traced with the same description of the
+             * same bytes, so a report that changes shape between them shows
+             * up as two lines that disagree.
+             */
+            if (debugOn('input')) {
+              const where = remote
+                ? `remote host=${hub.peers.hostIdFor(f.sessionId) ?? '?'} ` +
+                  `link=${remote.peer.connected ? 'up' : 'DOWN'}`
+                : 'local';
+              debug(
+                'input',
+                `browser -> hub ${f.sessionId} ${isRaw ? 'raw' : 'utf8'} ` +
+                  `${where}: ${describeInput(f.payload)}`,
+              );
+            }
             if (remote) {
               // Typing into a remote terminal whose PTY has since exited is
               // ordinary, and the peer says so by rejecting. Unhandled, that
               // rejection reaches the process and takes the whole canvas with
               // it — so it is reported to this browser and goes no further.
+              const id = randomUUID();
               void remote.peer
                 .request({
                   t: 'input',
-                  id: randomUUID(),
+                  id,
                   address: f.sessionId,
                   data: bytes.toString(isRaw ? 'latin1' : 'utf8'),
                   ...(isRaw ? { encoding: 'binary' as const } : {}),
                 })
-                .catch((e: Error) =>
-                  send(socket, { t: 'error', message: e.message, sessionId: f.sessionId }),
-                );
+                .then(() => debug('input', `hub -> peer ${id} accepted`))
+                .catch((e: Error) => {
+                  // Named rather than counted: "timed out" and "not
+                  // connected" are different diagnoses, and a wheel that
+                  // silently stops working looks the same either way.
+                  debug('input', `hub -> peer ${id} FAILED: ${e.message}`);
+                  send(socket, { t: 'error', message: e.message, sessionId: f.sessionId });
+                });
+              debug(
+                'input',
+                `hub -> peer ${id} ${f.sessionId} ` +
+                  `encoding=${isRaw ? 'binary' : 'utf8'} ${bytes.length}B sent`,
+              );
             } else if (isRaw) {
               hub.sessions.writeBytes(f.sessionId, bytes);
             } else {
@@ -403,11 +453,28 @@ export async function serve(opts: ServeOptions): Promise<ServeResult> {
         attached.get(socket)?.add(msg.sessionId);
         const remote = hub.peers.find(msg.sessionId);
         if (remote) {
+          /*
+           * The other half of the asymmetry, and the one that is easy to miss.
+           *
+           * A local attach answers with a `snapshot` message. A remote one
+           * cannot: the screen lives on the other machine, so it arrives as
+           * ordinary output on the stream instead. Same pixels, different
+           * route - and the route matters here, because a serialized screen
+           * is also what restores the mouse modes into a freshly mounted
+           * window. This line says the request went out; the peer's own log
+           * says what came back.
+           */
+          debug('attach', `attach ${msg.sessionId} -> peer (snapshot arrives as output)`);
           await remote.peer.attach(msg.sessionId);
           return;
         }
         const snap = hub.sessions.snapshotForAttach(msg.sessionId);
         if (snap) {
+          debug(
+            'attach',
+            `attach ${msg.sessionId} local ${snap.cols}x${snap.rows} ` +
+              `snapshot restores: ${describeSnapshotModes(snap.serialized)}`,
+          );
           send(socket, {
             t: 'snapshot',
             sessionId: msg.sessionId,
@@ -415,6 +482,8 @@ export async function serve(opts: ServeOptions): Promise<ServeResult> {
             cols: snap.cols,
             rows: snap.rows,
           });
+        } else {
+          debug('attach', `attach ${msg.sessionId} local, no snapshot`);
         }
         return;
       }
@@ -428,6 +497,19 @@ export async function serve(opts: ServeOptions): Promise<ServeResult> {
 
       case 'resize': {
         const remote = hub.peers.find(msg.sessionId);
+        /*
+         * Worth tracing next to the input, because a mouse report is a pair
+         * of coordinates and both ends have to agree on what they can be.
+         * xterm drops a report whose column or row falls outside its own
+         * grid before it is ever encoded, so a window and a pty that disagree
+         * on size lose wheels at the edges and nowhere else - which reads
+         * like an intermittent bug rather than a size one.
+         */
+        debug(
+          'attach',
+          `resize ${msg.sessionId} -> ${msg.cols}x${msg.rows} ` +
+            `(${remote ? 'remote' : 'local'})`,
+        );
         if (remote) {
           await remote.peer.request({
             t: 'resize',

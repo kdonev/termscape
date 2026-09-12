@@ -2,10 +2,14 @@ import {
   BinaryFrameKind,
   ClientMsg,
   decodeBinaryFrame,
+  describeInput,
+  describeLatin1,
+  describeModeChanges,
   encodeBinaryFrame,
   ServerMsg,
   type AckableMsg,
 } from '@termscape/protocol';
+import { debug, debugOn } from '../debug.js';
 
 type PtyListener = (chunk: string) => void;
 
@@ -61,6 +65,14 @@ export class HubClient {
         const f = decodeBinaryFrame(new Uint8Array(ev.data));
         if (f.kind === BinaryFrameKind.PtyOutput) {
           const text = new TextDecoder().decode(f.payload);
+          // Not the output - only the moments the program changes the terms.
+          // Whether a wheel belongs to the program or to xterm's scrollback
+          // is decided entirely by these, and by nothing the input side can
+          // see.
+          if (debugOn('output')) {
+            const modes = describeModeChanges(text);
+            if (modes) debug('output', f.sessionId, 'program set', modes);
+          }
           this.ptyListeners.get(f.sessionId)?.forEach((l) => l(text));
         }
         return;
@@ -144,7 +156,21 @@ export class HubClient {
 
   /** Terminal input takes the binary path to avoid JSON-encoding keystrokes. */
   sendInput(sessionId: string, data: string): void {
-    if (this.ws?.readyState !== WebSocket.OPEN) return;
+    if (this.ws?.readyState !== WebSocket.OPEN) {
+      // Silently dropped, and always has been - there is nowhere useful to
+      // queue a keystroke to. Said out loud under tracing, because "the
+      // socket was not open" and "the report was never encoded" look
+      // identical from the far end and have nothing in common.
+      if (debugOn('input')) {
+        const bytes = new TextEncoder().encode(data);
+        debug('input', sessionId, 'DROPPED (socket not open):', describeInput(bytes));
+      }
+      return;
+    }
+    if (debugOn('input')) {
+      const bytes = new TextEncoder().encode(data);
+      debug('input', sessionId, 'send utf8:', describeInput(bytes));
+    }
     this.ws.send(
       encodeBinaryFrame(
         BinaryFrameKind.PtyInput,
@@ -162,9 +188,16 @@ export class HubClient {
    * which is the whole reason this is a separate path - see PtyInputRaw.
    */
   sendInputBytes(sessionId: string, data: string): void {
-    if (this.ws?.readyState !== WebSocket.OPEN) return;
+    if (this.ws?.readyState !== WebSocket.OPEN) {
+      debug('input', sessionId, 'DROPPED (socket not open):', describeLatin1(data));
+      return;
+    }
     const bytes = new Uint8Array(data.length);
     for (let i = 0; i < data.length; i++) bytes[i] = data.charCodeAt(i) & 0xff;
+    // The mouse-report path. This is the line to compare against the hub's
+    // `browser -> hub` line: the two describe the same bytes, so a report
+    // that changes shape on the way has two entries that disagree.
+    if (debugOn('input')) debug('input', sessionId, 'send raw:', describeInput(bytes));
     this.ws.send(encodeBinaryFrame(BinaryFrameKind.PtyInputRaw, sessionId, bytes));
   }
 
@@ -183,7 +216,14 @@ export class HubClient {
 
     if (!this.attached.has(sessionId)) {
       this.attached.add(sessionId);
+      debug('attach', sessionId, 'attach sent');
       this.send({ t: 'attach', sessionId });
+    } else {
+      // A second window on the same session rides the first one's stream and
+      // never asks for a snapshot of its own. Worth seeing, because it is one
+      // of the ways a terminal can come up without the modes a snapshot
+      // would have restored.
+      debug('attach', sessionId, 'already attached; no snapshot will be sent');
     }
 
     return () => {

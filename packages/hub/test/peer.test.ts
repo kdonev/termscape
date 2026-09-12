@@ -6,7 +6,8 @@ import { randomUUID } from 'node:crypto';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import type { FastifyInstance } from 'fastify';
-import type { Host } from '@termscape/protocol';
+import { WebSocket as WsClient } from 'ws';
+import { BinaryFrameKind, encodeBinaryFrame, type Host } from '@termscape/protocol';
 import { Hub, HUB_VERSION } from '../src/hub.js';
 import { serve } from '../src/server.js';
 import { removeTree } from './tmp.js';
@@ -471,6 +472,107 @@ ${screen.screen}`).toContain(
     await expect(
       hubB.sendMessage(there.id, 'localws/nobody', 'into the void'),
     ).rejects.toThrow(/no agent/);
+  });
+});
+
+/*
+ * A mouse report is the one kind of terminal input that cannot survive being
+ * treated as text, and a remote session is the one path that has to spell it
+ * as text to cross a JSON link. This is where those two meet.
+ *
+ * The assertion is deliberately at the far hub's pty boundary rather than at
+ * the program: what a shell does with a wheel report is its own business, and
+ * the question here is only whether the bytes the browser encoded are the
+ * bytes that arrive on the other machine.
+ */
+describe('remote terminal input', () => {
+  /** A browser socket on hub A, authenticated and ready to send frames. */
+  async function browser(): Promise<WsClient> {
+    const sock = new WsClient(`${originA.replace('http', 'ws')}/ws`);
+    await new Promise<void>((res, rej) => {
+      sock.on('open', () => res());
+      sock.on('error', rej);
+    });
+    sock.send(JSON.stringify({ t: 'hello', token: 'client-token' }));
+    // `ready` is the hub saying the token was accepted; frames sent before it
+    // are dropped as unauthenticated.
+    await new Promise<void>((res) => {
+      sock.on('message', function onMsg(raw: Buffer) {
+        if (JSON.parse(raw.toString()).t === 'ready') {
+          sock.off('message', onMsg);
+          res();
+        }
+      });
+    });
+    return sock;
+  }
+
+  it('carries a wheel report to the far pty byte for byte', async () => {
+    await hubB.startSession({ workspaceId: wsB, profile: 'shell', name: 'wheelie' });
+    await waitFor(
+      () => hubA.peers.find('remotews/wheelie') !== null,
+      15_000,
+      'remote session to reach the canvas',
+    );
+
+    /*
+     * Column 120 and row 40, which is the case that matters: the default
+     * encoding spells a coordinate as `32 + n`, so 120 is 0x98 - past the
+     * ASCII range, and not valid UTF-8 on its own. Encoded as text anywhere
+     * on this path it would arrive as two bytes and decode as a different
+     * button somewhere else entirely.
+     */
+    const report = Buffer.from([0x1b, 0x5b, 0x4d, 32 + 64, 32 + 120, 32 + 40]);
+
+    const seen: Buffer[] = [];
+    const real = hubB.sessions.writeBytes.bind(hubB.sessions);
+    hubB.sessions.writeBytes = (id: string, data: Buffer) => {
+      seen.push(Buffer.from(data));
+      real(id, data);
+    };
+
+    const sock = await browser();
+    try {
+      sock.send(
+        encodeBinaryFrame(BinaryFrameKind.PtyInputRaw, 'remotews/wheelie', report),
+        { binary: true },
+      );
+      await waitFor(() => seen.length > 0, 10_000, 'the report to reach the far pty');
+    } finally {
+      hubB.sessions.writeBytes = real;
+      sock.close();
+    }
+
+    expect(seen[0]!.equals(report)).toBe(true);
+  });
+
+  it('keeps text input on the text path, so it is not latin1-mangled', async () => {
+    const seen: string[] = [];
+    const real = hubB.sessions.write.bind(hubB.sessions);
+    hubB.sessions.write = (id: string, data: string) => {
+      seen.push(data);
+      real(id, data);
+    };
+
+    const sock = await browser();
+    try {
+      sock.send(
+        encodeBinaryFrame(
+          BinaryFrameKind.PtyInput,
+          'remotews/wheelie',
+          Buffer.from('héllo', 'utf8'),
+        ),
+        { binary: true },
+      );
+      await waitFor(() => seen.length > 0, 10_000, 'text to reach the far pty');
+    } finally {
+      hubB.sessions.write = real;
+      sock.close();
+    }
+
+    // Non-ASCII text still arrives as the character, not as its two bytes -
+    // the raw path must not have swallowed the ordinary one on its way in.
+    expect(seen[0]).toBe('héllo');
   });
 });
 

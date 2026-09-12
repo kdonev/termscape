@@ -310,8 +310,20 @@ fi
 
 # --- join -------------------------------------------------------------------
 step 4/4 "connecting to $HUB_URL"
+# --opt=value, not --opt value, and it is not a style choice: an enrollment
+# token is base64url, whose alphabet includes '-', so one token in sixty-four
+# begins with a dash. Node's parseArgs runs in strict mode and refuses a
+# separate argument that looks like another option, which made roughly 1.5% of
+# joins die with ERR_PARSE_ARGS_INVALID_OPTION_VALUE after the install had
+# already finished. The '=' form has no such ambiguity.
+#
+# Still nohup with stdout redirected, unlike the PowerShell half, which had to
+# stop doing that to keep the hub attached to a console. That fix is for a
+# Windows problem and only a Windows problem: a pty here is a pty whether or
+# not the process that opened it has a controlling terminal, so detaching
+# costs nothing and the daemon behaviour is worth more.
 TERMSCAPE_HOME="$HOME_DIR" nohup "$NODE_BIN" "$HOME_DIR/hub/dist/cli.js" \\
-  --headless --port 0 --join "$HUB_URL" --join-token "$JOIN_TOKEN" \\
+  --headless --port 0 --join="$HUB_URL" --join-token="$JOIN_TOKEN" \\
   >"$HOME_DIR/hub.log" 2>&1 &
 HUB_PID=$!
 
@@ -676,14 +688,35 @@ Pop-Location
 # --- join -------------------------------------------------------------------
 Step '4/4' "connecting to $HubUrl"
 $hubLog = Join-Path $HomeDir 'hub.log'
+# Cleared here rather than appended to: the wait below greps the whole file,
+# and a previous run's TERMSCAPE_JOINED= would satisfy it before this hub had
+# said anything at all.
+Remove-Item $hubLog -ErrorAction SilentlyContinue
 $env:TERMSCAPE_HOME = $HomeDir
+# Three things here are deliberate and none of them is obvious.
+#
 # cli.js is named absolutely so this hub is findable in the process list by
 # the install it came from - which is how a later re-join knows what to stop.
+#
+# --opt=value rather than two arguments: a base64url token may begin with a
+# dash, and Node's strict parseArgs refuses a separate value that looks like
+# an option. See the POSIX half for what that cost.
+#
+# -WindowStyle Hidden with no stdio redirection: detached, so closing the
+# window that ran the installer does not take the hub with it, and its output
+# goes through --log-file rather than a pipe.
+#
+# It briefly ran attached to the installer's console instead, on the theory
+# that a process with no console of its own creates pseudoconsoles that
+# swallow an agent's mouse-mode request. Measured on Windows 10, it does not:
+# the agent behaves identically either way. What the experiment did cost was
+# the daemon property - the hub died the moment the window closed - so the
+# console is not worth keeping and the log file is.
 $cliArgs = '"' + (Join-Path $hubDir 'dist/cli.js') + '"' +
-           ' --headless --port 0 --join "' + $HubUrl + '" --join-token "' + $JoinToken + '"'
+           ' --headless --port 0 --join="' + $HubUrl + '" --join-token="' + $JoinToken + '"' +
+           ' --log-file="' + $hubLog + '"'
 $hubProc = Start-Process -FilePath $NodeExe -ArgumentList $cliArgs -PassThru \`
-  -WorkingDirectory $hubDir -RedirectStandardOutput $hubLog \`
-  -RedirectStandardError (Join-Path $HomeDir 'hub.err.log') -WindowStyle Hidden
+  -WorkingDirectory $hubDir -WindowStyle Hidden
 # Same trap as the install: without touching .Handle, HasExited on a process
 # from Start-Process -PassThru is not reliable.
 $null = $hubProc.Handle
