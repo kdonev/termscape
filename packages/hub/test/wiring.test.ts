@@ -386,6 +386,22 @@ describe('the brief', () => {
     expect(brief).toMatch(/on the ending rather than looking for the exact name/);
   });
 
+  it('tells an agent to wait for a reply rather than watch for one', () => {
+    /*
+     * Issue #10: an agent sent a question, then sat calling read_screen on the
+     * target in a loop, watching it work. The brief used to invite exactly
+     * that ("Prefer this over messaging when you only want to check
+     * progress"), so this pins that the sentence is gone and that the
+     * replacement says what actually happens - the reply is typed in and
+     * starts a turn, so waiting means ending yours.
+     */
+    const brief = readFileSync(wire().briefPath, 'utf8');
+    expect(brief).not.toMatch(/prefer this over messaging/i);
+    expect(brief).toMatch(/Waiting for an answer/);
+    expect(brief).toMatch(/starts a turn/);
+    expect(brief).toMatch(/end your\s+turn/);
+  });
+
   it('says a template is made with the tool, not by editing a checkout', () => {
     /*
      * Asked "can you add templates to termscape", an agent that had the tool

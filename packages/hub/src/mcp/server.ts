@@ -52,6 +52,21 @@ async function guard(fn: () => Promise<unknown>) {
 }
 
 /**
+ * Shown once at connect, by clients that surface it at all — which makes it
+ * the one place guidance reaches an agent whose brief never arrived, or whose
+ * CLI typed it in before the agent read anything. It says only what the brief
+ * and the tool descriptions already say: messages arrive by being typed in,
+ * so waiting for one means ending your turn, not polling read_screen.
+ */
+const MCP_INSTRUCTIONS =
+  'Termscape is a shared canvas of CLI agents that can message each other. A ' +
+  'message — including a reply to one you sent — is typed directly into the ' +
+  "target's terminal and starts a turn there; it is not something the sender " +
+  'polls for. If you send a message and need an answer, ask for one in the ' +
+  'text and then end your turn: the reply arrives as your next turn, not as ' +
+  'something you read by calling read_screen in a loop.';
+
+/**
  * Build an MCP server bound to one calling agent.
  *
  * A fresh server and transport are created per request (stateless mode). That
@@ -62,7 +77,7 @@ async function guard(fn: () => Promise<unknown>) {
 export function buildMcpServer(callerSessionId: string, api: AgentApi): McpServer {
   const server = new McpServer(
     { name: 'termscape', version: '0.1.0' },
-    { capabilities: { tools: {} } },
+    { capabilities: { tools: {} }, instructions: MCP_INSTRUCTIONS },
   );
 
   server.registerTool(
@@ -107,7 +122,10 @@ export function buildMcpServer(callerSessionId: string, api: AgentApi): McpServe
         'address is attached automatically and cannot be forged. Answering in your own ' +
         'output does not reach anyone: if a `[from <address>]` message asked you ' +
         'something, call this with `to` set to that address, or the asker is still ' +
-        'waiting.',
+        'waiting. Messages travel the same way in both directions: one sent to you is ' +
+        'typed into your terminal and starts a turn, whether you were idle or not. So ' +
+        'when you need an answer, ask for one in the text and then stop — end your turn. ' +
+        'You cannot miss a reply by not watching for it.',
       inputSchema: SendMessageInput.shape,
     },
     ({ to, text }) => guard(() => api.sendMessage(callerSessionId, to, text)),
@@ -127,7 +145,13 @@ export function buildMcpServer(callerSessionId: string, api: AgentApi): McpServe
     'read_screen',
     {
       description:
-        "Read the last lines of another agent's terminal without interrupting it. Prefer this over messaging when you only want to check progress.",
+        "Read the last lines of another agent's terminal without interrupting it. A " +
+        'one-off look — before you hand someone work, or when an answer has not come and ' +
+        'you want to know why. It is not a way to wait: if you asked a question, the ' +
+        'reply is typed into your terminal and starts your next turn, so stop and let it ' +
+        'arrive rather than watching for it. Calling this repeatedly on the same agent ' +
+        'tells you nothing `list_agents` would not, and that answers idle or busy in one ' +
+        'call.',
       inputSchema: ReadScreenInput.shape,
     },
     ({ address, lines }) => guard(() => api.readScreen(callerSessionId, address, lines)),

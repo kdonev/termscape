@@ -35,7 +35,14 @@ export const SendMessageInput = z.object({
   to: z
     .string()
     .describe('Target agent address, "workspace/name". Use list_agents to discover.'),
-  text: z.string().min(1).max(8000).describe('Message body, injected into the target terminal.'),
+  text: z
+    .string()
+    .min(1)
+    .max(8000)
+    .describe(
+      'Message body, injected into the target terminal. If you need an answer, ask for ' +
+        'one here — say to reply with send_message — then end your turn and let it arrive.',
+    ),
 });
 
 export const SpawnAgentInput = z.object({

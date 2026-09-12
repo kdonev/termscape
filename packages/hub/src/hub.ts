@@ -27,6 +27,7 @@ import { AgentDetector } from './agents/detect.js';
 import { TemplateRegistry, validate as validateTemplate } from './agents/templates.js';
 import { TokenRegistry } from './agents/tokens.js';
 import { MessageRouter } from './agents/router.js';
+import { PollWatch } from './agents/polling.js';
 import { SessionManager } from './session/manager.js';
 import { briefFileFor } from './agents/wiring.js';
 import type { AgentApi } from './mcp/server.js';
@@ -107,6 +108,8 @@ export class Hub extends EventEmitter implements AgentApi {
    * agent honestly about whether anyone is there to decide.
    */
   private viewers = 0;
+  /** Catches an agent watching a screen instead of waiting for a reply. */
+  private readonly pollWatch = new PollWatch();
 
   constructor(opts: HubOptions = {}) {
     super();
@@ -1093,7 +1096,11 @@ export class Hub extends EventEmitter implements AgentApi {
   async sendMessage(sessionId: string, to: string, text: string) {
     const me = this.requireSession(sessionId);
     if (me.address === to) throw new Error('cannot send a message to yourself');
-    return this.deliverFrom(me.address, to, text);
+    const result = await this.deliverFrom(me.address, to, text);
+    // Only a successful send counts as a question asked - deliverFrom throws
+    // on failure, so a message that never arrived does not excuse polling.
+    this.pollWatch.noteMessage(me.address, to);
+    return result;
   }
 
   /**
@@ -1300,8 +1307,15 @@ export class Hub extends EventEmitter implements AgentApi {
   }
 
   async readScreen(sessionId: string, address: string, lines?: number) {
-    this.requireSession(sessionId);
-    return this.readScreenAt(address, lines);
+    const me = this.requireSession(sessionId);
+    const result = await this.readScreenAt(address, lines);
+    // Decorating after the await, rather than counting the call up front,
+    // means a remote or uplink target gets the note too. Counted here, not in
+    // readScreenAt: that path also serves peers asking on this hub's behalf
+    // for a caller it never authenticated, and the count belongs to the
+    // caller's own hub.
+    const note = this.pollWatch.noteRead(me.address, address);
+    return note ? { ...(result as Record<string, unknown>), note } : result;
   }
 
   /**

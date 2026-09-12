@@ -272,6 +272,45 @@ describe('spawning', () => {
   });
 });
 
+describe('polling guidance (issue #10)', () => {
+  it('attaches a note to read_screen once the same screen has been read three times', async () => {
+    const c = await hub.startSession({ workspaceId, profile: 'shell', name: 'gamma' });
+    const d = await hub.startSession({ workspaceId, profile: 'shell', name: 'delta' });
+    await waitFor(() => (output.get(c.id)?.length ?? 0) > 0, 15_000, 'gamma to boot');
+    await waitFor(() => (output.get(d.id)?.length ?? 0) > 0, 15_000, 'delta to boot');
+
+    const client = await mcpClient(c.id);
+
+    const sent = parseResult(
+      await client.callTool({
+        name: 'send_message',
+        arguments: { to: 'testws/delta', text: 'what is your status?' },
+      }),
+    );
+    expect(sent.delivered).toBe(true);
+
+    const read = async () =>
+      parseResult(
+        await client.callTool({ name: 'read_screen', arguments: { address: 'testws/delta' } }),
+      );
+
+    const first = await read();
+    const second = await read();
+    const third = await read();
+
+    // The shape stays address/running/screen plus an optional note: the first
+    // two reads look exactly like they did before this landed.
+    expect(first.note).toBeUndefined();
+    expect(second.note).toBeUndefined();
+    expect(third.note).toBeDefined();
+    // A question is genuinely outstanding here, so the wording names it
+    // rather than giving the generic "you have read this screen" line.
+    expect(third.note).toMatch(/asked testws\/delta something/);
+
+    await client.close();
+  });
+});
+
 describe('mcp auth', () => {
   it('rejects a request with no token', async () => {
     const res = await fetch(`${origin}/mcp`, {
