@@ -688,12 +688,8 @@ Pop-Location
 # --- join -------------------------------------------------------------------
 Step '4/4' "connecting to $HubUrl"
 $hubLog = Join-Path $HomeDir 'hub.log'
-# Cleared here rather than appended to: the wait below greps the whole file,
-# and a previous run's TERMSCAPE_JOINED= would satisfy it before this hub had
-# said anything at all.
-Remove-Item $hubLog -ErrorAction SilentlyContinue
 $env:TERMSCAPE_HOME = $HomeDir
-# Three things here are deliberate and none of them is obvious.
+# Two things here are deliberate and neither is obvious.
 #
 # cli.js is named absolutely so this hub is findable in the process list by
 # the install it came from - which is how a later re-join knows what to stop.
@@ -701,22 +697,11 @@ $env:TERMSCAPE_HOME = $HomeDir
 # --opt=value rather than two arguments: a base64url token may begin with a
 # dash, and Node's strict parseArgs refuses a separate value that looks like
 # an option. See the POSIX half for what that cost.
-#
-# -WindowStyle Hidden with no stdio redirection: detached, so closing the
-# window that ran the installer does not take the hub with it, and its output
-# goes through --log-file rather than a pipe.
-#
-# It briefly ran attached to the installer's console instead, on the theory
-# that a process with no console of its own creates pseudoconsoles that
-# swallow an agent's mouse-mode request. Measured on Windows 10, it does not:
-# the agent behaves identically either way. What the experiment did cost was
-# the daemon property - the hub died the moment the window closed - so the
-# console is not worth keeping and the log file is.
 $cliArgs = '"' + (Join-Path $hubDir 'dist/cli.js') + '"' +
-           ' --headless --port 0 --join="' + $HubUrl + '" --join-token="' + $JoinToken + '"' +
-           ' --log-file="' + $hubLog + '"'
+           ' --headless --port 0 --join="' + $HubUrl + '" --join-token="' + $JoinToken + '"'
 $hubProc = Start-Process -FilePath $NodeExe -ArgumentList $cliArgs -PassThru \`
-  -WorkingDirectory $hubDir -WindowStyle Hidden
+  -WorkingDirectory $hubDir -RedirectStandardOutput $hubLog \`
+  -RedirectStandardError (Join-Path $HomeDir 'hub.err.log') -WindowStyle Hidden
 # Same trap as the install: without touching .Handle, HasExited on a process
 # from Start-Process -PassThru is not reliable.
 $null = $hubProc.Handle

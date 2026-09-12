@@ -28,16 +28,6 @@ export const CLI_OPTIONS = {
   join: { type: 'string' },
   'join-token': { type: 'string' },
   label: { type: 'string' },
-  /**
-   * Mirror this hub's output into a file as well as its console.
-   *
-   * The join installer polls for the line that says the join succeeded, and
-   * it has to read that from a file because the hub outlives it. Redirecting
-   * the process's stdout would also produce the file, but it leaves the hub
-   * with no console — which on Windows changes how the pseudoconsoles it
-   * creates behave. See log-file.ts.
-   */
-  'log-file': { type: 'string' },
   open: { type: 'boolean', default: false },
   // parseArgs has no --no-x negation, so the opt-out is its own flag.
   'no-open': { type: 'boolean', default: false },

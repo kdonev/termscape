@@ -12,7 +12,6 @@ import { ProfileRegistry } from './agents/profiles.js';
 import { which } from './agents/resolve.js';
 import { debugTopics } from './debug.js';
 import { CLI_OPTIONS } from './cli-args.js';
-import { teeConsoleTo } from './log-file.js';
 
 /**
  * Warn when no agent CLI is installed.
@@ -56,9 +55,6 @@ async function main(): Promise<void> {
                     this machine, and turns that page off with it
   --headless        serve no web UI; used when running as a remote hub
   --token <t>       client token to use instead of generating one
-  --log-file <p>    also write this hub's output to a file, keeping the
-                    console. Used by the join installer, which waits on a
-                    line in it
   --open            open the UI in the browser even when not on a terminal
   --no-open         do not open the browser; just print the url
 
@@ -71,12 +67,6 @@ Joining another machine's canvas:
 `);
     return;
   }
-
-  // Before anything is printed, so the file holds the whole run and not the
-  // tail of it. Deliberately not wrapped in a try: the installer waits on a
-  // line in this file, and a hub that cannot write it would hang that wait
-  // for six minutes and then report something misleading.
-  if (values['log-file']) teeConsoleTo(values['log-file']);
 
   preflightAgents();
 

@@ -96,19 +96,17 @@ describe('generated launch command lines', () => {
   });
 
   /*
-   * The hub keeps a console on Windows, and writes its log itself.
+   * The installer's own launch. It is machinery rather than something a
+   * person types, so its shape is worth pinning.
    *
-   * Redirecting the process's stdout was the tidy way to produce the file the
-   * installer waits on, and it cost the hub its console - which on Windows
-   * changes how the pseudoconsoles it creates behave, all the way down to an
-   * agent that never enables mouse reporting. That theory was measured and
-   * is false - an agent behaves the same either way - but the log file it
-   * produced is worth keeping on its own: the hub stays detached, so closing
-   * the installer's window cannot take it down, and it still writes the line
-   * the wait below depends on. Without `--log-file` that wait sits for six
-   * minutes waiting for a line nobody writes.
+   * It briefly ran the hub attached to the installer's console, on the theory
+   * that a console-less parent creates pseudoconsoles that swallow an agent's
+   * mouse-mode request. Measured on Windows 10 that is false - an agent
+   * behaves identically either way - and the console cost the daemon
+   * property, because the hub died the moment the window closed. So it is
+   * detached again, with its log produced by a redirect as it always was.
    */
-  it('launches the Windows hub detached, logging to a file rather than a pipe', () => {
+  it('launches the Windows hub detached, with its output redirected', () => {
     const script = joinScriptPowerShell(ORIGIN, DASH_TOKEN);
     // Only the hub's own launch. The installer redirects elsewhere for good
     // reason - npm's stderr has to stay out of PowerShell's error stream -
@@ -116,17 +114,8 @@ describe('generated launch command lines', () => {
     const launch = /\$cliArgs = [\s\S]*?\$null = \$hubProc\.Handle/.exec(script)?.[0];
     expect(launch, 'hub launch block not found').toBeTruthy();
     expect(launch).toContain('-WindowStyle Hidden');
-    expect(launch).toContain('--log-file="');
-    // The redirect is what --log-file replaced: a hub whose stdout is a pipe
-    // has no console, and the two ways of producing hub.log are exclusive.
-    expect(launch).not.toContain('-RedirectStandardOutput');
-
-    const { values } = parseArgs({
-      args: ['--headless', '--port', '0', `--join-token=${DASH_TOKEN}`, '--log-file=C:/x/hub.log'],
-      options: CLI_OPTIONS,
-      strict: true,
-    });
-    expect(values['log-file']).toBe('C:/x/hub.log');
+    expect(launch).toContain('-RedirectStandardOutput');
+    expect(launch).not.toContain('-NoNewWindow');
   });
 
   it('leaves the posix installer detached, where a console is not load-bearing', () => {
