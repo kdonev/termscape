@@ -41,7 +41,7 @@ import { hubTarballPath } from './remote/tarball.js';
 import { paths } from './paths.js';
 import { checkFolder, folderName } from './folders.js';
 
-export const HUB_VERSION = '0.1.3';
+export const HUB_VERSION = '0.1.4';
 
 /**
  * How long changes are pooled before every attached machine is told the
