@@ -520,6 +520,22 @@ describe('the join page', () => {
     // the process list by the install it came from.
     expect(ps).toContain("Join-Path $hubDir 'dist/cli.js'");
     expect(sh).toContain('"$HOME_DIR/hub/dist/cli.js"');
+
+    // A force-killed hub leaves its ConPTY conhost and everything inside it
+    // running, still holding $hubDir open (issue #12) - so Stop-RunningHub
+    // has to walk the whole process tree, not just the hub's own pid.
+    expect(ps).toContain('ParentProcessId');
+    expect(ps).toContain('CreationDate');
+
+    // A late child can still be closing a handle when the first sweep and
+    // Remove-Item finish, so a locked folder gets a second sweep and a retry
+    // before the installer gives up.
+    const firstStop = ps.indexOf('Stop-RunningHub $hubDir');
+    const secondStop = ps.indexOf('Stop-RunningHub $hubDir', firstStop + 1);
+    const failsWithLockedFolder = ps.indexOf('Fail ("Could not replace');
+    expect(firstStop).toBeGreaterThan(-1);
+    expect(secondStop).toBeGreaterThan(firstStop);
+    expect(failsWithLockedFolder).toBeGreaterThan(secondStop);
   });
 
   it('keeps regex escapes intact through template generation', async () => {

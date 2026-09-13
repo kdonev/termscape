@@ -452,45 +452,135 @@ function Invoke-Ticking($label, $exe, $argString, $log) {
   return $p.ExitCode
 }
 
-# A hub from an earlier join is still running and still holds its own install
-# open. On Windows a loaded .node cannot be deleted at all, so without this the
-# whole re-join dies on an access-denied removing better-sqlite3. It also stops
-# this machine appearing twice on the canvas.
+# A hub from an earlier join is still running, and Windows never kills a
+# process's children with it: force-killing only node.exe left every terminal
+# it opened - the ConPTY conhost.exe and the shell or agent inside it - still
+# holding the install directory open, so Remove-Item failed with "something
+# still has a file open there" even though the hub itself was gone. This walks
+# the whole tree instead: the hub's own pid (or pids), everything descended
+# from them, and anything else with a handle on $hubDir, however it got there.
 function Stop-RunningHub($hubDir) {
   $pidFile = Join-Path $HomeDir 'hub.pid'
-  $targets = @()
+
+  # One snapshot: walking a tree against a process list that can change under
+  # us would either miss a child or, worse, follow a pid that has already been
+  # recycled into something unrelated.
+  $all = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)
+  $byPid = @{}
+  $byParent = @{}
+  # CIM hands pids back as UInt32, and a hashtable never matches a UInt32 key
+  # against the Int32 read from hub.pid - so every key is an [int].
+  foreach ($proc in $all) {
+    $byPid[[int]$proc.ProcessId] = $proc
+    $pp = [int]$proc.ParentProcessId
+    if ($byParent.ContainsKey($pp)) { $byParent[$pp] += $proc } else { $byParent[$pp] = @($proc) }
+  }
+
+  # Root pids: the hub recorded in hub.pid, even if it is no longer running -
+  # its orphans still carry it as their ParentProcessId - plus the existing
+  # fallback for a hub that predates the pid file or lost it: a node.exe still
+  # pointing at this install.
+  $roots = @()
 
   if (Test-Path $pidFile) {
     $recorded = (Get-Content $pidFile -Raw).Trim()
     if ($recorded -match '^\\d+$') {
-      $p = Get-Process -Id ([int]$recorded) -ErrorAction SilentlyContinue
-      if ($p) { $targets += $p }
+      $rpid = [int]$recorded
+      if ($byPid.ContainsKey($rpid)) {
+        $roots += @{ Pid = $rpid; Since = $byPid[$rpid].CreationDate }
+      } else {
+        # The hub is already dead, so there is no CreationDate to anchor the
+        # pid-reuse guard below on. The pid file's own write time stands in
+        # for it instead - a few seconds early, since the hub wrote the file
+        # before it went on to start anything.
+        $since = $null
+        try { $since = (Get-Item $pidFile).LastWriteTime.AddSeconds(-5) } catch {}
+        $roots += @{ Pid = $rpid; Since = $since }
+      }
     }
   }
 
-  # A hub predating the pid file, or one whose file was lost: find it by the
-  # install it was started from.
-  if (-not $targets) {
-    $targets = @(Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue |
-      Where-Object {
-        $_.CommandLine -and
-        ($_.CommandLine -like "*$hubDir*" -or $_.CommandLine -like "*$HomeDir*")
-      } |
-      ForEach-Object { Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue })
-  }
-
-  foreach ($p in $targets) {
-    Note "stopping the hub already running here (pid $($p.Id))"
-    try {
-      $p.CloseMainWindow() | Out-Null
-      Stop-Process -Id $p.Id -Force -ErrorAction Stop
-      $p.WaitForExit(10000) | Out-Null
-    } catch {
-      Note "could not stop pid $($p.Id): $($_.Exception.Message)"
+  # Only when hub.pid names no live hub, as before: an agent CLI started by a
+  # hub on this same machine carries ~/.termscape/run/... on its command line,
+  # and matching it here would kill its whole tree.
+  $liveRoot = @($roots | Where-Object { $byPid.ContainsKey($_.Pid) }).Count -gt 0
+  $seenRoots = @($roots | ForEach-Object { $_.Pid })
+  foreach ($proc in $all) {
+    if ($liveRoot) { break }
+    if ($proc.Name -ne 'node.exe' -or -not $proc.CommandLine) { continue }
+    if ($seenRoots -contains [int]$proc.ProcessId) { continue }
+    if ($proc.CommandLine -like "*$hubDir*" -or $proc.CommandLine -like "*$HomeDir*") {
+      $roots += @{ Pid = [int]$proc.ProcessId; Since = $proc.CreationDate }
     }
   }
-  # Windows releases the file handles a moment after the process goes.
-  if ($targets) { Start-Sleep -Milliseconds 750 }
+
+  # Walk descendants breadth-first. $order records the discovery order so
+  # roots - enqueued first - end up last once it is reversed below, which is
+  # what puts every descendant ahead of the root that started it without
+  # having to track depth explicitly.
+  $victims = @{}
+  $order = New-Object System.Collections.Generic.List[int]
+  $frontier = New-Object System.Collections.Generic.Queue[object]
+  foreach ($r in $roots) { $frontier.Enqueue($r) }
+
+  while ($frontier.Count -gt 0) {
+    $cur = $frontier.Dequeue()
+    if ($cur.Pid -eq $PID -or $victims.ContainsKey($cur.Pid)) { continue }
+    $victims[$cur.Pid] = $true
+    $order.Add($cur.Pid)
+    $children = $byParent[$cur.Pid]
+    if (-not $children) { continue }
+    foreach ($child in $children) {
+      $cpid = [int]$child.ProcessId
+      if ($cpid -eq $PID -or $victims.ContainsKey($cpid)) { continue }
+      # Pid reuse guard: a child counts only if Windows created it at or
+      # after its parent (or the parent is dead and $cur.Since is the pid
+      # file's write time standing in for that, from above).
+      if ($cur.Since -and $child.CreationDate -and $child.CreationDate -lt $cur.Since) { continue }
+      $frontier.Enqueue(@{ Pid = $cpid; Since = $child.CreationDate })
+    }
+  }
+
+  # Anything with a handle open inside the install folder, whatever its
+  # parent - this is what catches node-pty's bundled OpenConsole.exe if it is
+  # ever enabled, and an orphan from a hub that started before the pid file
+  # existed at all.
+  foreach ($proc in $all) {
+    $spid = [int]$proc.ProcessId
+    if ($spid -eq $PID -or $victims.ContainsKey($spid)) { continue }
+    if ($proc.ExecutablePath -like "*$hubDir*" -or $proc.CommandLine -like "*$hubDir*") {
+      $victims[$spid] = $true
+      $order.Add($spid)
+    }
+  }
+
+  if ($order.Count -gt 0) {
+    $rootPids = @($roots | ForEach-Object { $_.Pid })
+    $childCount = $order.Count - $rootPids.Count
+    if ($rootPids.Count -gt 0 -and $childCount -gt 0) {
+      $plural = if ($childCount -eq 1) { '' } else { 'es' }
+      Note "stopping the hub already running here (pid $($rootPids -join ', ')) and its $childCount terminal process$plural"
+    } elseif ($rootPids.Count -gt 0) {
+      Note "stopping the hub already running here (pid $($rootPids -join ', '))"
+    } else {
+      # No live root and no dead one recorded either - only stray processes
+      # still pointing at this folder, from step 4's sweep.
+      $plural = if ($order.Count -eq 1) { '' } else { 'es' }
+      Note "stopping $($order.Count) leftover process$plural from an earlier hub"
+    }
+
+    $order.Reverse()
+    foreach ($vpid in $order) {
+      $proc = Get-Process -Id $vpid -ErrorAction SilentlyContinue
+      if (-not $proc) { continue }
+      try { $proc.CloseMainWindow() | Out-Null } catch {}
+      Stop-Process -Id $vpid -Force -ErrorAction SilentlyContinue
+      try { $proc.WaitForExit(10000) | Out-Null } catch {}
+    }
+    # Windows releases the file handles a moment after the processes go.
+    Start-Sleep -Milliseconds 750
+  }
+
   Remove-Item $pidFile -Force -ErrorAction SilentlyContinue
 }
 
@@ -602,9 +692,26 @@ if (Test-Path $hubDir) {
   try {
     Remove-Item -Recurse -Force $hubDir
   } catch {
-    Fail ("Could not replace the previous install at $hubDir - something still has a file open there." + [Environment]::NewLine +
-          "A hub from an earlier join is probably still running. Close it and re-run this command." + [Environment]::NewLine +
-          $_.Exception.Message)
+    # A late child can still turn up during the first sweep, and Windows
+    # releases handles a moment after the process holding them goes - so one
+    # more sweep and a short wait usually finishes what the first one missed.
+    Stop-RunningHub $hubDir
+    Start-Sleep -Seconds 1
+    try {
+      Remove-Item -Recurse -Force $hubDir
+    } catch {
+      # Captured first: the pipelines below rebind $_.
+      $removeError = $_.Exception.Message
+      $holders = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+        Where-Object { $_.ExecutablePath -like "*$hubDir*" -or $_.CommandLine -like "*$hubDir*" })
+      $holderText = 'something'
+      if ($holders) {
+        $holderText = ($holders | ForEach-Object { "$($_.Name) (pid $($_.ProcessId))" }) -join ', '
+      }
+      Fail ("Could not replace the previous install at $hubDir - $holderText still has a file open there." + [Environment]::NewLine +
+            "Close it and re-run this command." + [Environment]::NewLine +
+            $removeError)
+    }
   }
 }
 New-Item -ItemType Directory -Force -Path $hubDir | Out-Null
