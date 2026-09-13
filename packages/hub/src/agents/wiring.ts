@@ -165,7 +165,22 @@ function writeWiredFiles(
   // token back so the hub knows which window changed state.
   const hookUrl = `${input.hubOrigin}/hook/${input.token}`;
   /*
-   * Two details on the Windows branch, both of which cost a working feature.
+   * Both branches read stdin for `session_id`: Claude Code's hook JSON, which
+   * is how the hub learns the id of the conversation currently running here
+   * and can still build `--resume` from it after a `/clear` starts a new one.
+   *
+   * The two branches get there differently, and that difference is not
+   * incidental. POSIX pipes the whole body through unread - `--data-binary
+   * @-` - and the hub's own JSON parser picks `session_id` out of it. Windows
+   * cannot do the same: PS 5.1's `Invoke-WebRequest` mis-encodes non-ASCII
+   * text, and the hook body can contain it (a `transcript_path` on a
+   * non-ASCII username, say), which would turn the JSON invalid, draw a 400
+   * from the hub, and take the busy/idle status down with it. So the Windows
+   * branch parses stdin itself and sends only the id, in the query string,
+   * where there is nothing left to mis-encode.
+   *
+   * Two more details on the Windows branch, both of which cost a working
+   * feature before.
    *
    * The body and content type are not decoration. `Invoke-WebRequest -Method
    * POST` with no body still sends a content type the hub has no parser for,
@@ -178,12 +193,19 @@ function writeWiredFiles(
    * still exits 1 because $? is false, and the CLI running the hook reports
    * that as a failed hook with no stderr to explain it. A status ping that
    * cannot reach the hub is not worth telling the user about; it is worth not
-   * lying about, which is what the 415 above was.
+   * lying about, which is what the 415 above was. Reading stdin has its own
+   * inner `try` for the same reason - a hook with no JSON on stdin must still
+   * ping the hub and still exit 0.
+   *
+   * And no `$` anywhere in it. When Claude Code runs a hook through bash (Git
+   * Bash on Windows), a `$name` inside these double quotes is expanded by bash
+   * before PowerShell sees it, which turned an earlier `$s` into a parse error
+   * and took the status ping down with it.
    */
   const hookCmd = (event: string) =>
     process.platform === 'win32'
-      ? `powershell -NoProfile -Command "try { Invoke-WebRequest -UseBasicParsing -Method POST -Uri '${hookUrl}?event=${event}' -ContentType 'application/json' -Body '{}' -TimeoutSec 2 | Out-Null } catch {}; exit 0"`
-      : `curl -s -m 2 -X POST -H 'content-type: application/json' -d '{}' '${hookUrl}?event=${event}' >/dev/null 2>&1 || true`;
+      ? `powershell -NoProfile -Command "try { Invoke-WebRequest -UseBasicParsing -Method POST -Uri ('${hookUrl}?event=${event}&sid=' + (& { try { ([Console]::In.ReadToEnd() | ConvertFrom-Json).session_id } catch {} })) -ContentType 'application/json' -Body '{}' -TimeoutSec 2 | Out-Null } catch {}; exit 0"`
+      : `curl -s -m 2 -X POST -H 'content-type: application/json' --data-binary @- '${hookUrl}?event=${event}' >/dev/null 2>&1 || true`;
 
   writePrivate(
     settingsPath,

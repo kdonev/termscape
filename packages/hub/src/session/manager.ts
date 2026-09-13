@@ -34,6 +34,13 @@ export const LAYOUT_DEBOUNCE_MS = 250;
 /** Breathing room kept between neighbouring windows. */
 const WINDOW_GAP = 40;
 
+/**
+ * What a hook is allowed to report as Claude Code's current conversation id.
+ * Strict on purpose: this value ends up in `--resume` argv, so anything that
+ * is not exactly a uuid is a value we refuse rather than pass along.
+ */
+const AGENT_SESSION_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 /** Bounding box of world rects, or null for an empty list. */
 function bounds(rects: WindowRect[]): WindowRect | null {
   if (rects.length === 0) return null;
@@ -609,6 +616,27 @@ export class SessionManager extends EventEmitter {
   /** Called by the hooks endpoint: exact turn boundaries from the agent CLI. */
   setStatusFromHook(sessionId: string, status: 'busy' | 'idle'): void {
     this.live.get(sessionId)?.noteHook(status);
+    this.emitSession(sessionId);
+  }
+
+  /**
+   * Called by the hooks endpoint: the id Claude Code reports for its
+   * *current* conversation. `/clear` (or switching conversations with
+   * `/resume`) starts a new one under a new id without telling us any other
+   * way, so this is what keeps `resume()` building `--resume` from a uuid
+   * the agent hasn't since abandoned.
+   *
+   * Silently a no-op outside the cases it applies to: an unresumable
+   * session, a session that does not exist (the hook race against a session
+   * only just torn down), or an id that fails the uuid check - a hook fired
+   * with no JSON body at all reports `undefined` here, and that must do
+   * nothing rather than clear the stored id.
+   */
+  noteAgentSessionId(sessionId: string, id: unknown): void {
+    if (typeof id !== 'string' || !AGENT_SESSION_UUID_RE.test(id)) return;
+    const s = this.get(sessionId);
+    if (!s || !s.agentSessionUuid || s.agentSessionUuid === id) return;
+    this.store.updateSession(sessionId, { agentSessionUuid: id });
     this.emitSession(sessionId);
   }
 

@@ -7,6 +7,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import type { FastifyInstance } from 'fastify';
 import { Hub } from '../src/hub.js';
 import { serve } from '../src/server.js';
+import { DEFAULT_WINDOW } from '../src/db/store.js';
 import { removeTree } from './tmp.js';
 
 /**
@@ -128,6 +129,127 @@ describe('the status hook endpoint', () => {
       headers: { 'content-type': 'application/json' },
     });
     expect(res.status).toBe(400);
+  });
+
+  describe('the conversation id a hook reports', () => {
+    /*
+     * A real row this time, not just a token: `noteAgentSessionId` looks up
+     * the session's current `agentSessionUuid` to decide whether to act, so
+     * there is no exercising it against a token with nothing behind it. Its
+     * own workspace, and each test removes what it inserted, so none of this
+     * is still on the canvas by the time the messaging tests below count
+     * agents.
+     */
+    let hookWorkspaceId: string;
+
+    beforeAll(() => {
+      hookWorkspaceId = hub.createWorkspace('hookws', home).id;
+    });
+
+    function insertSession(id: string, profile: string, agentSessionUuid: string | null): void {
+      const now = Date.now();
+      hub.store.insertSession(
+        {
+          id,
+          workspaceId: hookWorkspaceId,
+          name: id,
+          address: `hookws/${id}`,
+          profile,
+          template: null,
+          model: null,
+          effort: null,
+          cwd: home,
+          agentSessionUuid,
+          spawnedBy: null,
+          state: 'running',
+          status: 'unknown',
+          statusText: null,
+          title: null,
+          pid: null,
+          exitCode: null,
+          cols: 80,
+          rows: 24,
+          resumable: !!agentSessionUuid,
+          createdAt: now,
+          exitedAt: null,
+          lastActiveAt: now,
+          window: DEFAULT_WINDOW,
+        },
+        { argv: [profile], env: {} },
+      );
+    }
+
+    const OLD_UUID = '11111111-1111-1111-1111-111111111111';
+    const NEW_UUID = '22222222-2222-2222-2222-222222222222';
+
+    it("updates a resumable session's stored id from a JSON body", async () => {
+      const id = 'hook-json-uuid';
+      insertSession(id, 'claude', OLD_UUID);
+      const token = hub.tokens.mint(id);
+      try {
+        const res = await fetch(`${origin}/hook/${token}?event=busy`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ session_id: NEW_UUID }),
+        });
+        expect(res.status).toBe(200);
+        expect(hub.sessions.get(id)?.agentSessionUuid).toBe(NEW_UUID);
+      } finally {
+        hub.sessions.remove(id);
+      }
+    });
+
+    it('also takes the id from ?sid=, the Windows hook’s route in', async () => {
+      const id = 'hook-sid-uuid';
+      insertSession(id, 'claude', OLD_UUID);
+      const token = hub.tokens.mint(id);
+      try {
+        const res = await fetch(
+          `${origin}/hook/${token}?event=busy&sid=${NEW_UUID}`,
+          { method: 'POST' },
+        );
+        expect(res.status).toBe(200);
+        expect(hub.sessions.get(id)?.agentSessionUuid).toBe(NEW_UUID);
+      } finally {
+        hub.sessions.remove(id);
+      }
+    });
+
+    it('ignores a value that is not a uuid and still answers 200', async () => {
+      const id = 'hook-bad-uuid';
+      insertSession(id, 'claude', OLD_UUID);
+      const token = hub.tokens.mint(id);
+      try {
+        const res = await fetch(`${origin}/hook/${token}?event=busy`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ session_id: 'not-a-uuid' }),
+        });
+        expect(res.status).toBe(200);
+        expect(hub.sessions.get(id)?.agentSessionUuid).toBe(OLD_UUID);
+      } finally {
+        hub.sessions.remove(id);
+      }
+    });
+
+    it('leaves a session with no uuid alone, because it was never resumable', async () => {
+      // The shell profile: never launched with --session-id, so there is
+      // nothing here for --resume to build on even if a hook reports one.
+      const id = 'hook-shell-session';
+      insertSession(id, 'shell', null);
+      const token = hub.tokens.mint(id);
+      try {
+        const res = await fetch(`${origin}/hook/${token}?event=busy`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ session_id: NEW_UUID }),
+        });
+        expect(res.status).toBe(200);
+        expect(hub.sessions.get(id)?.agentSessionUuid).toBeNull();
+      } finally {
+        hub.sessions.remove(id);
+      }
+    });
   });
 });
 

@@ -144,26 +144,33 @@ export async function serve(opts: ServeOptions): Promise<ServeResult> {
   /*
    * Accept a POST whose content type nothing else parses, and ignore the body.
    *
-   * The hook carries its event in the query string and has no body worth
-   * reading, but Fastify answers 415 for a content type it has no parser for -
-   * which is how every status hook from Windows was rejected while looking, to
-   * the agent, like a hook that simply failed. Registered parsers still win, so
-   * /mcp keeps its JSON.
+   * A content type Fastify has no parser for otherwise draws a 415 - which is
+   * how every status hook from Windows was rejected while looking, to the
+   * agent, like a hook that simply failed. Registered parsers still win, so
+   * /mcp keeps its JSON, and so does this endpoint's own JSON body: Claude
+   * Code's hook payload arrives that way on POSIX and is read below for the
+   * conversation id it carries.
    */
   app.addContentTypeParser('*', { parseAs: 'buffer' }, (_req, _body, done) =>
     done(null, undefined),
   );
 
-  app.post<{ Params: { token: string }; Querystring: { event?: string } }>(
-    '/hook/:token',
-    async (req, reply) => {
-      const sessionId = hub.tokens.resolve(req.params.token);
-      if (!sessionId) return reply.code(404).send({ ok: false });
-      const event = req.query.event === 'idle' ? 'idle' : 'busy';
-      hub.sessions.setStatusFromHook(sessionId, event);
-      return { ok: true };
-    },
-  );
+  app.post<{
+    Params: { token: string };
+    Querystring: { event?: string; sid?: string };
+    Body?: { session_id?: unknown };
+  }>('/hook/:token', async (req, reply) => {
+    const sessionId = hub.tokens.resolve(req.params.token);
+    if (!sessionId) return reply.code(404).send({ ok: false });
+    const event = req.query.event === 'idle' ? 'idle' : 'busy';
+    // The POSIX hook forwards Claude Code's hook JSON as the body; the
+    // Windows one cannot (see wiring.ts) and sends the id alone as `sid`
+    // instead. Either way, a missing or malformed id is not an error - it
+    // just means there is nothing new to remember this turn.
+    hub.sessions.noteAgentSessionId(sessionId, req.query.sid ?? req.body?.session_id);
+    hub.sessions.setStatusFromHook(sessionId, event);
+    return { ok: true };
+  });
 
   /* ---------------------------------------------------------------- MCP */
 
