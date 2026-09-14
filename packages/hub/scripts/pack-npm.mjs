@@ -158,6 +158,9 @@ try {
     dependencies: Object.fromEntries(
       Object.entries(hub.dependencies).filter(([name]) => name !== PROTOCOL_NAME),
     ),
+    // The native window; optional so an install on a platform with no
+    // prebuilt webview still succeeds and falls back to the browser.
+    optionalDependencies: hub.optionalDependencies,
     // Only starting the hub makes sense on an installed copy; the build
     // scripts reference sources that are not in the tarball.
     scripts: { start: 'node dist/cli.js' },

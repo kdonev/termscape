@@ -102,9 +102,9 @@ describe('the hooks an agent is wired with', () => {
     process.env.TERMSCAPE_HOME = home;
   });
 
-  afterAll(() => {
+  afterAll(async () => {
     delete process.env.TERMSCAPE_HOME;
-    removeTree(home);
+    await removeTree(home);
   });
 
   // `mcp: true` because settings.json is a wired agent's file: hooks are how a

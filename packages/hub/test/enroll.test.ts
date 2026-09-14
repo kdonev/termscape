@@ -96,8 +96,8 @@ afterAll(async () => {
   hubB.shutdown();
   await servedA.app.close();
   await servedB.app.close();
-  removeTree(homeA);
-  removeTree(homeB);
+  await removeTree(homeA);
+  await removeTree(homeB);
   delete process.env.TERMSCAPE_HOME;
 });
 
@@ -287,7 +287,7 @@ describe('reachable without being enrollable', () => {
     } finally {
       hub.shutdown();
       await served.app.close();
-      removeTree(home);
+      await removeTree(home);
     }
   });
 
@@ -309,7 +309,7 @@ describe('reachable without being enrollable', () => {
     } finally {
       hub.shutdown();
       await served.app.close();
-      removeTree(home);
+      await removeTree(home);
     }
   });
 });

@@ -16,6 +16,10 @@ npm run dev           # hub with the built UI
 `npm run dev` takes the hub's own flags after a `--`, because npm reads them
 itself otherwise: `npm run dev -- --listen lan`.
 
+`tsx watch` restarts the hub on every change, and each restart closes the
+canvas window and opens a new one. `npm run dev -- --browser` keeps a tab
+instead, which reconnects on its own.
+
 If `npm install` or `npm ci` tries to compile `better-sqlite3` and fails for
 want of a C++ toolchain, install this way instead:
 

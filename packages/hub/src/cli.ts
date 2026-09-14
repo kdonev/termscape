@@ -8,6 +8,7 @@ import { paths } from './paths.js';
 import { listenPlan } from './remote/lan.js';
 import { joinCanvas, type JoinLink } from './remote/join.js';
 import { openInBrowser } from './browser.js';
+import { openAppWindow } from './window/open-window.js';
 import { ProfileRegistry } from './agents/profiles.js';
 import { which } from './agents/resolve.js';
 import { debugTopics } from './debug.js';
@@ -55,8 +56,11 @@ async function main(): Promise<void> {
                     this machine, and turns that page off with it
   --headless        serve no web UI; used when running as a remote hub
   --token <t>       client token to use instead of generating one
-  --open            open the UI in the browser even when not on a terminal
-  --no-open         do not open the browser; just print the url
+  --open            open the canvas even when not on a terminal
+  --no-open         do not open the canvas; just print the url
+  --browser         open the canvas in the browser instead of its own
+                    window. Closing that window stops the hub; closing a
+                    browser tab does not
 
 Joining another machine's canvas:
 
@@ -162,21 +166,6 @@ Joining another machine's canvas:
   }
   if (!values.headless) console.log('');
 
-  /*
-   * Opening the canvas is the default, not a flag.
-   *
-   * The URL carries a token, so it is long and cannot be retyped - leaving
-   * the user to copy it out of scrollback is most of the friction in a
-   * one-command install. A headless hub has no UI to open, and a hub started
-   * by a script or a supervisor has nobody watching, which is what the TTY
-   * check stands in for. --open overrides that check; --no-open beats both.
-   */
-  const wantsBrowser =
-    !values.headless &&
-    !values['no-open'] &&
-    (values.open || process.stdout.isTTY === true);
-  if (wantsBrowser) openInBrowser(url);
-
   // The canvas hub asks us to stop when the user drops this host, so the
   // machine does not keep a hub running that belongs to nobody.
   // A join that was refused cannot be retried into working, and this hub was
@@ -240,6 +229,39 @@ Joining another machine's canvas:
   process.on('unhandledRejection', (reason) => {
     console.error('[unhandled]', reason instanceof Error ? reason.message : reason);
   });
+
+  /*
+   * Opening the canvas is the default, not a flag.
+   *
+   * The URL carries a token, so it is long and cannot be retyped - leaving
+   * the user to copy it out of scrollback is most of the friction in a
+   * one-command install. A headless hub has no UI to open, and a hub started
+   * by a script or a supervisor has nobody watching, which is what the TTY
+   * check stands in for. --open overrides that check; --no-open beats both.
+   *
+   * What opens is a window of the canvas's own, which is the app: closing it
+   * stops the hub, as Ctrl+C would. --browser asks for a tab instead, and a
+   * machine with no webview to show gets one anyway rather than nothing.
+   * Opened after `shutdown` exists, since closing the window calls it.
+   */
+  const wantsCanvas =
+    !values.headless &&
+    !values['no-open'] &&
+    (values.open || process.stdout.isTTY === true);
+  if (wantsCanvas && values.browser) {
+    openInBrowser(url);
+  } else if (wantsCanvas) {
+    openAppWindow(url, {
+      onClosed: () => void shutdown('window closed'),
+      onUnavailable: () => {
+        console.error('[app] no native window here; opening the browser instead');
+        openInBrowser(url);
+      },
+      onCrashed: (why) => {
+        console.error(`[app] the window exited (${why}); the hub is still running at ${url}`);
+      },
+    });
+  }
 }
 
 main().catch((err) => {

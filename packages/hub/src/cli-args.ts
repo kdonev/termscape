@@ -31,6 +31,8 @@ export const CLI_OPTIONS = {
   open: { type: 'boolean', default: false },
   // parseArgs has no --no-x negation, so the opt-out is its own flag.
   'no-open': { type: 'boolean', default: false },
+  // The canvas opens in a window of its own unless this asks for a tab.
+  browser: { type: 'boolean', default: false },
   version: { type: 'boolean', default: false },
   help: { type: 'boolean', default: false },
 } as const satisfies NonNullable<Parameters<typeof parseArgs>[0]>['options'];

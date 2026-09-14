@@ -20,10 +20,10 @@ beforeEach(() => {
   hub = new Hub({ dbPath: join(dir, 'state.db') });
 });
 
-afterEach(() => {
+afterEach(async () => {
   hub.shutdown();
   delete process.env.TERMSCAPE_HOME;
-  removeTree(dir);
+  await removeTree(dir);
 });
 
 const folder = (name: string): string => {

@@ -8,7 +8,8 @@ hub exposes. Agents can look each other up, send each other messages, spawn
 helpers into their workspace, and check on each other's terminals. A message
 from one agent is delivered by typing it into the other's terminal, immediately.
 
-Local-first: the hub runs on your machine and the UI is a browser tab. It binds
+Local-first: the hub runs on your machine and the UI opens in a window of its
+own — the same web page a browser would show. It binds
 every interface, so the canvas opens on your phone or a second screen as well —
 with its token — and another machine can attach itself from the join page.
 `--listen loopback` keeps the whole thing to this machine. Other machines run
@@ -20,10 +21,18 @@ the same hub as a daemon and appear on the same canvas.
 npx @kdonev/termscape
 ```
 
-That starts the hub and opens the canvas in your browser — pass `--no-open`
-if you would rather it did not; the URL is printed either way. Nothing is
-installed system-wide: state lives in `~/.termscape`, and deleting that
-directory is the uninstall.
+That starts the hub and opens the canvas in a window of its own. The window is
+the app: closing it stops the hub, saving state first, just as Ctrl+C in the
+terminal would. `--browser` opens the canvas in a browser tab instead, which
+the hub outlives, and `--no-open` opens nothing; the URL is printed either
+way. Nothing is installed system-wide: state lives in `~/.termscape`, and
+deleting that directory is the uninstall.
+
+The window is the operating system's own webview — WebView2 on Windows,
+WebKit on macOS, WebKitGTK on Linux — so there is no browser bundled with it.
+Linux needs WebKitGTK 4.1 and libxdo (`sudo apt install libwebkit2gtk-4.1-0
+libxdo3` on Debian and Ubuntu). Where no webview can be loaded, the hub says
+why and opens the browser instead.
 
 The hub is reachable from your network, so the same URL — token and all — opens
 the canvas on a phone or a second screen, and the **+ machine** dialog already
@@ -60,7 +69,8 @@ the field, with what you typed still in it.
 
 ## Requirements
 
-- Node 22 or newer
+- Node 24 or newer (a machine that only joins another canvas runs headless and
+  needs 22)
 - An agent CLI on your `PATH` — [Claude Code](https://claude.com/claude-code)
   is the profile that ships configured
 - macOS, Windows, or Linux
@@ -71,7 +81,7 @@ needed.
 ## How it fits together
 
 ```
-Browser (canvas, xterm.js)
+Window or browser (canvas, xterm.js)
    │  WebSocket: JSON control + binary PTY frames
 Hub (Node)
    │  node-pty ── agent CLI processes

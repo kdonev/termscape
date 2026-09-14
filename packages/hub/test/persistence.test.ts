@@ -13,8 +13,8 @@ beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'termscape-db-'));
 });
 
-afterEach(() => {
-  removeTree(dir);
+afterEach(async () => {
+  await removeTree(dir);
 });
 
 describe('migrations', () => {

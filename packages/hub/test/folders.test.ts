@@ -20,8 +20,8 @@ beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'termscape-folders-'));
 });
 
-afterEach(() => {
-  removeTree(dir);
+afterEach(async () => {
+  await removeTree(dir);
 });
 
 describe('resolveFolder', () => {

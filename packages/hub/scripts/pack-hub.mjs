@@ -171,6 +171,13 @@ try {
   // The remote installs with --omit=dev, but leaving these in would still make
   // it resolve types packages it has no use for.
   delete manifest.devDependencies;
+  // The native window. A hub that joins another canvas is headless and never
+  // opens one, and the installer's --build-from-source retry would otherwise
+  // go looking for a Rust toolchain to compile it.
+  delete manifest.optionalDependencies;
+  // Only the window needs Node 24, so a joining machine keeps working on the
+  // Node 22 the installer fetches.
+  manifest.engines = { node: '>=22' };
   // The build scripts reference files that are not in the tarball; only
   // starting the hub makes sense on the machine that receives it.
   manifest.scripts = { start: manifest.scripts.start };

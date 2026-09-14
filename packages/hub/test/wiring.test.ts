@@ -31,9 +31,9 @@ beforeEach(() => {
   process.env.TERMSCAPE_HOME = dir;
 });
 
-afterEach(() => {
+afterEach(async () => {
   delete process.env.TERMSCAPE_HOME;
-  removeTree(dir);
+  await removeTree(dir);
 });
 
 const HUB = 'http://127.0.0.1:4321';

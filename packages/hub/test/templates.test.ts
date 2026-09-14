@@ -26,9 +26,9 @@ beforeEach(() => {
   process.env.TERMSCAPE_HOME = dir;
 });
 
-afterEach(() => {
+afterEach(async () => {
   delete process.env.TERMSCAPE_HOME;
-  removeTree(dir);
+  await removeTree(dir);
 });
 
 const load = (): TemplateRegistry => TemplateRegistry.load(ProfileRegistry.load());

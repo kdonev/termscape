@@ -8,7 +8,7 @@
     "packages/web"
   ],
   "engines": {
-    "node": ">=22"
+    "node": ">=24"
   },
   "scripts": {
     "build": "npm run build -w @termscape/protocol && npm run build -w @termscape/web && npm run build -w @termscape/hub",
@@ -19,7 +19,7 @@
     "pack:npm": "npm run build && npm run pack:npm -w @termscape/hub"
   },
   "devDependencies": {
-    "@types/node": "^22.10.2",
+    "@types/node": "^24.13.4",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
     "vitest": "^4.1.11"

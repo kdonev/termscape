@@ -135,8 +135,8 @@ afterAll(async () => {
   hubB.shutdown();
   await appA.close();
   await appB.close();
-  removeTree(homeA);
-  removeTree(homeB);
+  await removeTree(homeA);
+  await removeTree(homeB);
   delete process.env.TERMSCAPE_HOME;
 });
 
