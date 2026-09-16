@@ -1,8 +1,10 @@
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, statSync } from 'node:fs';
+import { join } from 'node:path';
 import { platform } from 'node:process';
 import { parse as parseToml } from 'smol-toml';
 import type { InjectMode } from '@termscape/protocol';
 import { paths } from '../paths.js';
+import { which } from './resolve.js';
 
 /**
  * An agent profile describes how to launch one kind of CLI and how to talk to
@@ -112,6 +114,36 @@ export interface AgentProfile {
   effortArgs?: string[];
   /** The effort levels this agent documents, for the dialog to offer. */
   efforts?: string[];
+}
+
+/**
+ * Which PowerShell the `powershell` profile runs.
+ *
+ * On Windows there are two: `powershell.exe`, the 5.1 that ships with the OS
+ * and will never change again, and `pwsh`, PowerShell 7, which is the one
+ * anybody who bothered to install it actually wants. So `pwsh` wins wherever
+ * it can be found, and 5.1 is the answer only when it cannot.
+ *
+ * PATH first, because that is where the installer puts it. The default install
+ * directory second, for a hub started from a process whose PATH predates the
+ * install - a daemon, or a terminal that was open at the time - which would
+ * otherwise go on starting 5.1 until something restarted it with a fresh PATH.
+ *
+ * Elsewhere `pwsh` is the only PowerShell there is.
+ */
+export function powershellCommand(): string {
+  if (platform !== 'win32') return 'pwsh';
+  if (which('pwsh')) return 'pwsh';
+  for (const root of [process.env.ProgramFiles, process.env.ProgramW6432]) {
+    if (!root) continue;
+    const installed = join(root, 'PowerShell', '7', 'pwsh.exe');
+    try {
+      if (statSync(installed).isFile()) return installed;
+    } catch {
+      // Not installed there; try the next one.
+    }
+  }
+  return 'powershell.exe';
 }
 
 function defaultShell(): string {
@@ -440,9 +472,11 @@ export const BUILTIN_PROFILES: Record<string, AgentProfile> = {
    *
    * On Windows `shell` follows COMSPEC, which is cmd.exe - so the shell most
    * Windows work actually happens in was the one thing the picker could not
-   * offer. Elsewhere `pwsh` is the cross-platform build, and it stays in the
-   * list when it is not installed with "not found on PATH" against it, which
-   * is the honest answer for a shell you have to install.
+   * offer. There it is PowerShell 7 when that is installed and the built-in
+   * 5.1 otherwise; see powershellCommand. Elsewhere `pwsh` is the
+   * cross-platform build, and it stays in the list when it is not installed
+   * with "not found on PATH" against it, which is the honest answer for a
+   * shell you have to install.
    *
    * Unwired for the same reason `shell` is, and it is not a gap a flag could
    * close: a shell executes what is typed at it, so a brief there is a series
@@ -451,7 +485,7 @@ export const BUILTIN_PROFILES: Record<string, AgentProfile> = {
   powershell: {
     id: 'powershell',
     description: 'PowerShell, no agent wiring',
-    command: platform === 'win32' ? 'powershell.exe' : 'pwsh',
+    command: powershellCommand(),
     // -NoLogo: the banner is three lines of nothing in a window this small.
     args: ['-NoLogo'],
     env: {},
