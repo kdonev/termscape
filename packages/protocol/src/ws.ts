@@ -204,6 +204,8 @@ export const ClientMsg = z.discriminatedUnion('t', [
   z.object({ t: z.literal('stopSession'), sessionId: z.string() }),
   z.object({ t: z.literal('removeSession'), requestId, sessionId: z.string() }),
   z.object({ t: z.literal('resumeSession'), sessionId: z.string() }),
+  /** Restart a running session with a fresh conversation and its opening again. */
+  z.object({ t: z.literal('clearSession'), sessionId: z.string() }),
   z.object({ t: z.literal('resumeWorkspace'), workspaceId: z.string() }),
 
   /**

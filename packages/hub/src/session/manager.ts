@@ -467,6 +467,52 @@ export class SessionManager extends EventEmitter {
     return this.get(sessionId)!;
   }
 
+  /**
+   * Relaunch a session as if it had just been started: a new conversation and
+   * an empty screen, under the same id, address and window.
+   *
+   * Not `stop` then `resume`: stopping saves the screen that is about to be
+   * thrown away, and resuming would restore it and continue the conversation.
+   */
+  async restartFresh(sessionId: string): Promise<Session> {
+    const s = this.store.getSession(sessionId, this.isResumable);
+    if (!s) throw new Error(`unknown session ${sessionId}`);
+    const ws = this.store.getWorkspace(s.workspaceId);
+    if (!ws) throw new Error(`unknown workspace ${s.workspaceId}`);
+    const profile = this.profiles.require(s.profile);
+
+    // Claude Code refuses a `--session-id` it already holds a conversation
+    // under, and a later resume must find the new conversation, not the old.
+    if (profile.resumeArgs) {
+      s.agentSessionUuid = randomUUID();
+      this.store.updateSession(s.id, { agentSessionUuid: s.agentSessionUuid });
+    }
+
+    // Kill first, so nothing it prints on the way out lands in the new screen.
+    const old = this.live.get(sessionId);
+    if (old) {
+      old.dispose();
+      this.live.delete(sessionId);
+    }
+    // Otherwise spawn() restores the old screen. The attached browsers were
+    // only ever sent a snapshot on attach, so they are told to wipe theirs.
+    this.clearTimer(this.snapshotTimers, sessionId);
+    this.store.removeSnapshot(sessionId);
+    this.emit('data', sessionId, '\x1b[H\x1b[2J\x1b[3J');
+
+    const spec = this.buildSpec(
+      s,
+      ws.name,
+      profile,
+      this.peersOf(ws.id, s.id),
+      false,
+      this.store.getTemplateEnv(s.id),
+    );
+    this.store.setLaunchSpec(s.id, spec);
+    this.spawn(s, spec, profile);
+    return this.get(sessionId)!;
+  }
+
   private spawn(session: Session, spec: SessionLaunchSpec, profile: AgentProfile): void {
     const existing = this.live.get(session.id);
     if (existing) existing.dispose();

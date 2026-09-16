@@ -145,7 +145,7 @@ describe('spawn_agent', () => {
   );
 
   it(
-    "types the template opening again after a /clear, without the spawner's task",
+    "types the template opening again on clear, without the spawner's task",
     async () => {
       hub.saveTemplate({ id: 'reviewer', agent: 'shell', prompt: 'TEMPLATE OPENING' });
       const ws = hub.createWorkspace('crew4', folder('crew4'));
@@ -157,20 +157,51 @@ describe('spawn_agent', () => {
       await hub.spawnAgent(parent.id, { prompt: 'run the tests' });
       const child = hub.sessions.list().find((s) => s.spawnedBy === parent.id)!;
       await waitForText(() => out.get(child.id) ?? '', 'run the tests');
+      await waitForText(() => hub.sessions.snapshotForAttach(child.id)?.serialized ?? '', 'run the tests');
 
-      // What the agent's SessionStart hook reports on /clear.
-      hub.restoreOpeningAfterClear(child.id);
-      const read = () => out.get(child.id) ?? '';
-      const deadline = Date.now() + 25_000;
-      while (count(read(), 'TEMPLATE OPENING') < 2) {
-        if (Date.now() > deadline) throw new Error('the opening was not typed in again');
-        await new Promise((r) => setTimeout(r, 100));
-      }
+      // The old process's listeners go with it, so everything past this mark
+      // is the new run - starting with the wipe the browsers are sent.
+      const mark = (out.get(child.id) ?? '').length;
+      const cleared = await hub.clearSession(child.id);
+      expect(cleared.id).toBe(child.id);
+      expect(cleared.address).toBe(child.address);
+      expect(cleared.state).toBe('running');
+
+      const after = () => (out.get(child.id) ?? '').slice(mark);
+      expect(after().startsWith('\x1b[H\x1b[2J\x1b[3J')).toBe(true);
+      await waitForText(after, 'TEMPLATE OPENING');
       // Who the agent is comes back; the task it was handed does not, or a
       // cleared agent would start the same work over.
       await new Promise((r) => setTimeout(r, 1500));
-      expect(count(read(), 'run the tests')).toBe(1);
-      expect(count(read(), '[from ')).toBe(1);
+      expect(count(after(), 'run the tests')).toBe(0);
+      expect(count(after(), '[from ')).toBe(0);
+      expect(hub.sessions.snapshotForAttach(child.id)?.serialized ?? '').not.toContain(
+        'run the tests',
+      );
+    },
+    60_000,
+  );
+
+  it(
+    'wipes the screen on clear and restarts a session that had no opening',
+    async () => {
+      const ws = hub.createWorkspace('crew5', folder('crew5'));
+      const s = await hub.startSession({ workspaceId: ws.id, profile: 'shell' });
+      const out: string[] = [];
+      hub.on('data', (id: string, chunk: string) => {
+        if (id === s.id) out.push(chunk);
+      });
+      hub.sessions.write(s.id, 'echo BEFORE-CLEAR\r');
+      await waitForText(() => out.join(''), 'BEFORE-CLEAR');
+
+      const mark = out.join('').length;
+      await hub.clearSession(s.id);
+      const after = () => out.join('').slice(mark);
+      expect(after().startsWith('\x1b[H\x1b[2J\x1b[3J')).toBe(true);
+      await new Promise((r) => setTimeout(r, 3000));
+      expect(after()).not.toContain('BEFORE-CLEAR');
+      expect(hub.sessions.snapshotForAttach(s.id)?.serialized ?? '').not.toContain('BEFORE-CLEAR');
+      expect(hub.sessions.get(s.id)?.state).toBe('running');
     },
     60_000,
   );

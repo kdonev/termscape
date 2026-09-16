@@ -649,6 +649,10 @@ export class Store {
     return r ?? null;
   }
 
+  removeSnapshot(sessionId: string): void {
+    this.db.prepare('DELETE FROM session_snapshot WHERE session_id = ?').run(sessionId);
+  }
+
   /* --------------------------------------------------------------- shares */
 
   /** Every session currently shared, for the panel to mark them and the

@@ -1025,29 +1025,6 @@ export class Hub extends EventEmitter implements AgentApi {
   }
 
   /**
-   * The agent cleared its conversation, so type its opening in again.
-   *
-   * Claude Code's `/clear` starts a new conversation in the same process, and
-   * everything the opening instruction told it - the role a template gave it,
-   * what the human said it was for - goes with the old one. The brief does
-   * not need this when it rode in on a flag, since that is system prompt and
-   * survives; a typed brief is conversation like the instruction, so it goes
-   * first here exactly as it did at start.
-   *
-   * Reported by the agent's own SessionStart hook (see wiring.ts), so this
-   * fires for a clear and never for a start or a resume, which must not
-   * repeat the opening.
-   */
-  restoreOpeningAfterClear(sessionId: string): void {
-    const session = this.sessions.get(sessionId);
-    if (!session) return;
-    const opening = [this.typedBrief(session), this.store.getOpeningPrompt(sessionId)]
-      .filter((part): part is string => !!part)
-      .join('\n\n');
-    if (opening) void this.typeWhenReady(sessionId, opening, { alreadyUp: true });
-  }
-
-  /**
    * The brief for an agent that cannot be handed one, or null.
    *
    * Read back off disk rather than re-rendered: the wiring wrote exactly this
@@ -1081,6 +1058,29 @@ export class Hub extends EventEmitter implements AgentApi {
     const session = await this.sessions.resume(sessionId);
     const brief = this.typedBrief(session);
     if (brief) void this.deliverOpeningInstruction(session.id, brief);
+    return session;
+  }
+
+  /**
+   * Start a running session over: a fresh conversation, an empty window, and
+   * its opening typed in again - the window's `clear` button.
+   *
+   * A restart rather than typing `/clear` at the CLI. Only Claude Code could
+   * say it had cleared, and only through a hook; a restart is the same for
+   * every agent, and the hub knows exactly when the new one is up.
+   *
+   * What comes back is the opening the session recorded when it started (see
+   * startResolved): a template's instruction, or the human's from the dialog -
+   * never a spawning peer's task, which would start that work over. A brief
+   * that rides in on a flag needs nothing here; a typed one goes first, as it
+   * did at start.
+   */
+  async clearSession(sessionId: string): Promise<Session> {
+    const session = await this.sessions.restartFresh(sessionId);
+    const opening = [this.typedBrief(session), this.store.getOpeningPrompt(sessionId)]
+      .filter((part): part is string => !!part)
+      .join('\n\n');
+    if (opening) void this.deliverOpeningInstruction(session.id, opening);
     return session;
   }
 
@@ -1933,18 +1933,8 @@ export class Hub extends EventEmitter implements AgentApi {
    * before the program is reading it; the wait is for output to arrive and
    * then pause, which is as close to "it has drawn its prompt" as this gets
    * without knowing the CLI.
-   *
-   * `alreadyUp` is for a CLI that has been running all along and is only
-   * redrawing, as after a `/clear`. It may already have finished drawing by
-   * the time this is called, and an idle one then prints nothing at all - so
-   * the pause is counted from now as well as from its next output, and
-   * running out of patience still types rather than giving up.
    */
-  private async typeWhenReady(
-    sessionId: string,
-    text: string,
-    opts: { alreadyUp?: boolean } = {},
-  ): Promise<void> {
+  private async typeWhenReady(sessionId: string, text: string): Promise<void> {
     const pty = this.sessions.pty(sessionId);
     if (!pty) return;
 
@@ -1958,10 +1948,9 @@ export class Hub extends EventEmitter implements AgentApi {
         res(v);
       };
       const onData = () => setTimeout(() => done(true), 1200);
-      const timer = setTimeout(() => done(!!opts.alreadyUp), 20_000);
+      const timer = setTimeout(() => done(false), 20_000);
       timer.unref?.();
       pty.on('data', onData);
-      if (opts.alreadyUp) onData();
     });
 
     if (!ready || !pty.running) return;

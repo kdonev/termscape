@@ -219,6 +219,7 @@ export const PeerRequest = z.discriminatedUnion('t', [
   // otherwise it lingers holding its files open and its next install fails.
   z.object({ t: z.literal('shutdown'), id: z.string() }),
   z.object({ t: z.literal('resumeSession'), id: z.string(), address: z.string() }),
+  z.object({ t: z.literal('clearSession'), id: z.string(), address: z.string() }),
   // The canvas telling a host who else is on it. Sent whenever that set
   // changes, and it is the whole set minus the receiving host's own agents,
   // which it already knows about and would otherwise list twice.

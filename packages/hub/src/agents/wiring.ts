@@ -230,13 +230,6 @@ function writeWiredFiles(
                 { hooks: [{ type: 'command', command: hookCmd('idle') }] },
               ],
               Stop: [{ hooks: [{ type: 'command', command: hookCmd('idle') }] }],
-              // Not a status at all: `/clear` threw away the conversation the
-              // opening instruction was typed into, and the hub types it in
-              // again. The matcher is Claude Code's `source`, so a start, a
-              // resume or a compaction never reaches the hub from here.
-              SessionStart: [
-                { matcher: 'clear', hooks: [{ type: 'command', command: hookCmd('clear') }] },
-              ],
             },
           }
         : {},

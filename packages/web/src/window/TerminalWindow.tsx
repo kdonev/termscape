@@ -166,6 +166,19 @@ export const TerminalWindow = memo(function TerminalWindow({
           </button>
         )}
         {!stopped && (
+          // A restart rather than typing `/clear` at the CLI: the opening
+          // instruction was conversation, and a clear throws it away. The hub
+          // relaunches the agent on a blank screen and types it in again.
+          <button
+            className="btn"
+            title="Restart with a fresh conversation and send its opening instruction again"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={() => client?.send({ t: 'clearSession', sessionId: session.id })}
+          >
+            clear
+          </button>
+        )}
+        {!stopped && (
           <button
             className="btn"
             title="Stop this agent"

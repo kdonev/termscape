@@ -167,12 +167,6 @@ export async function serve(opts: ServeOptions): Promise<ServeResult> {
     // instead. Either way, a missing or malformed id is not an error - it
     // just means there is nothing new to remember this turn.
     hub.sessions.noteAgentSessionId(sessionId, req.query.sid ?? req.body?.session_id);
-    if (req.query.event === 'clear') {
-      // Says nothing about busy or idle, only that the conversation the
-      // opening instruction lived in is gone.
-      hub.restoreOpeningAfterClear(sessionId);
-      return { ok: true };
-    }
     hub.sessions.setStatusFromHook(sessionId, req.query.event === 'idle' ? 'idle' : 'busy');
     return { ok: true };
   });
@@ -767,6 +761,16 @@ export async function serve(opts: ServeOptions): Promise<ServeResult> {
           return;
         }
         await hub.resumeSession(msg.sessionId);
+        return;
+      }
+
+      case 'clearSession': {
+        const remote = hub.peers.find(msg.sessionId);
+        if (remote) {
+          await remote.peer.request({ t: 'clearSession', id: randomUUID(), address: msg.sessionId });
+          return;
+        }
+        await hub.clearSession(msg.sessionId);
         return;
       }
 
