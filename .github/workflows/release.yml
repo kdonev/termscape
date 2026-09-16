@@ -112,7 +112,12 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      # Required for npm provenance, which ties the tarball to this workflow run.
+      # The OIDC token npm exchanges for a short-lived publish credential, and
+      # what provenance is signed against. Trusted publishing is configured on
+      # the package at npmjs.com: this repo, this workflow file by name. There
+      # is no npm token anywhere here, which is the point - the one that was
+      # here expired, and an expiring credential in a secret is the failure
+      # mode this replaces rather than renews.
       id-token: write
     steps:
       - uses: actions/setup-node@v4
@@ -120,13 +125,27 @@ jobs:
           node-version: 24
           registry-url: https://registry.npmjs.org
 
+      # OIDC publishing needs npm 11.5.1 or newer. Node 24 ships one already,
+      # but which one moves with the runner image, so it is pinned here rather
+      # than assumed - the failure is at publish time, after a full release has
+      # been built and smoke-tested.
+      - name: Use an npm that can publish over OIDC
+        run: npm install -g npm@latest
+
       - uses: actions/download-artifact@v4
         with:
           name: tarball
           path: tarball
 
+      # No NODE_AUTH_TOKEN, and deliberately not an empty one: `setup-node`
+      # writes an `_authToken` line into .npmrc that expands to whatever the
+      # variable holds, and an empty value is still a value - npm tries it and
+      # fails with ENEEDAUTH instead of falling back to OIDC. Unset is what
+      # makes it ask GitHub for a token instead.
+      #
+      # `--provenance` is gone for the same reason: trusted publishing from a
+      # public repo to a public package generates it automatically, so the flag
+      # says nothing the run does not already do.
       - name: Publish to npm
         shell: bash
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish ./tarball/*.tgz --access public --provenance
+        run: npm publish ./tarball/*.tgz --access public
