@@ -8,6 +8,7 @@ import { debug, debugOn } from '../debug.js';
 import { terminalFontSize } from '../canvas/viewport.js';
 import { wheelAction, wheelKey } from './wheel.js';
 import { rightClickAction } from './rightClick.js';
+import { pinScroll, restoreScroll, type ScrollPin } from './scrollPin.js';
 import { readClipboard, writeClipboard } from './clipboard.js';
 import {
   TERMINAL_FONT_FAMILY,
@@ -46,6 +47,13 @@ interface Props {
   cols?: number;
   rows?: number;
 }
+
+/**
+ * How many animation frames a scroll position is held after a font change.
+ * xterm settles within two or three; the rest is margin, and costs nothing
+ * once the position already holds.
+ */
+const PIN_FRAMES = 10;
 
 const THEME = {
   background: '#0e1117',
@@ -475,13 +483,54 @@ export function TerminalView({
     }
   }, [follow, followCols, followRows]);
 
+  /*
+   * The line this terminal was scrolled to when a zoom started changing its
+   * font, and the frame loop holding it there. See scrollPin.ts for why a
+   * font change scrolls xterm at all.
+   *
+   * Taken once per burst rather than per change: a zoom is a stream of font
+   * changes, and a position read between two of them may already be one the
+   * previous change corrupted.
+   */
+  const pinRef = useRef<{ pin: ScrollPin; frames: number; raf: number } | null>(null);
+  useEffect(
+    () => () => {
+      if (pinRef.current) cancelAnimationFrame(pinRef.current.raf);
+      pinRef.current = null;
+    },
+    [],
+  );
+
   // Re-rasterize at the new resolution, keeping the same grid. No resize is
   // sent: the PTY's view of the terminal has not changed, only its sharpness.
   useEffect(() => {
     const term = termRef.current;
     if (!term) return;
     const fontSize = terminalFontSize(renderScale);
-    if (term.options.fontSize !== fontSize) term.options.fontSize = fontSize;
+    if (term.options.fontSize === fontSize) return;
+
+    const held = pinRef.current;
+    const pin = held?.pin ?? pinScroll(term.buffer.active);
+    if (held) cancelAnimationFrame(held.raf);
+    term.options.fontSize = fontSize;
+
+    // xterm resyncs its scroll area on an animation frame and the browser
+    // reports the resulting scroll a frame or so after that, so the position
+    // is re-asserted for a short run of frames after the last change rather
+    // than once.
+    const hold = () => {
+      const state = pinRef.current;
+      if (!state || termRef.current !== term) return;
+      const to = restoreScroll(state.pin, term.buffer.active);
+      if (to === 'bottom') term.scrollToBottom();
+      else if (to !== null) term.scrollToLine(to);
+      if (--state.frames <= 0) {
+        pinRef.current = null;
+        return;
+      }
+      state.raf = requestAnimationFrame(hold);
+    };
+    pinRef.current = { pin, frames: PIN_FRAMES, raf: requestAnimationFrame(hold) };
   }, [renderScale]);
 
   useEffect(() => {
