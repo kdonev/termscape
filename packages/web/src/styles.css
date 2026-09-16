@@ -143,7 +143,14 @@ a.btn { text-decoration: none; display: inline-block; }
   gap: 8px;
   align-items: baseline;
   white-space: nowrap;
+  /* The frame is transparent to the pointer; its label is the handle that
+     drags the whole workspace (WorkspaceFrame.tsx). */
+  pointer-events: auto;
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
 }
+.ws-label.dragging { cursor: grabbing; }
 .ws-path { color: var(--muted); font-weight: 400; font-size: 11px; }
 
 /* ------------------------------------------------------------ window */

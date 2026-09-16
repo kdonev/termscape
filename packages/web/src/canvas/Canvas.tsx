@@ -29,6 +29,7 @@ import {
   zoomAt,
 } from './viewport.js';
 import type { Point, Rect, WheelStream } from './viewport.js';
+import { WorkspaceFrame } from './WorkspaceFrame.js';
 
 /**
  * How long the viewport must be still before we call a gesture finished.
@@ -756,13 +757,13 @@ export function Canvas() {
    * no frame at all, and its windows no workspace colour.
    */
   const { groups, wsBySession } = useMemo(() => {
-    const groups: { ws: Workspace; box: Rect }[] = [];
+    const groups: { ws: Workspace; box: Rect; sessionIds: string[] }[] = [];
     const wsBySession = new Map<string, Workspace>();
     for (const ws of workspaces) {
       const members = sessionsIn(ws, sessions);
       for (const s of members) wsBySession.set(s.id, ws);
       const box = workspaceBounds(members.map((s) => s.window));
-      if (box) groups.push({ ws, box });
+      if (box) groups.push({ ws, box, sessionIds: members.map((s) => s.id) });
     }
     return { groups, wsBySession };
   }, [workspaces, sessions]);
@@ -791,24 +792,13 @@ export function Canvas() {
         }}
       >
         {groups.map((g) => (
-          <div
+          <WorkspaceFrame
             key={g.ws.id}
-            className="ws-group"
-            style={{
-              transform: `translate(${g.box.x}px, ${g.box.y}px)`,
-              width: g.box.w,
-              height: g.box.h,
-              // `color` as well as the border: the frame's background wash is
-              // mixed from currentColor, and the label inherits it.
-              color: g.ws.color,
-              borderColor: g.ws.color,
-            }}
-          >
-            <span className="ws-label">
-              {g.ws.name}
-              <span className="ws-path">{g.ws.rootPath}</span>
-            </span>
-          </div>
+            ws={g.ws}
+            box={g.box}
+            sessionIds={g.sessionIds}
+            zoom={viewport.zoom}
+          />
         ))}
 
         <MessageEdges sessions={sessions} />

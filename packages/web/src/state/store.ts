@@ -144,6 +144,8 @@ interface AppState {
 
   setViewport: (v: Viewport) => void;
   moveWindow: (sessionId: string, rect: WindowRect) => void;
+  /** Move several windows by the same world offset: a workspace dragged whole. */
+  moveWindowsBy: (sessionIds: readonly string[], dx: number, dy: number) => void;
   select: (id: string | null) => void;
   selectNote: (id: string | null) => void;
   putNote: (note: Note) => void;
@@ -397,6 +399,25 @@ export const useStore = create<AppState>((set, get) => ({
     }));
     // The hub debounces the write, so streaming every drag frame is fine.
     get().client?.send({ t: 'moveWindow', sessionId, rect });
+  },
+
+  moveWindowsBy: (sessionIds, dx, dy) => {
+    if (sessionIds.length === 0 || (dx === 0 && dy === 0)) return;
+    const ids = new Set(sessionIds);
+    const moved: Session[] = [];
+    set((s) => ({
+      sessions: s.sessions.map((x) => {
+        if (!ids.has(x.id)) return x;
+        const next = { ...x, window: { ...x.window, x: x.window.x + dx, y: x.window.y + dy } };
+        moved.push(next);
+        return next;
+      }),
+    }));
+    // One message per window, exactly as dragging each of them would send:
+    // the hub already debounces layout writes per session, and a remote
+    // window's layout is saved on this side like any other.
+    const client = get().client;
+    for (const x of moved) client?.send({ t: 'moveWindow', sessionId: x.id, rect: x.window });
   },
 
   // Selecting a session and selecting a note are mutually exclusive - the
