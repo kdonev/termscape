@@ -66,6 +66,25 @@ export const PeerRelayAsk = z.discriminatedUnion('t', [
     lines: z.number().int().positive().optional(),
   }),
   z.object({ t: z.literal('listHosts') }),
+  /*
+   * Templates are made on the canvas - the panel that edits them and the
+   * dialog that accepts a proposal both live there - so an agent on an
+   * attached machine asks the canvas what exists rather than reading a list
+   * this hub never had a way to add to.
+   */
+  z.object({ t: z.literal('listTemplates') }),
+  /*
+   * What a spawn_agent `profile` means, answered by the canvas for the same
+   * reason. It carries the caller's own template and agent because a
+   * spawn_agent that names no profile starts from the caller's template, and
+   * only the canvas can say whether that template still exists.
+   */
+  z.object({
+    t: z.literal('pickTemplate'),
+    profile: z.string().optional(),
+    parentTemplate: z.string().nullable(),
+    parentProfile: z.string(),
+  }),
   // A spawn_agent naming a `host`, from a hub with no local knowledge of one
   // (the canvas machine itself, or a third machine). Everything here arrives
   // already resolved, for the reason startSession's own peer request does
@@ -91,6 +110,11 @@ export const PeerRelayAsk = z.discriminatedUnion('t', [
     effort: z.string().optional(),
     env: z.record(z.string(), z.string()).optional(),
     opening: z.string().optional(),
+    /**
+     * The part of `opening` to type in again after the child clears its
+     * conversation: the template's own instruction, never the caller's task.
+     */
+    restore: z.string().nullable().optional(),
     /** Whether the caller passed a `prompt`, for the reply's `promptQueued`. */
     promptGiven: z.boolean(),
   }),
@@ -160,6 +184,12 @@ export const PeerRequest = z.discriminatedUnion('t', [
     model: z.string().optional(),
     effort: z.string().optional(),
     prompt: z.string().optional(),
+    /**
+     * What to type in again after the agent clears its conversation, when
+     * that is not the whole of `prompt` - null for nothing. Absent means all
+     * of `prompt`.
+     */
+    restorePrompt: z.string().nullable().optional(),
     /**
      * Extra environment the template asked for, already resolved to values —
      * the template itself never crosses, for the reason above.

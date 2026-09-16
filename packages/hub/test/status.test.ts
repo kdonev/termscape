@@ -164,7 +164,7 @@ describe('the hooks an agent is wired with', () => {
     // typed in by a peer - still reaches a tool call, which is what keeps a
     // busy window from reading as idle.
     expect(Object.keys(hooks).sort()).toEqual(
-      ['Notification', 'PreToolUse', 'Stop', 'UserPromptSubmit'].sort(),
+      ['Notification', 'PreToolUse', 'SessionStart', 'Stop', 'UserPromptSubmit'].sort(),
     );
     const command = (event: string) => JSON.stringify(hooks[event]);
     expect(command('UserPromptSubmit')).toContain('event=busy');
@@ -172,6 +172,14 @@ describe('the hooks an agent is wired with', () => {
     expect(command('Stop')).toContain('event=idle');
     // Waiting on a permission prompt is waiting on the human.
     expect(command('Notification')).toContain('event=idle');
+  });
+
+  it('reports a /clear, and only a /clear, so the opening can be typed in again', () => {
+    const [entry] = settingsFor('hooks').hooks.SessionStart;
+    // The matcher is Claude Code's `source`: a startup or a resume must not
+    // repeat the opening instruction.
+    expect(entry.matcher).toBe('clear');
+    expect(JSON.stringify(entry.hooks)).toContain('event=clear');
   });
 
   it('writes no hooks for a profile that does not have them', () => {

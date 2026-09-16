@@ -308,6 +308,18 @@ export const MIGRATIONS: Migration[] = [
       );
     `,
   },
+  {
+    version: 11,
+    name: 'session_opening_prompt',
+    up: `
+      -- The opening instruction a session was started with, so it can be typed
+      -- in again when the agent's conversation is cleared (issue 20). Only the
+      -- part that belongs to the agent itself - a template's, or the human's
+      -- from the dialog - never a spawning peer's one-off task, which would
+      -- start that task over. Null when there is nothing to restore.
+      ALTER TABLE session ADD COLUMN opening_prompt TEXT;
+    `,
+  },
 ];
 
 export function runMigrations(db: Database): number {

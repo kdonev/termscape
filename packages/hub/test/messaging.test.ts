@@ -131,6 +131,27 @@ describe('the status hook endpoint', () => {
     expect(res.status).toBe(400);
   });
 
+  it('types the opening instruction in again when a hook reports a /clear', async () => {
+    const ws = hub.createWorkspace('clearws', home);
+    const s = await hub.startSession({
+      workspaceId: ws.id,
+      profile: 'shell',
+      name: 'cleared',
+      prompt: 'OPENING FOR CLEAR',
+    });
+    const read = () => output.get(s.id) ?? '';
+    const times = () => read().split('OPENING FOR CLEAR').length - 1;
+    try {
+      await waitFor(() => times() >= 1, 25_000, 'the opening instruction');
+      const token = hub.tokens.get(s.id)!;
+      const res = await fetch(`${origin}/hook/${token}?event=clear`, { method: 'POST' });
+      expect(res.status).toBe(200);
+      await waitFor(() => times() >= 2, 25_000, 'the opening typed in again');
+    } finally {
+      hub.sessions.remove(s.id);
+    }
+  }, 60_000);
+
   describe('the conversation id a hook reports', () => {
     /*
      * A real row this time, not just a token: `noteAgentSessionId` looks up

@@ -475,6 +475,7 @@ export class PeerRegistry extends EventEmitter {
       model?: string;
       effort?: string;
       prompt?: string;
+      restorePrompt?: string | null;
       env?: Record<string, string>;
       name?: string;
       spawnedByAddress: string | null;

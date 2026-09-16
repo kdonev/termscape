@@ -162,13 +162,18 @@ export async function serve(opts: ServeOptions): Promise<ServeResult> {
   }>('/hook/:token', async (req, reply) => {
     const sessionId = hub.tokens.resolve(req.params.token);
     if (!sessionId) return reply.code(404).send({ ok: false });
-    const event = req.query.event === 'idle' ? 'idle' : 'busy';
     // The POSIX hook forwards Claude Code's hook JSON as the body; the
     // Windows one cannot (see wiring.ts) and sends the id alone as `sid`
     // instead. Either way, a missing or malformed id is not an error - it
     // just means there is nothing new to remember this turn.
     hub.sessions.noteAgentSessionId(sessionId, req.query.sid ?? req.body?.session_id);
-    hub.sessions.setStatusFromHook(sessionId, event);
+    if (req.query.event === 'clear') {
+      // Says nothing about busy or idle, only that the conversation the
+      // opening instruction lived in is gone.
+      hub.restoreOpeningAfterClear(sessionId);
+      return { ok: true };
+    }
+    hub.sessions.setStatusFromHook(sessionId, req.query.event === 'idle' ? 'idle' : 'busy');
     return { ok: true };
   });
 

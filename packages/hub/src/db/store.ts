@@ -501,6 +501,24 @@ export class Store {
     return envFromJson(r?.template_env_json ?? null);
   }
 
+  /**
+   * The opening instruction to type in again after the agent clears its
+   * conversation. Kept off `Session` on purpose: it is how the session
+   * started, not what it is, and it must not be replayed on resume.
+   */
+  getOpeningPrompt(id: string): string | null {
+    const r = this.db
+      .prepare('SELECT opening_prompt FROM session WHERE id = ?')
+      .get(id) as { opening_prompt: string | null } | undefined;
+    return r?.opening_prompt ?? null;
+  }
+
+  setOpeningPrompt(id: string, prompt: string | null): void {
+    this.db
+      .prepare('UPDATE session SET opening_prompt = ? WHERE id = ?')
+      .run(prompt || null, id);
+  }
+
   setLaunchSpec(id: string, spec: SessionLaunchSpec): void {
     this.db
       .prepare('UPDATE session SET argv_json = ?, env_json = ? WHERE id = ?')

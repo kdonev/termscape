@@ -145,6 +145,37 @@ describe('spawn_agent', () => {
   );
 
   it(
+    "types the template opening again after a /clear, without the spawner's task",
+    async () => {
+      hub.saveTemplate({ id: 'reviewer', agent: 'shell', prompt: 'TEMPLATE OPENING' });
+      const ws = hub.createWorkspace('crew4', folder('crew4'));
+      const parent = await hub.startSession({ workspaceId: ws.id, profile: 'reviewer' });
+
+      const out = new Map<string, string>();
+      hub.on('data', (id: string, chunk: string) => out.set(id, (out.get(id) ?? '') + chunk));
+
+      await hub.spawnAgent(parent.id, { prompt: 'run the tests' });
+      const child = hub.sessions.list().find((s) => s.spawnedBy === parent.id)!;
+      await waitForText(() => out.get(child.id) ?? '', 'run the tests');
+
+      // What the agent's SessionStart hook reports on /clear.
+      hub.restoreOpeningAfterClear(child.id);
+      const read = () => out.get(child.id) ?? '';
+      const deadline = Date.now() + 25_000;
+      while (count(read(), 'TEMPLATE OPENING') < 2) {
+        if (Date.now() > deadline) throw new Error('the opening was not typed in again');
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      // Who the agent is comes back; the task it was handed does not, or a
+      // cleared agent would start the same work over.
+      await new Promise((r) => setTimeout(r, 1500));
+      expect(count(read(), 'run the tests')).toBe(1);
+      expect(count(read(), '[from ')).toBe(1);
+    },
+    60_000,
+  );
+
+  it(
     'delivers the template opening alone when the spawn carries no instruction',
     async () => {
       hub.saveTemplate({ id: 'reviewer', agent: 'shell', prompt: 'TEMPLATE OPENING' });

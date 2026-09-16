@@ -26,7 +26,11 @@ import { openDb, type Db } from './db/index.js';
 import { Store } from './db/store.js';
 import { briefMode, ProfileRegistry } from './agents/profiles.js';
 import { AgentDetector } from './agents/detect.js';
-import { TemplateRegistry, validate as validateTemplate } from './agents/templates.js';
+import {
+  TemplateRegistry,
+  overlayCanvasTemplates,
+  validate as validateTemplate,
+} from './agents/templates.js';
 import { TokenRegistry } from './agents/tokens.js';
 import { Shares } from './agents/shares.js';
 import { MessageRouter } from './agents/router.js';
@@ -40,6 +44,27 @@ import { deploy, type DeployResult } from './remote/deployer.js';
 import { hubTarballPath } from './remote/tarball.js';
 import { paths } from './paths.js';
 import { checkFolder, folderName } from './folders.js';
+
+/** A template resolved to the values a launch needs. */
+interface PickedTemplate {
+  agent: string;
+  template: string | null;
+  model?: string;
+  effort?: string;
+  prompt?: string;
+  /**
+   * What of `prompt` to type in again after a `/clear`, when that is not all
+   * of it - see startResolved. Null for nothing.
+   */
+  restorePrompt?: string | null;
+  env?: Record<string, string>;
+}
+
+/** One template as list_templates shows it: described, with its env named but not given. */
+type TemplateView = Omit<AgentTemplateInfo, 'env' | 'error'> & {
+  envNames: string[];
+  error: string | null;
+};
 
 export const HUB_VERSION = '0.1.5';
 
@@ -204,6 +229,10 @@ export class Hub extends EventEmitter implements AgentApi {
             return void done(this.readScreenAt(ask.address, ask.lines));
           case 'listHosts':
             return void done(Promise.resolve(this.hostsView(fromHostId)));
+          case 'listTemplates':
+            return void done(Promise.resolve(this.templateViews()));
+          case 'pickTemplate':
+            return void done(Promise.resolve(this.pickTemplateFor(ask)));
           case 'spawn':
             return void done(this.spawnFrom(ask, fromHostId));
         }
@@ -842,14 +871,7 @@ export class Hub extends EventEmitter implements AgentApi {
     model?: string;
     effort?: string;
     prompt?: string;
-  }): {
-    agent: string;
-    template: string | null;
-    model?: string;
-    effort?: string;
-    prompt?: string;
-    env?: Record<string, string>;
-  } {
+  }): PickedTemplate {
     const t = this.templates.get(opts.profile);
     if (!t) {
       // Not a template: an agent id straight from spawn_agent or an older
@@ -883,9 +905,22 @@ export class Hub extends EventEmitter implements AgentApi {
     cwd?: string;
     spawnedBy?: string | null;
   }): Promise<Session> {
+    return this.startPicked(opts, this.resolveTemplate(opts));
+  }
+
+  /**
+   * Start a session from a template already resolved, locally or on a host.
+   *
+   * Split from startSession for spawn_agent on an attached hub, whose
+   * template may have been resolved by the canvas: resolving its id again
+   * here would look it up in a registry that has never heard of it.
+   */
+  private async startPicked(
+    opts: { workspaceId: string; name?: string; cwd?: string; spawnedBy?: string | null },
+    picked: PickedTemplate,
+  ): Promise<Session> {
     const ws = this.store.getWorkspace(opts.workspaceId);
     if (!ws) throw new Error(`unknown workspace ${opts.workspaceId}`);
-    const picked = this.resolveTemplate(opts);
 
     // A workspace that belongs to a host runs its agents there. The peer owns
     // the PTY; what comes back is a session we show on our own canvas.
@@ -903,6 +938,7 @@ export class Hub extends EventEmitter implements AgentApi {
         model: picked.model,
         effort: picked.effort,
         prompt: picked.prompt,
+        restorePrompt: picked.restorePrompt,
         // Values, like the model and the effort beside it: the template lives
         // here and the far side has never heard of it.
         env: picked.env,
@@ -931,6 +967,14 @@ export class Hub extends EventEmitter implements AgentApi {
     model?: string;
     effort?: string;
     prompt?: string;
+    /**
+     * What to type in again when the agent clears its conversation, if that
+     * is not all of `prompt`. spawn_agent is the case: its opening is the
+     * template's instruction and the spawning agent's task merged into one,
+     * and a cleared agent should be told who it is again, not handed the
+     * same task a second time. Null for nothing; absent for all of `prompt`.
+     */
+    restorePrompt?: string | null;
     env?: Record<string, string>;
     name?: string;
     cwd?: string;
@@ -972,8 +1016,35 @@ export class Hub extends EventEmitter implements AgentApi {
       .filter((part): part is string => !!part)
       .join('\n\n');
     if (opening) void this.deliverOpeningInstruction(session.id, opening);
+    this.store.setOpeningPrompt(
+      session.id,
+      opts.restorePrompt === undefined ? (opts.prompt ?? null) : opts.restorePrompt,
+    );
 
     return session;
+  }
+
+  /**
+   * The agent cleared its conversation, so type its opening in again.
+   *
+   * Claude Code's `/clear` starts a new conversation in the same process, and
+   * everything the opening instruction told it - the role a template gave it,
+   * what the human said it was for - goes with the old one. The brief does
+   * not need this when it rode in on a flag, since that is system prompt and
+   * survives; a typed brief is conversation like the instruction, so it goes
+   * first here exactly as it did at start.
+   *
+   * Reported by the agent's own SessionStart hook (see wiring.ts), so this
+   * fires for a clear and never for a start or a resume, which must not
+   * repeat the opening.
+   */
+  restoreOpeningAfterClear(sessionId: string): void {
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+    const opening = [this.typedBrief(session), this.store.getOpeningPrompt(sessionId)]
+      .filter((part): part is string => !!part)
+      .join('\n\n');
+    if (opening) void this.typeWhenReady(sessionId, opening, { alreadyUp: true });
   }
 
   /**
@@ -1147,7 +1218,16 @@ export class Hub extends EventEmitter implements AgentApi {
    */
   async listTemplates(sessionId: string, id?: string) {
     this.requireSession(sessionId);
-    const shown = this.templates.info().map((t) => ({
+    const shown = this.uplink?.attached ? await this.templateViewsWithCanvas() : this.templateViews();
+    if (id === undefined) return { templates: shown };
+    const one = shown.find((t) => t.id === id);
+    if (!one) throw new Error(`no template "${id}"`);
+    return one;
+  }
+
+  /** This hub's own templates, in the shape list_templates answers with. */
+  private templateViews(): TemplateView[] {
+    return this.templates.info().map((t) => ({
       id: t.id,
       description: t.description,
       agent: t.agent,
@@ -1162,10 +1242,50 @@ export class Hub extends EventEmitter implements AgentApi {
       error: t.error,
       source: t.source,
     }));
-    if (id === undefined) return { templates: shown };
-    const one = shown.find((t) => t.id === id);
-    if (!one) throw new Error(`no template "${id}"`);
-    return one;
+  }
+
+  /**
+   * An attached hub's list: what the canvas has, over what this hub has.
+   *
+   * Templates are made on the canvas, so an agent over here that could only
+   * see this hub's own list never saw the ones a human had just added. The
+   * canvas's derived templates are left out - they describe the canvas
+   * machine's agents, and this machine's own are already in the local list.
+   * A link that cannot answer leaves the local list, which is still true.
+   */
+  private async templateViewsWithCanvas(): Promise<TemplateView[]> {
+    const local = this.templateViews();
+    try {
+      const canvas = await this.uplink!.ask<TemplateView[]>({ t: 'listTemplates' });
+      return overlayCanvasTemplates(canvas, local);
+    } catch {
+      return local;
+    }
+  }
+
+  /**
+   * The canvas answering an attached hub's spawn_agent: what `profile` means
+   * here, with the caller's own template standing in when it named none.
+   *
+   * `picked: null` for anything the canvas did not make - a bare agent id, or
+   * a template derived from one - which the asking hub then resolves against
+   * its own config, since that is what it will actually launch. A template
+   * that exists but cannot be used is an answer rather than a failed relay, so
+   * the asking hub can tell it apart from a link that did not answer.
+   */
+  private pickTemplateFor(
+    ask: Extract<PeerRelayAsk, { t: 'pickTemplate' }>,
+  ): { picked: PickedTemplate | null } | { error: string } {
+    const inherited = ask.parentTemplate ? this.templates.get(ask.parentTemplate) : null;
+    const id =
+      ask.profile ?? (inherited && !inherited.error ? ask.parentTemplate! : ask.parentProfile);
+    const t = this.templates.get(id);
+    if (!t || t.source === 'derived') return { picked: null };
+    try {
+      return { picked: this.resolveTemplate({ profile: id }) };
+    } catch (err) {
+      return { error: (err as Error).message };
+    }
   }
 
   /**
@@ -1598,21 +1718,47 @@ export class Hub extends EventEmitter implements AgentApi {
     }
   }
 
+  /**
+   * What a spawn_agent `profile` resolves to for this caller.
+   *
+   * The child starts the way its parent did: from the same template, so the
+   * model and effort the template chose are not silently dropped in favour
+   * of the bare agent's defaults. A template that has been deleted or has
+   * since failed to load falls back to the agent itself — a spawn must not
+   * die because config changed under a running parent; a profile the
+   * spawning agent named explicitly always wins.
+   *
+   * On an attached hub the canvas is asked first, because that is where
+   * templates are made (see templateViewsWithCanvas). Only a template the
+   * canvas actually holds comes back from there; anything else, and any link
+   * that does not answer, is resolved against this hub's own config.
+   */
+  private async pickSpawnTemplate(me: Session, profile?: string): Promise<PickedTemplate> {
+    if (this.uplink?.attached) {
+      let answer: { picked: PickedTemplate | null } | { error: string } | null = null;
+      try {
+        answer = await this.uplink.ask({
+          t: 'pickTemplate',
+          profile,
+          parentTemplate: me.template,
+          parentProfile: me.profile,
+        });
+      } catch {
+        // The link, not the template: resolve here as if there were none.
+      }
+      if (answer && 'error' in answer) throw new Error(answer.error);
+      if (answer?.picked) return answer.picked;
+    }
+    const inherited = me.template ? this.templates.get(me.template) : null;
+    const inherit = profile ?? (inherited && !inherited.error ? me.template! : me.profile);
+    return this.resolveTemplate({ profile: inherit });
+  }
+
   async spawnAgent(
     sessionId: string,
     opts: { profile?: string; name?: string; host?: string; workspace?: string; prompt?: string },
   ) {
     const me = this.requireSession(sessionId);
-
-    // The child starts the way its parent did: from the same template, so the
-    // model and effort the template chose are not silently dropped in favour
-    // of the bare agent's defaults. A template that has been deleted or has
-    // since failed to load falls back to the agent itself — a spawn must not
-    // die because config changed under a running parent; a profile the
-    // spawning agent named explicitly always wins.
-    const inherited = me.template ? this.templates.get(me.template) : null;
-    const inherit =
-      opts.profile ?? (inherited && !inherited.error ? me.template! : me.profile);
 
     /*
      * Resolved, and the opening instruction built, ahead of the workspace: a
@@ -1626,7 +1772,7 @@ export class Hub extends EventEmitter implements AgentApi {
      * order, so the opening merges here and rides to the child however it
      * gets there.
      */
-    const picked = this.resolveTemplate({ profile: inherit });
+    const picked = await this.pickSpawnTemplate(me, opts.profile);
     const instruction = opts.prompt ? `[from ${me.address}] ${opts.prompt}` : null;
     const opening = [picked.prompt, instruction].filter(Boolean).join('\n\n') || undefined;
 
@@ -1654,6 +1800,7 @@ export class Hub extends EventEmitter implements AgentApi {
           effort: picked.effort,
           env: picked.env,
           opening,
+          restore: picked.prompt ?? null,
           promptGiven: !!opts.prompt,
         },
         { timeoutMs: SPAWN_RELAY_TIMEOUT_MS },
@@ -1682,13 +1829,10 @@ export class Hub extends EventEmitter implements AgentApi {
       ws = found;
     }
 
-    const child = await this.startSession({
-      workspaceId: ws.id,
-      profile: inherit,
-      name: opts.name,
-      spawnedBy: me.id,
-      prompt: opening,
-    });
+    const child = await this.startPicked(
+      { workspaceId: ws.id, name: opts.name, spawnedBy: me.id },
+      { ...picked, prompt: opening, restorePrompt: picked.prompt ?? null },
+    );
 
     return {
       address: child.address,
@@ -1737,6 +1881,7 @@ export class Hub extends EventEmitter implements AgentApi {
           model: ask.model,
           effort: ask.effort,
           prompt: ask.opening,
+          restorePrompt: ask.restore ?? null,
           env: ask.env,
           name: ask.name,
           // See the known gap noted on spawn_agent's `host`: the spawner
@@ -1752,6 +1897,7 @@ export class Hub extends EventEmitter implements AgentApi {
           model: ask.model,
           effort: ask.effort,
           prompt: ask.opening,
+          restorePrompt: ask.restore ?? null,
           env: ask.env,
           name: ask.name,
           spawnedBy: null,
@@ -1787,8 +1933,18 @@ export class Hub extends EventEmitter implements AgentApi {
    * before the program is reading it; the wait is for output to arrive and
    * then pause, which is as close to "it has drawn its prompt" as this gets
    * without knowing the CLI.
+   *
+   * `alreadyUp` is for a CLI that has been running all along and is only
+   * redrawing, as after a `/clear`. It may already have finished drawing by
+   * the time this is called, and an idle one then prints nothing at all - so
+   * the pause is counted from now as well as from its next output, and
+   * running out of patience still types rather than giving up.
    */
-  private async typeWhenReady(sessionId: string, text: string): Promise<void> {
+  private async typeWhenReady(
+    sessionId: string,
+    text: string,
+    opts: { alreadyUp?: boolean } = {},
+  ): Promise<void> {
     const pty = this.sessions.pty(sessionId);
     if (!pty) return;
 
@@ -1802,9 +1958,10 @@ export class Hub extends EventEmitter implements AgentApi {
         res(v);
       };
       const onData = () => setTimeout(() => done(true), 1200);
-      const timer = setTimeout(() => done(false), 20_000);
+      const timer = setTimeout(() => done(!!opts.alreadyUp), 20_000);
       timer.unref?.();
       pty.on('data', onData);
+      if (opts.alreadyUp) onData();
     });
 
     if (!ready || !pty.running) return;

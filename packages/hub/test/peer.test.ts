@@ -632,6 +632,69 @@ describe("list_hosts and spawn_agent's host, across the link", () => {
 });
 
 /*
+ * Templates are made on the canvas - its panel and its proposal dialog are the
+ * only places a human adds one - so an agent on an attached machine has to be
+ * able to see them and start from them, not only from its own hub's list.
+ */
+describe('templates made on the canvas, from an attached machine', () => {
+  beforeAll(() => {
+    hubA.saveTemplate({
+      id: 'canvas-crew',
+      agent: 'shell',
+      description: 'made on the canvas',
+      prompt: 'CANVAS TEMPLATE OPENING',
+      env: { CREW_FLAG: '1' },
+    });
+  });
+
+  it('lists them beside its own, without doubling its own agents', async () => {
+    const there = hubB.sessions.getByAddress('remotews/there')!;
+    const { templates } = (await hubB.listTemplates(there.id)) as {
+      templates: { id: string; source: string; envNames: string[] }[];
+    };
+
+    const crew = templates.find((t) => t.id === 'canvas-crew');
+    expect(crew).toMatchObject({ source: 'stored', envNames: ['CREW_FLAG'] });
+    expect(templates.filter((t) => t.id === 'shell')).toHaveLength(1);
+  });
+
+  it('answers a lookup of one by id', async () => {
+    const there = hubB.sessions.getByAddress('remotews/there')!;
+    expect(await hubB.listTemplates(there.id, 'canvas-crew')).toMatchObject({
+      id: 'canvas-crew',
+      agent: 'shell',
+    });
+  });
+
+  it('spawns from one, locally, with its opening instruction', async () => {
+    const there = hubB.sessions.getByAddress('remotews/there')!;
+    const result = await hubB.spawnAgent(there.id, { profile: 'canvas-crew', name: 'crewchild' });
+    expect(result.workspace).toBe('remotews');
+
+    const child = hubB.sessions.getByAddress('remotews/crewchild')!;
+    expect(child.template).toBe('canvas-crew');
+    expect(child.profile).toBe('shell');
+    // Still this hub's own child: resolving on the canvas must not turn the
+    // spawn itself into a relayed one, which cannot keep lineage.
+    expect(child.spawnedBy).toBe(there.id);
+
+    await waitFor(
+      () => (outputB.get(child.id) ?? '').includes('CANVAS TEMPLATE OPENING'),
+      15_000,
+      "the canvas template's opening instruction to reach the child",
+    );
+    await hubB.stopAgent(there.id, child.address);
+  });
+
+  it('still refuses a name that is a template nowhere', async () => {
+    const there = hubB.sessions.getByAddress('remotews/there')!;
+    await expect(
+      hubB.spawnAgent(there.id, { profile: 'no-such-template', name: 'nothing' }),
+    ).rejects.toThrow(/no-such-template/);
+  });
+});
+
+/*
  * A mouse report is the one kind of terminal input that cannot survive being
  * treated as text, and a remote session is the one path that has to spell it
  * as text to cross a JSON link. This is where those two meet.
