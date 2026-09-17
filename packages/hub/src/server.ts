@@ -167,7 +167,14 @@ export async function serve(opts: ServeOptions): Promise<ServeResult> {
     // instead. Either way, a missing or malformed id is not an error - it
     // just means there is nothing new to remember this turn.
     hub.sessions.noteAgentSessionId(sessionId, req.query.sid ?? req.body?.session_id);
-    hub.sessions.setStatusFromHook(sessionId, req.query.event === 'idle' ? 'idle' : 'busy');
+    // `waiting` is a question put to the human mid-turn: idle to look at, but
+    // the turn has not ended.
+    const event = req.query.event;
+    hub.sessions.setStatusFromHook(
+      sessionId,
+      event === 'idle' || event === 'waiting' ? 'idle' : 'busy',
+      event === 'idle',
+    );
     return { ok: true };
   });
 

@@ -66,10 +66,10 @@ interface Recorder {
   readyFile: string;
 }
 
-function startRecorder(): Recorder {
+function startRecorder(statusMode: 'hooks' | 'heuristic' = 'heuristic'): Recorder {
   const n = recorders++;
   const file = join(home, `reads-${n}.jsonl`);
-  const p = new PtySession(`inject-${n}`, 120, 24, null, 'heuristic');
+  const p = new PtySession(`inject-${n}`, 120, 24, null, statusMode);
   live.push(p);
   p.start({
     argv: [process.execPath, '-e', RECORD_PROGRAM, file],
@@ -191,5 +191,58 @@ describe('injecting a message into a PTY', () => {
       all.filter((r) => r.data.includes(INJECT_SUBMIT)),
       `reads: ${JSON.stringify(all)}`,
     ).toHaveLength(1);
+  }, 20_000);
+});
+
+describe('an Enter the agent never reports', () => {
+  /*
+   * On a busy machine the program can read the end of the paste and the Enter
+   * in one go however far apart they were written, and fold the Enter into
+   * the paste. An agent that reports its prompts through hooks owes a report
+   * for one sent while it sat at its prompt, so a missing report is taken as
+   * an Enter that went missing, and it is sent again.
+   */
+  const enters = (rec: Recorder) =>
+    rec
+      .reads()
+      .map((r) => r.data)
+      .join('')
+      .split(INJECT_SUBMIT).length - 1;
+
+  it('is sent again', async () => {
+    const rec = startRecorder('hooks');
+    await ready(rec);
+    rec.pty.noteHook('idle');
+
+    rec.pty.inject(encodeInjection('[from ws/other] take a look', 'bracketed'), INJECT_SUBMIT);
+
+    expect(await waitFor(() => enters(rec) >= 2, 8000)).toBe(true);
+  }, 20_000);
+
+  it('is not, once the agent says it took the prompt', async () => {
+    const rec = startRecorder('hooks');
+    await ready(rec);
+    rec.pty.noteHook('idle');
+
+    rec.pty.inject(encodeInjection('[from ws/other] take a look', 'bracketed'), INJECT_SUBMIT);
+    await waitFor(() => enters(rec) >= 1, 5000);
+    rec.pty.noteHook('busy');
+    await new Promise((r) => setTimeout(r, 5000));
+
+    expect(enters(rec)).toBe(1);
+  }, 20_000);
+
+  it('is not, when the agent is waiting on a question rather than at its prompt', async () => {
+    // A permission prompt reports idle too. An Enter there is an answer.
+    const rec = startRecorder('hooks');
+    await ready(rec);
+    rec.pty.noteHook('busy');
+    rec.pty.noteHook('idle', false);
+
+    rec.pty.inject(encodeInjection('[from ws/other] take a look', 'bracketed'), INJECT_SUBMIT);
+    await waitFor(() => enters(rec) >= 1, 5000);
+    await new Promise((r) => setTimeout(r, 5000));
+
+    expect(enters(rec)).toBe(1);
   }, 20_000);
 });

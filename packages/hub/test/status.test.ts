@@ -170,8 +170,9 @@ describe('the hooks an agent is wired with', () => {
     expect(command('UserPromptSubmit')).toContain('event=busy');
     expect(command('PreToolUse')).toContain('event=busy');
     expect(command('Stop')).toContain('event=idle');
-    // Waiting on a permission prompt is waiting on the human.
-    expect(command('Notification')).toContain('event=idle');
+    // Waiting on a permission prompt is waiting on the human, but it is not
+    // the end of a turn, and the hub has to be able to tell the two apart.
+    expect(command('Notification')).toContain('event=waiting');
   });
 
   it('writes no hooks for a profile that does not have them', () => {

@@ -225,9 +225,11 @@ function writeWiredFiles(
                 { matcher: '*', hooks: [{ type: 'command', command: hookCmd('busy') }] },
               ],
               // Waiting on a permission prompt is waiting on the human, which
-              // is the same thing to whoever is looking at the dot.
+              // is the same thing to whoever is looking at the dot - but not
+              // to the hub, which must not take it for a finished turn and
+              // press Enter into a question. See PtySession.awaitSubmit.
               Notification: [
-                { hooks: [{ type: 'command', command: hookCmd('idle') }] },
+                { hooks: [{ type: 'command', command: hookCmd('waiting') }] },
               ],
               Stop: [{ hooks: [{ type: 'command', command: hookCmd('idle') }] }],
             },

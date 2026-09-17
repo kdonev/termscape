@@ -671,8 +671,8 @@ export class SessionManager extends EventEmitter {
   }
 
   /** Called by the hooks endpoint: exact turn boundaries from the agent CLI. */
-  setStatusFromHook(sessionId: string, status: 'busy' | 'idle'): void {
-    this.live.get(sessionId)?.noteHook(status);
+  setStatusFromHook(sessionId: string, status: 'busy' | 'idle', turnEnded = status === 'idle'): void {
+    this.live.get(sessionId)?.noteHook(status, turnEnded);
     this.emitSession(sessionId);
   }
 

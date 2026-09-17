@@ -92,6 +92,18 @@ const WRITE_GAP_MS = 8;
 const SUBMIT_SETTLE_MS = 120;
 
 /**
+ * How long an agent that reports its prompts is given to report one before
+ * the Enter is sent again, and how many times.
+ *
+ * Generous, because the report is a hook: on Windows that is a PowerShell
+ * starting up before it can say anything, which is most of a second on a
+ * quiet machine and more on a busy one - and a busy machine is exactly where
+ * an Enter goes missing. See PtySession.awaitSubmit.
+ */
+const SUBMIT_CONFIRM_MS = 4000;
+const SUBMIT_RETRIES = 2;
+
+/**
  * One PTY plus a headless xterm that mirrors it.
  *
  * The headless terminal earns its keep twice: it produces the serialized
@@ -123,6 +135,15 @@ export class PtySession extends EventEmitter {
   private writeTimer: NodeJS.Timeout | null = null;
   /** Pending Enter for a message already pasted in. See inject(). */
   private submitTimer: NodeJS.Timeout | null = null;
+  /** Pending check that a submitted message was taken. See awaitSubmit(). */
+  private confirmTimer: NodeJS.Timeout | null = null;
+  /**
+   * Whether the agent's own hooks last said it finished a turn and nothing
+   * has started since: it is at its prompt, and a prompt sent now will be
+   * reported. A permission prompt reports idle too, and deliberately leaves
+   * this alone.
+   */
+  private atPrompt = false;
 
   constructor(
     readonly id: string,
@@ -270,8 +291,15 @@ export class PtySession extends EventEmitter {
    * is a guess — so the first one to arrive retires the fallback for good and
    * this session's status is whatever its hooks say from then on.
    */
-  noteHook(s: AgentStatus): void {
+  noteHook(s: AgentStatus, turnEnded = s === 'idle'): void {
     this.hooksSeen = true;
+    if (s === 'busy') {
+      this.atPrompt = false;
+      // The prompt was taken; there is nothing left to press Enter for.
+      this.clearConfirmTimer();
+    } else if (turnEnded) {
+      this.atPrompt = true;
+    }
     this.clearIdleTimer();
     this.setStatus(s);
   }
@@ -351,10 +379,21 @@ export class PtySession extends EventEmitter {
    * paced chunks, and a settle measured from the first of them is no settle at
    * all. A second message arriving mid-wait replaces the pending Enter rather
    * than adding one: two of them would submit an empty prompt.
+   *
+   * And where the agent can say it took the prompt, it is held to that. No
+   * settle is long enough on a machine busy enough: a program whose event loop
+   * is stalled reads the end of the paste and the Enter together however far
+   * apart they were written, and folds the one into the other. That is how a
+   * message could still sit unsent in an agent's composer on a slower machine
+   * across the canvas. See awaitSubmit.
    */
   inject(paste: string, submit: string): void {
+    // Read before anything is written: whoever delivered this marks the
+    // session busy straight after, and that is not the agent speaking.
+    const confirmable = this.statusMode === 'hooks' && this.atPrompt;
     this.write(paste);
     if (this.submitTimer) clearTimeout(this.submitTimer);
+    this.clearConfirmTimer();
     const tick = (): void => {
       this.submitTimer = null;
       if (this.disposed || !this.proc) return;
@@ -364,13 +403,46 @@ export class PtySession extends EventEmitter {
       } catch {
         // It exited between the paste and the Enter. The message log already
         // records the delivery; there is nothing left to submit it to.
+        return;
       }
+      if (confirmable) this.awaitSubmit(submit, SUBMIT_RETRIES);
     };
     const arm = (): void => {
       this.submitTimer = setTimeout(tick, SUBMIT_SETTLE_MS);
       this.submitTimer.unref?.();
     };
     arm();
+  }
+
+  /**
+   * Press Enter again if the agent does not report the prompt it was sent.
+   *
+   * Only ever armed for an agent whose hooks have shown they work and that
+   * was sitting at its prompt when the message went in - so a prompt hook is
+   * owed, and its absence means the Enter was swallowed. Not while it is mid-
+   * turn, when a CLI queues the message and reports nothing yet, and not while
+   * it waits on a permission prompt, where an Enter is an answer. A spare
+   * Enter that crosses a slow hook lands in an empty composer, which submits
+   * nothing.
+   */
+  private awaitSubmit(submit: string, retries: number): void {
+    if (retries <= 0) return;
+    this.confirmTimer = setTimeout(() => {
+      this.confirmTimer = null;
+      if (this.disposed || !this.proc || !this.atPrompt) return;
+      try {
+        this.write(submit);
+      } catch {
+        return;
+      }
+      this.awaitSubmit(submit, retries - 1);
+    }, SUBMIT_CONFIRM_MS);
+    this.confirmTimer.unref?.();
+  }
+
+  private clearConfirmTimer(): void {
+    if (this.confirmTimer) clearTimeout(this.confirmTimer);
+    this.confirmTimer = null;
   }
 
   /** One chunk per tick until the queue is empty, the process dies, or we do. */
@@ -468,6 +540,7 @@ export class PtySession extends EventEmitter {
     this.writeTimer = null;
     if (this.submitTimer) clearTimeout(this.submitTimer);
     this.submitTimer = null;
+    this.clearConfirmTimer();
     this.writeQueue.length = 0;
     if (!this.proc) return;
     try {
