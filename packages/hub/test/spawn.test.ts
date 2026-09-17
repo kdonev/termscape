@@ -227,3 +227,66 @@ describe('spawn_agent', () => {
     60_000,
   );
 });
+
+describe('an opening instruction', () => {
+  /*
+   * A CLI that opens by asking the human something - Claude Code in a folder
+   * it has not been trusted in - is quiet, and looks ready. The instruction
+   * typed at it went into the question instead: lost, or partly taken as
+   * answers. This one asks, and only reads a prompt once it has been answered.
+   */
+  const ASKER = String.raw`
+    process.stdout.write('Do you trust this folder?\r\n  1. Yes, I trust this folder\r\n');
+    process.stdin.setRawMode(true);
+    process.stdin.resume();
+    let answered = false;
+    process.stdin.on('data', (b) => {
+      if (!answered) {
+        answered = true;
+        process.stdout.write('\x1b[2J\x1b[Hanswered\r\n> ');
+        return;
+      }
+      process.stdout.write('got: ' + b.toString('utf8').replace(/\x1b/g, '') + '\r\n');
+    });
+    setTimeout(() => {}, 60000);
+  `;
+
+  it(
+    'waits for a question on screen to be answered before it is typed',
+    async () => {
+      const script = join(dir, 'asker.js');
+      writeFileSync(script, ASKER);
+      writeConfig(
+        [
+          '[asker]',
+          `command = ${JSON.stringify(process.execPath)}`,
+          `args = [${JSON.stringify(script)}]`,
+          'mcp = false',
+          'asking_hint = "I trust this folder"',
+        ].join('\n'),
+      );
+      // The config is read when the hub is made.
+      hub.shutdown();
+      hub = new Hub({ dbPath: join(dir, 'state2.db') });
+      const ws = hub.createWorkspace('asked', folder('asked'));
+
+      const out = new Map<string, string>();
+      hub.on('data', (id: string, chunk: string) => out.set(id, (out.get(id) ?? '') + chunk));
+      const s = await hub.startSession({
+        workspaceId: ws.id,
+        profile: 'asker',
+        prompt: 'OPENING TASK',
+      });
+
+      await waitForText(() => out.get(s.id) ?? '', 'I trust this folder');
+      // Well past the quiet that would otherwise have counted as ready.
+      await new Promise((r) => setTimeout(r, 4000));
+      expect(out.get(s.id) ?? '').not.toContain('answered');
+
+      hub.sessions.write(s.id, '1');
+      const text = await waitForText(() => out.get(s.id) ?? '', 'OPENING TASK');
+      expect(count(text, 'OPENING TASK')).toBe(1);
+    },
+    60_000,
+  );
+});

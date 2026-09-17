@@ -76,6 +76,13 @@ export const HUB_VERSION = '0.1.6';
  */
 const ANNOUNCE_COALESCE_MS = 300;
 
+/**
+ * How long a new agent's output has to stop before its opening instruction is
+ * typed in, and the longest that is waited for at all. See typeWhenReady.
+ */
+const OPENING_QUIET_MS = 1500;
+const OPENING_READY_CAP_MS = 20_000;
+
 /** Colours cycled through when a workspace is created, for canvas grouping. */
 const WORKSPACE_COLORS = [
   '#7c9cf5',
@@ -2075,26 +2082,59 @@ export class Hub extends EventEmitter implements AgentApi {
   /**
    * Wait for the CLI to be up, then type. Written straight away the text lands
    * before the program is reading it; the wait is for output to arrive and
-   * then pause, which is as close to "it has drawn its prompt" as this gets
+   * then stop, which is as close to "it has drawn its prompt" as this gets
    * without knowing the CLI.
+   *
+   * Quiet measured from the last output, not a fixed delay from the first.
+   * The first output is not the CLI at all on Windows - ConPTY draws its own
+   * the moment the process exists - so a delay counted from there was a guess
+   * at how long the CLI takes to load, and a slower machine lost it: the start
+   * of the instruction went into a program not yet reading, the rest landed
+   * in its composer, and the Enter went nowhere. A CLI that never stops
+   * drawing still gets its instruction, once the cap is up.
+   *
+   * Nor into a question. A CLI that opens by asking the human something -
+   * Claude Code in a folder it has not been trusted in - is quiet too, and
+   * the instruction typed at it was spent on the question: gone, or partly
+   * taken as answers to it. Such a screen is waited out until it changes.
    */
   private async typeWhenReady(sessionId: string, text: string): Promise<void> {
     const pty = this.sessions.pty(sessionId);
     if (!pty) return;
+    const profile = this.profiles.get(this.sessions.get(sessionId)?.profile ?? '');
+    const hint = profile?.askingHint ? new RegExp(profile.askingHint, 'i') : null;
+    // A question on screen outlasts any cap: the human answers it when they
+    // get to the window, and the instruction is still wanted after that.
+    const asking = () => !!hint && hint.test(pty.tailLines(pty.rows));
 
     const ready = await new Promise<boolean>((res) => {
       let settled = false;
+      let seen = false;
+      let quiet: NodeJS.Timeout | null = null;
       const done = (v: boolean) => {
         if (settled) return;
         settled = true;
-        clearTimeout(timer);
+        clearTimeout(cap);
+        if (quiet) clearTimeout(quiet);
         pty.off('data', onData);
+        pty.off('exit', onExit);
         res(v);
       };
-      const onData = () => setTimeout(() => done(true), 1200);
-      const timer = setTimeout(() => done(false), 20_000);
-      timer.unref?.();
+      const onData = () => {
+        seen = true;
+        if (quiet) clearTimeout(quiet);
+        quiet = setTimeout(() => {
+          quiet = null;
+          if (!asking()) done(true);
+        }, OPENING_QUIET_MS);
+      };
+      const onExit = () => done(false);
+      const cap = setTimeout(() => {
+        if (!asking()) done(seen);
+      }, OPENING_READY_CAP_MS);
+      cap.unref?.();
       pty.on('data', onData);
+      pty.on('exit', onExit);
     });
 
     if (!ready || !pty.running) return;

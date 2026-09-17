@@ -22,6 +22,13 @@ export interface AgentProfile {
   status: 'hooks' | 'heuristic';
   /** Regex matched against the last non-empty line when status = heuristic. */
   readyHint?: string;
+  /**
+   * Regex over the screen meaning the CLI is putting a question to the human
+   * before it will take a prompt at all - a folder it has never been trusted
+   * in. The opening instruction waits for an answer rather than being typed
+   * into the question, where it was lost. See Hub.typeWhenReady.
+   */
+  askingHint?: string;
   inject: InjectMode;
   /**
    * How the brief reaches the agent.
@@ -220,6 +227,10 @@ export const BUILTIN_PROFILES: Record<string, AgentProfile> = {
     mcp: true,
     status: 'hooks',
     inject: 'bracketed',
+    // The first start in a folder asks whether to trust it. On a machine
+    // attached to the canvas every workspace is a folder Claude Code has
+    // likely never opened there.
+    askingHint: 'I trust this folder',
     versionArgs: ['--version'],
     /*
      * Claude Code has no listing command, so this is the declared half of
@@ -562,6 +573,7 @@ export class ProfileRegistry {
             mcp: v.mcp ?? base?.mcp ?? true,
             status: v.status ?? base?.status ?? 'heuristic',
             readyHint: v.ready_hint ?? v.readyHint ?? base?.readyHint,
+            askingHint: v.asking_hint ?? v.askingHint ?? base?.askingHint,
             inject: v.inject ?? base?.inject ?? 'bracketed',
             brief: v.brief ?? base?.brief,
             resumeArgs: v.resume_args ?? v.resumeArgs ?? base?.resumeArgs,
