@@ -26,6 +26,8 @@ interface WebviewModule {
 }
 interface WebviewApp {
   createBrowserWindow(options: { title: string; width: number; height: number }): {
+    /** Raw RGBA with dimensions, or an encoded image such as a PNG without. */
+    setWindowIcon(icon: Uint8Array): void;
     createWebview(options: {
       url: string;
       enableDevtools: boolean;
@@ -58,6 +60,27 @@ async function loadWebview(): Promise<WebviewModule> {
     return mod.Application ? mod : mod.default!;
   } catch (err) {
     return unavailable(`cannot load ${PACKAGE}`, err);
+  }
+}
+
+/**
+ * Put the canvas's icon on the window, and with it the taskbar.
+ *
+ * Asked of the hub rather than read off disk: the UI it serves is where the
+ * icon lives, and that is a different directory in the repo and in the
+ * published package. A window without its icon is still the canvas, so any
+ * failure here leaves the default one.
+ */
+async function setIcon(
+  window: { setWindowIcon(icon: Uint8Array): void },
+  origin: string,
+): Promise<void> {
+  try {
+    const res = await fetch(new URL('/icon.png', origin));
+    if (!res.ok) return;
+    window.setWindowIcon(new Uint8Array(await res.arrayBuffer()));
+  } catch {
+    // No icon is not worth a word.
   }
 }
 
@@ -133,6 +156,7 @@ async function main(): Promise<void> {
         return false;
       },
     });
+    void setIcon(window, origin);
   } catch (err) {
     // Nothing has been shown yet, so a tab is still a fair substitute.
     unavailable('cannot open a webview', err);

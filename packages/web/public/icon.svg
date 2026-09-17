@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <!-- Termscape: terminals laid out on a canvas. -->
+  <rect x="8" y="8" width="240" height="240" rx="52" fill="#0a0c10"/>
+  <rect x="8.5" y="8.5" width="239" height="239" rx="51.5" fill="none" stroke="#262d3b" stroke-width="3"/>
+  <g fill="#262d3b">
+    <circle cx="56" cy="56" r="4"/><circle cx="104" cy="56" r="4"/><circle cx="152" cy="56" r="4"/><circle cx="200" cy="56" r="4"/>
+    <circle cx="56" cy="104" r="4"/><circle cx="200" cy="104" r="4"/>
+    <circle cx="56" cy="152" r="4"/><circle cx="200" cy="152" r="4"/>
+    <circle cx="56" cy="200" r="4"/><circle cx="104" cy="200" r="4"/><circle cx="152" cy="200" r="4"/><circle cx="200" cy="200" r="4"/>
+  </g>
+  <!-- back terminal -->
+  <rect x="40" y="44" width="112" height="84" rx="14" fill="#171c26" stroke="#88c07a" stroke-width="7"/>
+  <path d="M40 72 H152" stroke="#88c07a" stroke-width="6"/>
+  <circle cx="58" cy="58" r="5" fill="#88c07a"/>
+  <path d="M60 94 l14 10 -14 10" fill="none" stroke="#d5dae2" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- front terminal -->
+  <rect x="92" y="112" width="128" height="100" rx="16" fill="#12161e" stroke="#7c9cf5" stroke-width="8"/>
+  <path d="M92 144 H220" stroke="#7c9cf5" stroke-width="7"/>
+  <circle cx="112" cy="128" r="6" fill="#7c9cf5"/>
+  <path d="M116 164 l18 13 -18 13" fill="none" stroke="#d5dae2" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M146 190 H186" stroke="#d5dae2" stroke-width="10" stroke-linecap="round"/>
+</svg>
