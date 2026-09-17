@@ -459,6 +459,21 @@ export class PeerRegistry extends EventEmitter {
   }
 
   /**
+   * Have the hub that owns an agent type a notice from the hub into its
+   * terminal - the answer to a template it proposed from over there. That hub
+   * adds the `[termscape]` prefix, so a notice reads the same wherever it
+   * was sent from.
+   */
+  async notify(address: string, text: string): Promise<void> {
+    const found = this.find(address);
+    if (!found) throw new Error(`no agent at address "${address}"`);
+    if (!found.peer.connected) {
+      throw new Error(`host for "${address}" is not connected`);
+    }
+    await found.peer.request({ t: 'notify', id: randomUUID(), address, text });
+  }
+
+  /**
    * Start an agent on a peer. The receiving hub creates the workspace if it
    * does not have one by that name, so a host needs no setup before its first
    * session — which is what makes picking a host at workspace-creation time

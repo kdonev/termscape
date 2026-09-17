@@ -171,6 +171,11 @@ export interface StartOptions {
   name?: string;
   cwd?: string;
   spawnedBy?: string | null;
+  /**
+   * Who spawned it, by address - set whenever `spawnedBy` is, and also when
+   * the spawner is on another machine and there is no local id to give.
+   */
+  parentAddress?: string | null;
   cols?: number;
   rows?: number;
   window?: WindowRect;
@@ -223,6 +228,17 @@ export class SessionManager extends EventEmitter {
    * placement checks it, because "never on top of anything" means anything.
    */
   remoteWindows: () => WindowRect[] = () => [];
+  /**
+   * The addresses a session's brief lists as the agents it can see. The hub
+   * owns that answer - it spans every machine and follows lineage, neither of
+   * which the manager knows about - so it hands the manager this view, the
+   * same way it hands over `remoteWindows`. The default is this hub's own
+   * sessions, for a manager used without a hub.
+   */
+  visiblePeers: (s: Pick<Session, 'id' | 'address' | 'parentAddress'>) => string[] = (s) =>
+    this.list()
+      .filter((o) => o.id !== s.id)
+      .map((o) => o.address);
 
   constructor(
     private readonly store: Store,
@@ -379,12 +395,6 @@ export class SessionManager extends EventEmitter {
     };
   }
 
-  private peersOf(workspaceId: string, exceptId?: string): string[] {
-    return this.list()
-      .filter((s) => s.workspaceId === workspaceId && s.id !== exceptId)
-      .map((s) => s.address);
-  }
-
   async start(opts: StartOptions): Promise<Session> {
     const ws = this.store.getWorkspace(opts.workspaceId);
     if (!ws) throw new Error(`unknown workspace ${opts.workspaceId}`);
@@ -413,6 +423,7 @@ export class SessionManager extends EventEmitter {
       // to it is what makes --resume possible after a restart.
       agentSessionUuid: profile.resumeArgs ? randomUUID() : null,
       spawnedBy: opts.spawnedBy ?? null,
+      parentAddress: opts.parentAddress ?? null,
       state: 'starting',
       status: 'unknown',
       statusText: null,
@@ -433,7 +444,7 @@ export class SessionManager extends EventEmitter {
       session,
       ws.name,
       profile,
-      this.peersOf(ws.id),
+      this.visiblePeers(session),
       false,
       templateEnv,
     );
@@ -458,7 +469,7 @@ export class SessionManager extends EventEmitter {
       s,
       ws.name,
       profile,
-      this.peersOf(ws.id, s.id),
+      this.visiblePeers(s),
       !!profile.resumeArgs && !!s.agentSessionUuid,
       this.store.getTemplateEnv(s.id),
     );
@@ -504,7 +515,7 @@ export class SessionManager extends EventEmitter {
       s,
       ws.name,
       profile,
-      this.peersOf(ws.id, s.id),
+      this.visiblePeers(s),
       false,
       this.store.getTemplateEnv(s.id),
     );

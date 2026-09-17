@@ -247,15 +247,18 @@ export class TemplateRegistry {
 }
 
 /**
- * An attached hub's template list: the canvas's over its own.
+ * An attached hub's template list: the canvas's, plus the bare agents this
+ * machine has.
  *
- * Only templates the canvas *made* cross - stored or declared there. A derived
- * one only says the canvas machine has that agent, which is not something this
- * machine can start, and this machine's own derived templates are already in
- * `local`. Where both have a template of the same id, the canvas's wins: it is
- * the one a human edits, and the one spawn_agent resolves (see
- * Hub.pickTemplateFor), so listing the other would describe a template that
- * is never used.
+ * Templates are central (issue 22): only the canvas has a human to make,
+ * edit or accept one, so a template stored or declared on an attached hub is
+ * one nobody on the canvas can see, and it is left out rather than listed as
+ * if it were usable. What crosses from the canvas is only what it *made* - a
+ * derived one only says the canvas machine has that agent, which is not
+ * something this machine can start. What stays from here is only derived:
+ * the agents this machine actually has. Where the canvas made a template with
+ * the same id as one of those, the canvas's wins: it is the one spawn_agent
+ * resolves (see Hub.pickTemplateFor).
  */
 export function overlayCanvasTemplates<T extends { id: string; source: TemplateSource }>(
   canvas: readonly T[],
@@ -263,5 +266,5 @@ export function overlayCanvasTemplates<T extends { id: string; source: TemplateS
 ): T[] {
   const made = canvas.filter((t) => t.source !== 'derived');
   const ids = new Set(made.map((t) => t.id));
-  return [...local.filter((t) => !ids.has(t.id)), ...made];
+  return [...local.filter((t) => t.source === 'derived' && !ids.has(t.id)), ...made];
 }

@@ -17,7 +17,7 @@ export interface WiringInput {
   profile: AgentProfile;
   token: string;
   hubOrigin: string;
-  /** Addresses of the other agents currently in the same workspace. */
+  /** Addresses of the other agents this one can see right now, on any machine. */
   peers: string[];
 }
 
@@ -346,9 +346,16 @@ you can talk to the others.
 - **Your address:** \`${input.address}\`
 - **Your workspace:** \`${input.workspace}\` (rooted at \`${input.cwd}\`)
 
-## Other agents in this workspace right now
+## Agents you can see right now
 
 ${peerList}
+
+Who you can see follows who started whom, not which machine or workspace an
+agent is in. An agent the human started sees every other agent the human
+started, on any machine. An agent spawned by another agent sees only the one
+that spawned it, not its siblings. Every agent also sees the agents it spawned
+itself, but not theirs. An agent you cannot see is not listed and cannot be
+messaged or read, so one missing from \`list_agents\` is not an error.
 
 ## Talking to other agents
 

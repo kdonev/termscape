@@ -320,6 +320,23 @@ export const MIGRATIONS: Migration[] = [
       ALTER TABLE session ADD COLUMN opening_prompt TEXT;
     `,
   },
+  {
+    version: 12,
+    name: 'session_parent_address',
+    up: `
+      -- Who spawned a session, by address (issue 22). spawned_by cannot say
+      -- it for a parent on another machine - its foreign key only admits a
+      -- row in this table - and who may see whom on the canvas is decided
+      -- from this. No foreign key, for the same reason.
+      ALTER TABLE session ADD COLUMN parent_address TEXT;
+      UPDATE session SET parent_address = (
+        SELECT w.name || '/' || p.name
+        FROM session p JOIN workspace w ON w.id = p.workspace_id
+        WHERE p.id = session.spawned_by
+      )
+      WHERE spawned_by IS NOT NULL;
+    `,
+  },
 ];
 
 export function runMigrations(db: Database): number {

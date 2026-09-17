@@ -32,6 +32,12 @@ export const PeerAgent = z.object({
   statusText: z.string().nullable(),
   /** Label of the machine it runs on, as the canvas knows that machine. */
   host: z.string(),
+  /**
+   * Who spawned it, by address, or null for an agent the human started. An
+   * attached hub decides what its own agents may see from this, so it has to
+   * travel with every agent it is told about.
+   */
+  parentAddress: z.string().nullable(),
 });
 export type PeerAgent = z.infer<typeof PeerAgent>;
 
@@ -62,6 +68,9 @@ export const PeerRelayAsk = z.discriminatedUnion('t', [
   }),
   z.object({
     t: z.literal('readScreen'),
+    // Authenticated like `deliver`'s, and needed for the same reason: the
+    // canvas decides whether the caller may see the address at all.
+    from: z.string(),
     address: z.string(),
     lines: z.number().int().positive().optional(),
   }),
@@ -117,6 +126,23 @@ export const PeerRelayAsk = z.discriminatedUnion('t', [
     restore: z.string().nullable().optional(),
     /** Whether the caller passed a `prompt`, for the reply's `promptQueued`. */
     promptGiven: z.boolean(),
+  }),
+  /*
+   * propose_template from an attached machine (issue 22). Templates exist only
+   * on the canvas, and so does the human who answers a proposal, so a
+   * proposal made against the attached hub's own list would wait for a dialog
+   * nobody is ever shown. `from` is authenticated like `deliver`'s, and the
+   * canvas also checks it belongs to the host that asked.
+   */
+  z.object({
+    t: z.literal('proposeTemplate'),
+    from: z.string(),
+    id: z.string(),
+    agent: z.string(),
+    description: z.string().optional(),
+    model: z.string().optional(),
+    effort: z.string().optional(),
+    prompt: z.string().optional(),
   }),
 ]);
 export type PeerRelayAsk = z.infer<typeof PeerRelayAsk>;
@@ -296,6 +322,13 @@ export const PeerRequest = z.discriminatedUnion('t', [
    * created, instead of an agent finding out at its first start.
    */
   z.object({ t: z.literal('checkFolder'), id: z.string(), path: z.string() }),
+  /**
+   * A notice from the canvas for one of this host's agents, typed in with the
+   * hub's own `[termscape]` prefix, which the receiving hub applies. How an
+   * agent over here hears the answer to a template it proposed: the human
+   * answered on the canvas, and only this hub owns its terminal.
+   */
+  z.object({ t: z.literal('notify'), id: z.string(), address: z.string(), text: z.string() }),
 ]);
 export type PeerRequest = z.infer<typeof PeerRequest>;
 
@@ -352,5 +385,12 @@ export type PeerResponse = z.infer<typeof PeerResponse>;
  * `checkFolder` request hanging forever instead of refusing it; the version
  * gate is what turns that into an honest refusal at the handshake instead.
  * Consequence: every already-joined machine has to re-run the installer.
+ *
+ * 10: sessions and directory entries carry `parentAddress`, relays carry the
+ * caller for `readScreen`, and `proposeTemplate`/`notify` exist (issue 22).
+ * Required for the same reason: an older host would neither report lineage
+ * nor enforce who may see whom, so it would quietly bypass the visibility
+ * rule, and it would drop a `notify` it cannot parse. Joined machines re-run
+ * the installer again.
  */
-export const PEER_SCHEMA_VERSION = 9;
+export const PEER_SCHEMA_VERSION = 10;

@@ -26,6 +26,7 @@ interface SessionRow {
   env_json: string;
   template_env_json: string | null;
   spawned_by: string | null;
+  parent_address: string | null;
   state: string;
   status_text: string | null;
   title: string | null;
@@ -343,6 +344,7 @@ export class Store {
       cwd: r.cwd,
       agentSessionUuid: r.agent_session_uuid,
       spawnedBy: r.spawned_by,
+      parentAddress: r.parent_address,
       state: r.state as Session['state'],
       // Live status is held in memory by the SessionManager; a row loaded from
       // disk is by definition not running, so it reads as unknown until start.
@@ -416,13 +418,13 @@ export class Store {
           `INSERT INTO session (
              id, workspace_id, name, profile, template, model, effort, cwd,
              agent_session_uuid,
-             argv_json, env_json, template_env_json, spawned_by, state, status_text, title,
-             pid, exit_code, cols, rows, created_at, exited_at, last_active_at)
+             argv_json, env_json, template_env_json, spawned_by, parent_address, state, status_text,
+             title, pid, exit_code, cols, rows, created_at, exited_at, last_active_at)
            VALUES (
              @id, @workspaceId, @name, @profile, @template, @model, @effort, @cwd,
              @agentSessionUuid,
-             @argvJson, @envJson, @templateEnvJson, @spawnedBy, @state, @statusText, @title,
-             @pid, @exitCode, @cols, @rows, @createdAt, @exitedAt, @lastActiveAt)`,
+             @argvJson, @envJson, @templateEnvJson, @spawnedBy, @parentAddress, @state, @statusText,
+             @title, @pid, @exitCode, @cols, @rows, @createdAt, @exitedAt, @lastActiveAt)`,
         )
         .run({
           id: s.id,
@@ -439,6 +441,7 @@ export class Store {
           templateEnvJson:
             Object.keys(templateEnv).length > 0 ? JSON.stringify(templateEnv) : null,
           spawnedBy: s.spawnedBy,
+          parentAddress: s.parentAddress ?? null,
           state: s.state,
           statusText: s.statusText,
           title: s.title,

@@ -251,9 +251,11 @@ export function createPeerServer(hub: Hub, clientToken: string): PeerServer {
               env: req.env,
               name: req.name,
               // Deliberately no `spawnedBy` here even though the request
-              // carries one: the spawner lives on the canvas hub, its id
-              // would break this table's foreign key, and lineage is the
-              // canvas's concern anyway — the registry stamps it there.
+              // carries a spawner: it lives on another hub, and its id would
+              // break this table's foreign key - the registry stamps the
+              // canvas's own lineage edge there. Its address has no such
+              // problem, and it is what visibility is decided from.
+              parentAddress: req.spawnedByAddress,
             });
             return ok(s);
           }
@@ -373,6 +375,11 @@ export function createPeerServer(hub: Hub, clientToken: string): PeerServer {
             hub.sessions.resize(t.id, req.cols, req.rows);
             return ok({ ok: true });
           }
+
+          case 'notify':
+            // The canvas answering a template this machine's agent proposed.
+            hub.notifyAgent(req.address, req.text);
+            return ok({ notified: req.address });
 
           case 'checkFolder':
             // A throw here is already turned into `err` by the catch below,

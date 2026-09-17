@@ -12,7 +12,7 @@ export const ListAgentsInput = z.object({
   workspace: z
     .string()
     .optional()
-    .describe('Limit to one workspace. Defaults to all workspaces on all hosts.'),
+    .describe('Limit to one workspace. Defaults to every agent you can see, on all hosts.'),
 });
 
 /**

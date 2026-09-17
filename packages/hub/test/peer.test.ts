@@ -695,6 +695,160 @@ describe('templates made on the canvas, from an attached machine', () => {
 });
 
 /*
+ * One canvas (issue 22): who may see whom follows lineage across both
+ * machines, and templates - including a proposal and its answer - live on the
+ * canvas alone.
+ */
+describe('visibility by lineage, across the link', () => {
+  it('lets a root on each machine see and message the other', async () => {
+    const here = hubA.sessions.getByAddress('localws/here')!;
+    const there = hubB.sessions.getByAddress('remotews/there')!;
+
+    expect((await hubA.listAgents(here.id)).some((a) => a.address === there.address)).toBe(true);
+    await waitForAsync(
+      async () => (await hubB.listAgents(there.id)).some((a) => a.address === here.address),
+      15_000,
+      'the canvas root in the attached directory',
+    );
+
+    const marker = `ROOT_TO_ROOT_${Date.now()}`;
+    expect((await hubA.sendMessage(here.id, there.address, marker)).delivered).toBe(true);
+    await waitFor(
+      () => (outputB.get(there.id) ?? '').includes(marker),
+      15_000,
+      'the root-to-root message on the attached machine',
+    );
+  });
+
+  it("keeps a cross-machine child's parent, and shows it only to that parent", async () => {
+    const here = hubA.sessions.getByAddress('localws/here')!;
+    const there = hubB.sessions.getByAddress('remotews/there')!;
+
+    await hubB.spawnAgent(there.id, { host: 'canvas', workspace: 'localws', name: 'vis-child' });
+    const child = hubA.sessions.getByAddress('localws/vis-child')!;
+    // On the hub that owns its PTY, by address: there is no local id to give.
+    expect(child.parentAddress).toBe(there.address);
+    expect(child.spawnedBy).toBeNull();
+    expect((await hubA.whoami(child.id)).spawnedBy).toBe(there.address);
+
+    // ...and on the attached hub, through the canvas's directory.
+    await waitForAsync(
+      async () =>
+        (await hubB.listAgents(there.id)).find((a) => a.address === child.address)
+          ?.parentAddress === there.address,
+      15_000,
+      'the parent to list its child',
+    );
+
+    // The child sees only its parent.
+    const seen = (await hubA.listAgents(child.id)).filter((a) => !a.isYou).map((a) => a.address);
+    expect(seen).toEqual([there.address]);
+    expect((await hubA.sendMessage(child.id, there.address, 'done, parent')).delivered).toBe(true);
+
+    // An unrelated root neither lists it nor reaches it.
+    expect((await hubA.listAgents(here.id)).some((a) => a.address === child.address)).toBe(false);
+    await expect(hubA.sendMessage(here.id, child.address, 'psst')).rejects.toThrow(
+      /no agent at address/,
+    );
+    await expect(hubA.readScreen(here.id, child.address)).rejects.toThrow(/no agent at address/);
+
+    // Nor does one on the attached machine, which decides from the directory.
+    const other = await hubB.startSession({ workspaceId: wsB, profile: 'shell', name: 'other-root' });
+    await expect(hubB.sendMessage(other.id, child.address, 'psst')).rejects.toThrow(
+      /no agent at address/,
+    );
+    await expect(hubB.readScreen(other.id, child.address)).rejects.toThrow(/no agent at address/);
+  });
+
+  it('hides siblings from each other, and the canvas refuses a relay that skips the check', async () => {
+    const here = hubA.sessions.getByAddress('localws/here')!;
+    const there = hubB.sessions.getByAddress('remotews/there')!;
+    await hubA.spawnAgent(here.id, { name: 'sib-1' });
+    await hubA.spawnAgent(here.id, { name: 'sib-2' });
+    const sib1 = hubA.sessions.getByAddress('localws/sib-1')!;
+
+    const seen = (await hubA.listAgents(sib1.id)).filter((a) => !a.isYou).map((a) => a.address);
+    expect(seen).toEqual([here.address]);
+    await expect(hubA.sendMessage(sib1.id, 'localws/sib-2', 'hi sibling')).rejects.toThrow(
+      /no agent at address/,
+    );
+    // The parent sees both.
+    const mine = (await hubA.listAgents(here.id)).map((a) => a.address);
+    expect(mine).toEqual(expect.arrayContaining(['localws/sib-1', 'localws/sib-2']));
+
+    // An attached hub that did not check is still refused by the canvas.
+    const uplink = (hubB as any).uplink;
+    await expect(
+      uplink.ask({ t: 'deliver', from: there.address, to: 'localws/sib-1', body: 'sneaky' }),
+    ).rejects.toThrow(/no agent at address/);
+    await expect(
+      uplink.ask({ t: 'readScreen', from: there.address, address: 'localws/sib-1' }),
+    ).rejects.toThrow(/no agent at address/);
+  });
+});
+
+describe('central templates, from an attached machine', () => {
+  it('puts a proposal in front of the canvas, not the attached hub, and sends the answer back', async () => {
+    const there = hubB.sessions.getByAddress('remotews/there')!;
+    // Watched at the attached hub's own entry point rather than in a shell's
+    // echo: the question is whether the answer crosses back to the hub that
+    // owns the terminal, not what a shell does with typed text.
+    const told: string[] = [];
+    const real = hubB.notifyAgent.bind(hubB);
+    hubB.notifyAgent = (address: string, text: string) => {
+      if (address === there.address) told.push(text);
+      real(address, text);
+    };
+    try {
+      const first = await hubB.proposeTemplate(there.id, { id: 'from-b', agent: 'shell' });
+      expect(hubB.pendingProposals()).toEqual([]);
+      const pending = hubA.pendingProposals().find((p) => p.id === first.proposalId)!;
+      expect(pending.fromAddr).toBe(there.address);
+
+      hubA.resolveTemplateProposal(pending.id, true);
+      await waitFor(
+        () => told.some((t) => t.includes('accepted and saved as "from-b"')),
+        15_000,
+        'the acceptance to reach the proposing hub',
+      );
+      expect(hubA.templates.get('from-b')?.source).toBe('stored');
+      expect(hubB.templates.get('from-b')).toBeNull();
+
+      const second = await hubB.proposeTemplate(there.id, { id: 'from-b-2', agent: 'shell' });
+      hubA.resolveTemplateProposal(second.proposalId, false);
+      await waitFor(
+        () => told.some((t) => t.includes('"from-b-2" was declined')),
+        15_000,
+        'the refusal to reach the proposing hub',
+      );
+      hubA.removeTemplate('from-b');
+    } finally {
+      hubB.notifyAgent = real;
+    }
+  });
+
+  it("neither lists nor starts a template stored only on the attached hub", async () => {
+    const there = hubB.sessions.getByAddress('remotews/there')!;
+    hubB.saveTemplate({ id: 'b-only', agent: 'shell' });
+    try {
+      const { templates } = (await hubB.listTemplates(there.id)) as {
+        templates: { id: string; source: string }[];
+      };
+      expect(templates.some((t) => t.id === 'b-only')).toBe(false);
+      // This machine's bare agents are still there.
+      expect(templates.find((t) => t.id === 'shell')?.source).toBe('derived');
+
+      await expect(
+        hubB.spawnAgent(there.id, { profile: 'b-only', name: 'never' }),
+      ).rejects.toThrow(/no template "b-only"/);
+      expect(hubB.sessions.getByAddress('remotews/never')).toBeNull();
+    } finally {
+      hubB.removeTemplate('b-only');
+    }
+  });
+});
+
+/*
  * A mouse report is the one kind of terminal input that cannot survive being
  * treated as text, and a remote session is the one path that has to spell it
  * as text to cross a JSON link. This is where those two meet.

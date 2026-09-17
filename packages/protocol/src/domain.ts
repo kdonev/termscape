@@ -126,6 +126,18 @@ export const Session = z.object({
   agentSessionUuid: z.string().nullable(),
   /** Parent session that called spawn_agent, for lineage edges. */
   spawnedBy: z.string().nullable(),
+  /**
+   * The address of the agent that spawned this one, or null for an agent the
+   * human started.
+   *
+   * Beside `spawnedBy` rather than instead of it: that one is a local id held
+   * by a foreign key, so it cannot name a parent on another machine, and a
+   * child spawned across the link used to lose its parent entirely. The
+   * address is the one id every hub agrees on, and who may see whom on the
+   * canvas is decided from it. Optional so an older row or fixture without it
+   * still parses, and reads as a root.
+   */
+  parentAddress: z.string().nullable().optional(),
   state: SessionState,
   status: AgentStatus,
   /** Free-text label the agent sets via the set_status tool. */

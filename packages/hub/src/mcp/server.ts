@@ -95,7 +95,12 @@ export function buildMcpServer(callerSessionId: string, api: AgentApi): McpServe
     'list_agents',
     {
       description:
-        'List every agent on the canvas: address, profile, whether it is idle or busy, and what it is doing.',
+        'List the agents on the canvas you can see: address, profile, machine, whether it is ' +
+        'idle or busy, and what it is doing. Who you can see follows who started whom, not ' +
+        'machine or workspace: an agent the human started sees every other one the human ' +
+        'started; an agent spawned by another sees only its spawner, not its siblings; and ' +
+        'every agent sees the agents it spawned itself, but not theirs. send_message and ' +
+        'read_screen reach only the agents listed here.',
       inputSchema: ListAgentsInput.shape,
     },
     ({ workspace }) => guard(() => api.listAgents(callerSessionId, workspace)),

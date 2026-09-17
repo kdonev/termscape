@@ -37,6 +37,7 @@ import { MessageRouter } from './agents/router.js';
 import { PollWatch } from './agents/polling.js';
 import { SessionManager } from './session/manager.js';
 import { briefFileFor } from './agents/wiring.js';
+import { canSee, type Lineage } from './agents/visibility.js';
 import type { AgentApi } from './mcp/server.js';
 import { PeerRegistry } from './remote/registry.js';
 import { SPAWN_RELAY_TIMEOUT_MS, type Uplink } from './remote/peer-serve.js';
@@ -192,6 +193,12 @@ export class Hub extends EventEmitter implements AgentApi {
     // Peer windows share the canvas, so a new local window must not land on
     // one. The manager cannot see the registry; this is the view it needs.
     this.sessions.remoteWindows = () => this.peers.sessions().map((s) => s.window);
+    // A brief lists who its agent can see, and that is decided across every
+    // machine by lineage - which only the hub has the view for.
+    this.sessions.visiblePeers = (s) =>
+      this.everyAgent()
+        .filter((o) => o.address !== s.address && canSee(s, o))
+        .map((o) => o.address);
     this.peers.on('host', (h) => this.emit('host', h));
     this.peers.on('peerAgents', (hostId: string, found: AgentProfileInfo[]) =>
       this.emit('hostAgents', hostId, found),
@@ -222,11 +229,26 @@ export class Hub extends EventEmitter implements AgentApi {
             (err: Error) => reply(false, null, err.message),
           );
 
+        /*
+         * The canvas is authoritative about who may see whom: the asking hub
+         * checked already, but from a directory that may be a moment stale,
+         * and a host that did not check at all must not be a way round it.
+         */
         switch (ask.t) {
           case 'deliver':
-            return void done(this.deliverFrom(ask.from, ask.to, ask.body));
+            return void done(
+              (async () => {
+                this.requireVisible(this.lineageOf(ask.from), ask.to);
+                return this.deliverFrom(ask.from, ask.to, ask.body);
+              })(),
+            );
           case 'readScreen':
-            return void done(this.readScreenAt(ask.address, ask.lines));
+            return void done(
+              (async () => {
+                this.requireVisible(this.lineageOf(ask.from), ask.address);
+                return this.readScreenAt(ask.from, ask.address, ask.lines);
+              })(),
+            );
           case 'listHosts':
             return void done(Promise.resolve(this.hostsView(fromHostId)));
           case 'listTemplates':
@@ -235,6 +257,16 @@ export class Hub extends EventEmitter implements AgentApi {
             return void done(Promise.resolve(this.pickTemplateFor(ask)));
           case 'spawn':
             return void done(this.spawnFrom(ask, fromHostId));
+          case 'proposeTemplate': {
+            // `from` is only trusted as far as the host that sent it: an
+            // agent on one machine must not be able to propose as, and have
+            // the answer typed into, an agent on another.
+            if (this.peers.hostIdFor(ask.from) !== fromHostId) {
+              return void done(Promise.reject(new Error(`no agent at address "${ask.from}"`)));
+            }
+            const { t: _t, from, ...input } = ask;
+            return void done(this.proposeTemplateFrom(from, input));
+          }
         }
       },
     );
@@ -284,6 +316,42 @@ export class Hub extends EventEmitter implements AgentApi {
     if (this.sessions.getByAddress(address)) return 'local';
     if (this.peers.find(address)) return 'remote';
     return this.uplink?.agents().some((a) => a.address === address) ? 'uplink' : null;
+  }
+
+  /**
+   * Every agent this hub knows of, on any machine, with its lineage: its own,
+   * those on machines it holds, and those the canvas told it about. The three
+   * are exclusive for the reason `locate` gives.
+   */
+  private everyAgent(): Lineage[] {
+    return [
+      ...this.sessions.list(),
+      ...this.peers.sessions(),
+      ...(this.uplink?.agents() ?? []),
+    ].map((a) => ({ address: a.address, parentAddress: a.parentAddress ?? null }));
+  }
+
+  /** One address's lineage, from the same view, or null for one nobody here knows. */
+  private lineageOf(address: string): Lineage | null {
+    const local = this.sessions.getByAddress(address);
+    if (local) return { address, parentAddress: local.parentAddress ?? null };
+    const found =
+      this.peers.find(address)?.session ??
+      this.uplink?.agents().find((a) => a.address === address);
+    return found ? { address, parentAddress: found.parentAddress ?? null } : null;
+  }
+
+  /**
+   * Refuse to act on an address the viewer may not see, in exactly the words
+   * used for one that does not exist: a hidden agent must not be discoverable
+   * by probing for the difference. An address nobody knows is let through, so
+   * the delivery path can record the failed attempt as it always has.
+   */
+  private requireVisible(viewer: Lineage | null, address: string): void {
+    const target = this.lineageOf(address);
+    if (target && (!viewer || !canSee(viewer, target))) {
+      throw new Error(`no agent at address "${address}"`);
+    }
   }
 
   /**
@@ -595,8 +663,32 @@ export class Hub extends EventEmitter implements AgentApi {
     },
   ): Promise<{ proposalId: string; status: string; anyoneWatching: boolean; note: string }> {
     const me = this.requireSession(sessionId);
+    // Templates are central (issue 22): the canvas is where they live and
+    // where the human who answers is, so an attached hub hands the proposal
+    // up. No local fallback when that fails - a proposal kept here would wait
+    // for a dialog nobody is ever shown, which is the bug this fixes.
+    if (this.uplink?.attached) {
+      return this.uplink.ask({ t: 'proposeTemplate', from: me.address, ...input });
+    }
+    return this.proposeTemplateFrom(me.address, input);
+  }
 
-    const mine = [...this.proposals.values()].filter((p) => p.fromAddr === me.address);
+  /**
+   * A proposal from an agent already established, here or on an attached
+   * machine - the canvas's half of proposeTemplate.
+   */
+  private async proposeTemplateFrom(
+    fromAddr: string,
+    input: {
+      id: string;
+      agent: string;
+      description?: string;
+      model?: string;
+      effort?: string;
+      prompt?: string;
+    },
+  ): Promise<{ proposalId: string; status: string; anyoneWatching: boolean; note: string }> {
+    const mine = [...this.proposals.values()].filter((p) => p.fromAddr === fromAddr);
     if (mine.length >= MAX_PENDING_PROPOSALS) {
       /*
        * Name them. The way this limit is actually reached is a human closing
@@ -621,7 +713,7 @@ export class Hub extends EventEmitter implements AgentApi {
 
     const proposal: TemplateProposal = {
       id: randomUUID(),
-      fromAddr: me.address,
+      fromAddr,
       proposedAt: Date.now(),
       template: {
         id: candidate.id,
@@ -710,6 +802,21 @@ export class Hub extends EventEmitter implements AgentApi {
    * as an instruction.
    */
   private tellAgent(address: string, text: string): void {
+    if (!this.sessions.getByAddress(address)) {
+      // An agent on an attached machine proposed it, and only that machine
+      // owns its terminal. Best effort, like the local case below.
+      if (this.peers.hostIdFor(address)) void this.peers.notify(address, text).catch(() => {});
+      return;
+    }
+    this.notifyAgent(address, text);
+  }
+
+  /**
+   * tellAgent's local half, and what an attached hub runs when the canvas
+   * sends it a notice for one of its agents. The one place the `[termscape]`
+   * prefix is applied, so a notice reads the same from any machine.
+   */
+  notifyAgent(address: string, text: string): void {
     const target = this.sessions.getByAddress(address);
     if (!target) return;
     const mode = this.profiles.get(target.profile)?.inject ?? 'bracketed';
@@ -905,7 +1012,10 @@ export class Hub extends EventEmitter implements AgentApi {
     cwd?: string;
     spawnedBy?: string | null;
   }): Promise<Session> {
-    return this.startPicked(opts, this.resolveTemplate(opts));
+    const parentAddress = opts.spawnedBy
+      ? (this.sessions.get(opts.spawnedBy)?.address ?? null)
+      : null;
+    return this.startPicked({ ...opts, parentAddress }, this.resolveTemplate(opts));
   }
 
   /**
@@ -916,7 +1026,13 @@ export class Hub extends EventEmitter implements AgentApi {
    * here would look it up in a registry that has never heard of it.
    */
   private async startPicked(
-    opts: { workspaceId: string; name?: string; cwd?: string; spawnedBy?: string | null },
+    opts: {
+      workspaceId: string;
+      name?: string;
+      cwd?: string;
+      spawnedBy?: string | null;
+      parentAddress?: string | null;
+    },
     picked: PickedTemplate,
   ): Promise<Session> {
     const ws = this.store.getWorkspace(opts.workspaceId);
@@ -925,7 +1041,6 @@ export class Hub extends EventEmitter implements AgentApi {
     // A workspace that belongs to a host runs its agents there. The peer owns
     // the PTY; what comes back is a session we show on our own canvas.
     if (ws.hostId) {
-      const spawner = opts.spawnedBy ? this.sessions.get(opts.spawnedBy) : null;
       // Resolved values cross, never the template id: a template is config
       // and the two machines do not share config, so a name that means "opus,
       // high effort" here may mean nothing over there. The id travels only so
@@ -943,7 +1058,7 @@ export class Hub extends EventEmitter implements AgentApi {
         // here and the far side has never heard of it.
         env: picked.env,
         name: opts.name,
-        spawnedByAddress: spawner?.address ?? null,
+        spawnedByAddress: opts.parentAddress ?? null,
       });
     }
 
@@ -979,6 +1094,8 @@ export class Hub extends EventEmitter implements AgentApi {
     name?: string;
     cwd?: string;
     spawnedBy?: string | null;
+    /** Who spawned it, by address: see Session.parentAddress. */
+    parentAddress?: string | null;
   }): Promise<Session> {
     const count = this.sessions.list().filter((s) => s.workspaceId === opts.workspaceId).length;
     if (count >= this.spawnCap) {
@@ -999,6 +1116,7 @@ export class Hub extends EventEmitter implements AgentApi {
       name: opts.name ?? opts.template ?? undefined,
       cwd: opts.cwd,
       spawnedBy: opts.spawnedBy ?? null,
+      parentAddress: opts.parentAddress ?? null,
     });
 
     /*
@@ -1198,7 +1316,9 @@ export class Hub extends EventEmitter implements AgentApi {
       workspace: ws?.name ?? null,
       cwd: s.cwd,
       profile: s.profile,
-      spawnedBy: s.spawnedBy ? this.sessions.get(s.spawnedBy)?.address ?? null : null,
+      // By address rather than through the local id, which a parent on
+      // another machine never had.
+      spawnedBy: s.parentAddress ?? null,
     };
   }
 
@@ -1245,13 +1365,13 @@ export class Hub extends EventEmitter implements AgentApi {
   }
 
   /**
-   * An attached hub's list: what the canvas has, over what this hub has.
+   * An attached hub's list: the templates the canvas made, and the bare agents
+   * this machine has (see overlayCanvasTemplates).
    *
-   * Templates are made on the canvas, so an agent over here that could only
-   * see this hub's own list never saw the ones a human had just added. The
-   * canvas's derived templates are left out - they describe the canvas
-   * machine's agents, and this machine's own are already in the local list.
-   * A link that cannot answer leaves the local list, which is still true.
+   * Templates are central (issue 22), so this hub's own stored or declared
+   * ones are left out: nobody on the canvas can see or edit them, and
+   * spawn_agent refuses them here for the same reason. A link that cannot
+   * answer leaves this machine's bare agents, which are still true.
    */
   private async templateViewsWithCanvas(): Promise<TemplateView[]> {
     const local = this.templateViews();
@@ -1259,7 +1379,7 @@ export class Hub extends EventEmitter implements AgentApi {
       const canvas = await this.uplink!.ask<TemplateView[]>({ t: 'listTemplates' });
       return overlayCanvasTemplates(canvas, local);
     } catch {
-      return local;
+      return overlayCanvasTemplates([], local);
     }
   }
 
@@ -1561,6 +1681,11 @@ export class Hub extends EventEmitter implements AgentApi {
     return this.thisMachineLabel();
   }
 
+  /**
+   * Every agent the caller can see, on every machine: lineage decides who
+   * that is (see agents/visibility.ts), not the machine or the workspace.
+   * `workspace` only narrows what is already visible.
+   */
   async listAgents(sessionId: string, workspace?: string) {
     const me = this.requireSession(sessionId);
     const wsById = new Map(this.store.listWorkspaces().map((w) => [w.id, w]));
@@ -1575,6 +1700,7 @@ export class Hub extends EventEmitter implements AgentApi {
       status: s.status,
       statusText: s.statusText,
       host: myLabel,
+      parentAddress: s.parentAddress ?? null,
       isYou: s.id === me.id,
     }));
 
@@ -1592,6 +1718,7 @@ export class Hub extends EventEmitter implements AgentApi {
         status: s.status,
         statusText: s.statusText,
         host: (hostId ? hostLabels.get(hostId) : undefined) ?? 'remote',
+        parentAddress: s.parentAddress ?? null,
         isYou: false,
       };
     });
@@ -1602,13 +1729,14 @@ export class Hub extends EventEmitter implements AgentApi {
     const fromCanvas = (this.uplink?.agents() ?? []).map((a) => ({ ...a, isYou: false }));
 
     return [...local, ...remote, ...fromCanvas].filter(
-      (a) => !workspace || a.workspace === workspace,
+      (a) => (a.isYou || canSee(me, a)) && (!workspace || a.workspace === workspace),
     );
   }
 
   async sendMessage(sessionId: string, to: string, text: string) {
     const me = this.requireSession(sessionId);
     if (me.address === to) throw new Error('cannot send a message to yourself');
+    this.requireVisible(me, to);
     const result = await this.deliverFrom(me.address, to, text);
     // Only a successful send counts as a question asked - deliverFrom throws
     // on failure, so a message that never arrived does not excuse polling.
@@ -1652,6 +1780,7 @@ export class Hub extends EventEmitter implements AgentApi {
       statusText: s.statusText,
       // What the machine that owns the canvas is called, from anywhere else.
       host: 'canvas',
+      parentAddress: s.parentAddress ?? null,
     }));
 
     const elsewhere = this.peers
@@ -1665,6 +1794,7 @@ export class Hub extends EventEmitter implements AgentApi {
         status: s.status,
         statusText: s.statusText,
         host: hostLabels.get(this.peers.hostIdFor(s.address) ?? '') ?? 'remote',
+        parentAddress: s.parentAddress ?? null,
       }));
 
     return [...here, ...elsewhere];
@@ -1730,8 +1860,10 @@ export class Hub extends EventEmitter implements AgentApi {
    *
    * On an attached hub the canvas is asked first, because that is where
    * templates are made (see templateViewsWithCanvas). Only a template the
-   * canvas actually holds comes back from there; anything else, and any link
-   * that does not answer, is resolved against this hub's own config.
+   * canvas actually holds comes back from there. Anything else, and any link
+   * that does not answer, is resolved against this hub's own config - but
+   * only as a bare agent or its derived template: templates are central, and
+   * one stored or declared only on this machine is not one.
    */
   private async pickSpawnTemplate(me: Session, profile?: string): Promise<PickedTemplate> {
     if (this.uplink?.attached) {
@@ -1748,6 +1880,16 @@ export class Hub extends EventEmitter implements AgentApi {
       }
       if (answer && 'error' in answer) throw new Error(answer.error);
       if (answer?.picked) return answer.picked;
+
+      const own = (id: string) => {
+        const t = this.templates.get(id);
+        return !t || t.source === 'derived';
+      };
+      if (profile !== undefined && !own(profile)) throw new Error(`no template "${profile}"`);
+      // The caller's own template came from the canvas, which has just said
+      // it no longer holds it; its agent is what is left.
+      const inherit = profile ?? (me.template && own(me.template) ? me.template : me.profile);
+      return this.resolveTemplate({ profile: inherit });
     }
     const inherited = me.template ? this.templates.get(me.template) : null;
     const inherit = profile ?? (inherited && !inherited.error ? me.template! : me.profile);
@@ -1830,7 +1972,7 @@ export class Hub extends EventEmitter implements AgentApi {
     }
 
     const child = await this.startPicked(
-      { workspaceId: ws.id, name: opts.name, spawnedBy: me.id },
+      { workspaceId: ws.id, name: opts.name, spawnedBy: me.id, parentAddress: me.address },
       { ...picked, prompt: opening, restorePrompt: picked.prompt ?? null },
     );
 
@@ -1884,11 +2026,9 @@ export class Hub extends EventEmitter implements AgentApi {
           restorePrompt: ask.restore ?? null,
           env: ask.env,
           name: ask.name,
-          // See the known gap noted on spawn_agent's `host`: the spawner
-          // lives on a hub this canvas has no local id for, and the
-          // canvas-local branch below cannot take one either — the session
-          // table's foreign key would reject it.
-          spawnedByAddress: null,
+          // By address, the one id every hub agrees on: the spawner lives on
+          // a hub this canvas has no local id for.
+          spawnedByAddress: ask.from,
         })
       : await this.startResolved({
           workspaceId: ws.id,
@@ -1900,7 +2040,11 @@ export class Hub extends EventEmitter implements AgentApi {
           restorePrompt: ask.restore ?? null,
           env: ask.env,
           name: ask.name,
+          // No local id to give - the session table's foreign key would
+          // reject one from another machine - but the address still says
+          // whose child this is, which is what visibility is decided from.
           spawnedBy: null,
+          parentAddress: ask.from,
         });
 
     return {
@@ -1967,7 +2111,8 @@ export class Hub extends EventEmitter implements AgentApi {
 
   async readScreen(sessionId: string, address: string, lines?: number) {
     const me = this.requireSession(sessionId);
-    const result = await this.readScreenAt(address, lines);
+    this.requireVisible(me, address);
+    const result = await this.readScreenAt(me.address, address, lines);
     // Decorating after the await, rather than counting the call up front,
     // means a remote or uplink target gets the note too. Counted here, not in
     // readScreenAt: that path also serves peers asking on this hub's behalf
@@ -1982,12 +2127,14 @@ export class Hub extends EventEmitter implements AgentApi {
    * agent of its own, or a peer that authenticated one and is asking on its
    * behalf. Resolves the address the same three ways a delivery does.
    */
-  private async readScreenAt(address: string, lines?: number) {
+  private async readScreenAt(from: string, address: string, lines?: number) {
     const where = this.locate(address);
     if (where === 'remote') return this.peers.readScreen(address, lines);
     if (where === 'uplink') {
       return this.uplink!.ask<{ address: string; running: boolean; screen: string }>({
         t: 'readScreen',
+        // The canvas decides again whether the caller may look.
+        from,
         address,
         lines,
       });
@@ -2014,9 +2161,13 @@ export class Hub extends EventEmitter implements AgentApi {
 
     const target = this.sessions.getByAddress(address);
     if (!target) {
-      // Spawn lineage lives on the hub that owns the session, so the
-      // spawned-by rule below is enforced over there, by that hub.
-      if (this.locate(address) === 'remote') {
+      // A remote session reports who spawned it by address, so the rule
+      // below can be judged here before the host is asked to stop it.
+      const remote = this.peers.find(address)?.session;
+      if (remote) {
+        if (remote.parentAddress !== me.address) {
+          throw new Error(`"${address}" was not spawned by you; only its spawner may stop it`);
+        }
         await this.peers.stopSession(address);
         return { stopped: address };
       }
@@ -2024,8 +2175,9 @@ export class Hub extends EventEmitter implements AgentApi {
     }
     if (target.id === me.id) throw new Error('use your own exit command to stop yourself');
     // An agent may only stop what it created. Otherwise a single confused
-    // agent could take down the whole canvas.
-    if (target.spawnedBy !== me.id) {
+    // agent could take down the whole canvas. Judged by address, so a child
+    // whose spawner is on another machine is judged the same as a local one.
+    if (target.parentAddress !== me.address) {
       throw new Error(`"${address}" was not spawned by you; only its spawner may stop it`);
     }
     this.sessions.stop(target.id);
