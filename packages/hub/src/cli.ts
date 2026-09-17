@@ -14,6 +14,9 @@ import { which } from './agents/resolve.js';
 import { debugTopics } from './debug.js';
 import { CLI_OPTIONS } from './cli-args.js';
 
+/** How long shutdown waits for open connections to close. See `shutdown`. */
+const SERVER_CLOSE_DEADLINE_MS = 2000;
+
 /**
  * Warn when no agent CLI is installed.
  *
@@ -198,18 +201,34 @@ Joining another machine's canvas:
     console.log(`\n[${signal}] saving state...`);
     // Snapshots are forced here: this is the write that makes a clean restart
     // come back with the right screens.
-    link?.stop();
-    hub.shutdown();
+    try {
+      link?.stop();
+      hub.shutdown();
+    } catch (err) {
+      // Stopping is the one thing this must not fail at. A throw here used to
+      // skip the exit below and leave the hub up with nothing to stop it.
+      console.error('[shutdown]', err instanceof Error ? err.message : err);
+    }
     try {
       rmSync(paths.pidFile(), { force: true });
     } catch {
       // Best effort; a stale pid file is handled by whoever reads it.
     }
-    try {
-      await app.close();
-    } catch {
-      // Server already down.
-    }
+    /*
+     * Closing the server is given a deadline rather than waited out. It waits
+     * for every websocket to finish its close handshake, and a client that
+     * never answers - a tab on a laptop that went to sleep, a machine on the
+     * other end of a dead link, anything that opened a socket and went quiet -
+     * held it open indefinitely. The canvas window had gone, the terminal was
+     * still held, and only Ctrl+C gave it back. State is already saved by now;
+     * all that is left to lose is a goodbye nobody is listening for.
+     */
+    await Promise.race([
+      app.close().catch(() => {
+        // Server already down.
+      }),
+      new Promise((resolve) => setTimeout(resolve, SERVER_CLOSE_DEADLINE_MS).unref()),
+    ]);
     // node-pty on ConPTY keeps handles that can hold the loop open past close.
     process.exit(0);
   };
