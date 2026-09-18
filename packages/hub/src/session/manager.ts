@@ -606,11 +606,15 @@ export class SessionManager extends EventEmitter {
    * timing; this is here so callers say what they mean rather than assembling
    * the bytes themselves.
    */
-  inject(sessionId: string, paste: string, submit: string): void {
+  inject(sessionId: string, paste: string, submit: string): Promise<void> {
     const p = this.live.get(sessionId);
     if (!p?.running) throw new Error(`session ${sessionId} is not running`);
-    p.inject(paste, submit);
+    const submitted = p.inject(paste, submit);
     this.store.updateSession(sessionId, { lastActiveAt: Date.now() });
+    // Resolves once the Enter is actually in, which is what lets the caller
+    // that owns a session's opening instruction hold later deliveries behind
+    // it. A caller with nothing to order can ignore it.
+    return submitted;
   }
 
   /**

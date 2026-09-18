@@ -37,12 +37,18 @@ class RateLimiter {
 /**
  * Delivers agent-to-agent messages.
  *
- * Delivery is immediate and unconditional by design: the text is written to
- * the target PTY the moment it arrives, whether or not that agent is mid-turn.
- * A message that lands during a turn may be swallowed by the running CLI —
- * that is a property of PTYs, not something this router hides. What it does
- * guarantee is that every attempt is recorded with its outcome, so a lost
- * message is visible in the UI rather than silent.
+ * Delivery is immediate once it reaches here: the text is written to the
+ * target PTY straight away, whether or not that agent is mid-turn. A message
+ * that lands during a turn may be swallowed by the running CLI — that is a
+ * property of PTYs, not something this router hides. What it does guarantee is
+ * that every attempt is recorded with its outcome, so a lost message is
+ * visible in the UI rather than silent.
+ *
+ * The one wait is upstream and is not this router's business: `Hub.deliverFrom`
+ * holds a message for an agent whose CLI has not started reading yet. Writing
+ * into a program that is not listening is not a delivery, however promptly it
+ * is done — see issue 27, where the text reached the composer and was never
+ * sent.
  */
 export class MessageRouter {
   private readonly limiter = new RateLimiter();

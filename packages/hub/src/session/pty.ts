@@ -135,6 +135,8 @@ export class PtySession extends EventEmitter {
   private writeTimer: NodeJS.Timeout | null = null;
   /** Pending Enter for a message already pasted in. See inject(). */
   private submitTimer: NodeJS.Timeout | null = null;
+  /** Settles the promise `inject` handed out for that pending Enter. */
+  private submitResolve: (() => void) | null = null;
   /** Pending check that a submitted message was taken. See awaitSubmit(). */
   private confirmTimer: NodeJS.Timeout | null = null;
   /**
@@ -387,31 +389,49 @@ export class PtySession extends EventEmitter {
    * message could still sit unsent in an agent's composer on a slower machine
    * across the canvas. See awaitSubmit.
    */
-  inject(paste: string, submit: string): void {
+  inject(paste: string, submit: string): Promise<void> {
     // Read before anything is written: whoever delivered this marks the
     // session busy straight after, and that is not the agent speaking.
     const confirmable = this.statusMode === 'hooks' && this.atPrompt;
     this.write(paste);
-    if (this.submitTimer) clearTimeout(this.submitTimer);
+    this.settleSubmit();
     this.clearConfirmTimer();
-    const tick = (): void => {
-      this.submitTimer = null;
-      if (this.disposed || !this.proc) return;
-      if (this.writeQueue.length > 0) return arm();
-      try {
-        this.write(submit);
-      } catch {
-        // It exited between the paste and the Enter. The message log already
-        // records the delivery; there is nothing left to submit it to.
-        return;
-      }
-      if (confirmable) this.awaitSubmit(submit, SUBMIT_RETRIES);
-    };
-    const arm = (): void => {
-      this.submitTimer = setTimeout(tick, SUBMIT_SETTLE_MS);
-      this.submitTimer.unref?.();
-    };
-    arm();
+    return new Promise<void>((resolve) => {
+      // Held so that whatever supersedes or cancels this injection can settle
+      // it. A caller waiting on an Enter that was replaced by a later message
+      // would otherwise wait for a tick that has been cleared - and the one
+      // caller who waits is the gate every delivery to this session queues
+      // behind.
+      this.submitResolve = resolve;
+      const tick = (): void => {
+        this.submitTimer = null;
+        if (this.disposed || !this.proc) return this.settleSubmit();
+        if (this.writeQueue.length > 0) return arm();
+        try {
+          this.write(submit);
+        } catch {
+          // It exited between the paste and the Enter. The message log already
+          // records the delivery; there is nothing left to submit it to.
+          return this.settleSubmit();
+        }
+        if (confirmable) this.awaitSubmit(submit, SUBMIT_RETRIES);
+        this.settleSubmit();
+      };
+      const arm = (): void => {
+        this.submitTimer = setTimeout(tick, SUBMIT_SETTLE_MS);
+        this.submitTimer.unref?.();
+      };
+      arm();
+    });
+  }
+
+  /** Drop any pending Enter and settle whoever was waiting for it. */
+  private settleSubmit(): void {
+    if (this.submitTimer) clearTimeout(this.submitTimer);
+    this.submitTimer = null;
+    const resolve = this.submitResolve;
+    this.submitResolve = null;
+    resolve?.();
   }
 
   /**
@@ -538,8 +558,7 @@ export class PtySession extends EventEmitter {
     // and neither does the Enter that would have sent it.
     if (this.writeTimer) clearTimeout(this.writeTimer);
     this.writeTimer = null;
-    if (this.submitTimer) clearTimeout(this.submitTimer);
-    this.submitTimer = null;
+    this.settleSubmit();
     this.clearConfirmTimer();
     this.writeQueue.length = 0;
     if (!this.proc) return;

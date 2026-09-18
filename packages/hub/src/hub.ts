@@ -83,6 +83,18 @@ const ANNOUNCE_COALESCE_MS = 300;
 const OPENING_QUIET_MS = 1500;
 const OPENING_READY_CAP_MS = 20_000;
 
+/**
+ * How long a delivery waits for a starting agent before going in regardless.
+ *
+ * There has to be a bound. A session's readiness gate deliberately outlasts
+ * its own cap while a question is on screen - the instruction is still wanted
+ * once the human answers - but a `send_message` that blocks its caller until
+ * somebody walks over to a window is worse than a message that arrives badly.
+ * So the wait is bounded here, and past it delivery is what it always was:
+ * immediate, recorded, and the CLI's business.
+ */
+const DELIVERY_WAIT_CAP_MS = 20_000;
+
 /** Colours cycled through when a workspace is created, for canvas grouping. */
 const WORKSPACE_COLORS = [
   '#7c9cf5',
@@ -142,6 +154,16 @@ export class Hub extends EventEmitter implements AgentApi {
    * two roles a null check rather than a flag.
    */
   private uplink: Uplink | null = null;
+  /**
+   * Per session: resolves once its CLI is reading and its opening instruction,
+   * if it had one, has been typed and sent.
+   *
+   * Every delivery to a local session queues behind this. Without it a message
+   * sent to an agent that was still starting - which is exactly what an agent
+   * that has just called `spawn_agent` does next - was written into a program
+   * not yet reading, and sat in the composer unsent forever (issue 27).
+   */
+  private readonly opened = new Map<string, Promise<void>>();
   private announceTimer: NodeJS.Timeout | null = null;
   /** Live SSH tunnels, keyed by host id. Not persisted: they die with the hub. */
   private readonly tunnels = new Map<string, DeployResult>();
@@ -189,9 +211,11 @@ export class Hub extends EventEmitter implements AgentApi {
     );
 
     this.sessions.on('session', (s: Session) => this.emit('session', s));
-    this.sessions.on('removed', (id: string, address: string | null) =>
-      this.emit('removed', id, address),
-    );
+    this.sessions.on('removed', (id: string, address: string | null) => {
+      // Nothing left to open, and nothing left to hold a delivery for.
+      this.opened.delete(id);
+      this.emit('removed', id, address);
+    });
     this.sessions.on('data', (id: string, chunk: string) => this.emit('data', id, chunk));
 
     this.peers = new PeerRegistry(this.store, HUB_VERSION, (address) =>
@@ -1140,7 +1164,7 @@ export class Hub extends EventEmitter implements AgentApi {
     const opening = [this.typedBrief(session), opts.prompt]
       .filter((part): part is string => !!part)
       .join('\n\n');
-    if (opening) void this.deliverOpeningInstruction(session.id, opening);
+    this.noteOpening(session.id, opening || null);
     this.store.setOpeningPrompt(
       session.id,
       opts.restorePrompt === undefined ? (opts.prompt ?? null) : opts.restorePrompt,
@@ -1181,8 +1205,9 @@ export class Hub extends EventEmitter implements AgentApi {
    */
   async resumeSession(sessionId: string): Promise<Session> {
     const session = await this.sessions.resume(sessionId);
-    const brief = this.typedBrief(session);
-    if (brief) void this.deliverOpeningInstruction(session.id, brief);
+    // A fresh CLI, so a fresh gate: messages must wait for this one to be
+    // reading just as they did when it first started.
+    this.noteOpening(session.id, this.typedBrief(session));
     return session;
   }
 
@@ -1205,7 +1230,7 @@ export class Hub extends EventEmitter implements AgentApi {
     const opening = [this.typedBrief(session), this.store.getOpeningPrompt(sessionId)]
       .filter((part): part is string => !!part)
       .join('\n\n');
-    if (opening) void this.deliverOpeningInstruction(session.id, opening);
+    this.noteOpening(session.id, opening || null);
     return session;
   }
 
@@ -1821,6 +1846,12 @@ export class Hub extends EventEmitter implements AgentApi {
     // records the failed attempt with its reason, which is what keeps the
     // promise that no message is ever dropped silently.
     if (where === 'local' || where === null) {
+      // Behind the target's opening, if it is still starting. This is the one
+      // place delivery is not immediate, and the exception earns itself: the
+      // alternative is writing into a CLI that is not reading, which is not a
+      // delivery at all.
+      const target = this.sessions.getByAddress(to);
+      if (target) await this.awaitOpened(target.id);
       const r = this.router.send(fromAddr, to, text);
       if (!r.delivered) throw new Error(r.error ?? 'delivery failed');
       return { delivered: true, to, deliveredAt: r.deliveredAt };
@@ -2080,6 +2111,50 @@ export class Hub extends EventEmitter implements AgentApi {
   }
 
   /**
+   * Record how a session opens, and hold every later delivery behind it.
+   *
+   * Registered whether or not there is anything to type: an agent started with
+   * no instruction at all still has a CLI that is not reading yet, and that is
+   * the case issue 27 was reported for. Not awaited by the caller - the window
+   * appears now - but stored, so the first message to arrive waits for the
+   * same moment the instruction would have.
+   */
+  private noteOpening(sessionId: string, opening: string | null): void {
+    const done = opening
+      ? this.deliverOpeningInstruction(sessionId, opening)
+      : this.awaitReady(sessionId).then(() => {});
+    // Failures are the gate opening, not the gate jamming: a session that died
+    // on the way up must not hold its own message log hostage.
+    this.opened.set(
+      sessionId,
+      done.catch(() => {}),
+    );
+  }
+
+  /**
+   * Wait for a local session to be ready to be typed at, but not forever.
+   *
+   * Once resolved the promise stays resolved, so this costs a steady-state
+   * delivery a microtask and nothing else.
+   */
+  private async awaitOpened(sessionId: string): Promise<void> {
+    const gate = this.opened.get(sessionId);
+    if (!gate) return;
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      await Promise.race([
+        gate,
+        new Promise<void>((res) => {
+          timer = setTimeout(res, DELIVERY_WAIT_CAP_MS);
+          timer.unref?.();
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  /**
    * Wait for the CLI to be up, then type. Written straight away the text lands
    * before the program is reading it; the wait is for output to arrive and
    * then stop, which is as close to "it has drawn its prompt" as this gets
@@ -2099,15 +2174,43 @@ export class Hub extends EventEmitter implements AgentApi {
    * taken as answers to it. Such a screen is waited out until it changes.
    */
   private async typeWhenReady(sessionId: string, text: string): Promise<void> {
+    const ready = await this.awaitReady(sessionId);
     const pty = this.sessions.pty(sessionId);
-    if (!pty) return;
+    if (!ready || !pty?.running) return;
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+    const mode = this.profiles.get(session.profile)?.inject ?? 'bracketed';
+    try {
+      // Awaited, so that a caller holding this session's readiness gate is not
+      // released until the Enter is in: a message injected between the paste
+      // and its Enter is folded into the same prompt.
+      await this.sessions.inject(sessionId, encodeInjection(text, mode), INJECT_SUBMIT);
+    } catch {
+      // The agent died between the readiness check and the write; the message
+      // log already reflects that it never started.
+    }
+  }
+
+  /**
+   * Wait until the CLI in a session is up and reading, or give up.
+   *
+   * Split out of `typeWhenReady` because typing is not the only thing that has
+   * to wait for this. A message delivered to an agent whose CLI has not
+   * started reading is written into a program that is not listening: the paste
+   * lands in a composer that is not there yet and the Enter goes nowhere, and
+   * what the sender sees is a delivery that was recorded and never acted on.
+   * See `deliverFrom`.
+   */
+  private async awaitReady(sessionId: string): Promise<boolean> {
+    const pty = this.sessions.pty(sessionId);
+    if (!pty) return false;
     const profile = this.profiles.get(this.sessions.get(sessionId)?.profile ?? '');
     const hint = profile?.askingHint ? new RegExp(profile.askingHint, 'i') : null;
     // A question on screen outlasts any cap: the human answers it when they
     // get to the window, and the instruction is still wanted after that.
     const asking = () => !!hint && hint.test(pty.tailLines(pty.rows));
 
-    const ready = await new Promise<boolean>((res) => {
+    return new Promise<boolean>((res) => {
       let settled = false;
       let seen = false;
       let quiet: NodeJS.Timeout | null = null;
@@ -2136,17 +2239,6 @@ export class Hub extends EventEmitter implements AgentApi {
       pty.on('data', onData);
       pty.on('exit', onExit);
     });
-
-    if (!ready || !pty.running) return;
-    const session = this.sessions.get(sessionId);
-    if (!session) return;
-    const mode = this.profiles.get(session.profile)?.inject ?? 'bracketed';
-    try {
-      this.sessions.inject(sessionId, encodeInjection(text, mode), INJECT_SUBMIT);
-    } catch {
-      // The agent died between the readiness check and the write; the message
-      // log already reflects that it never started.
-    }
   }
 
   async readScreen(sessionId: string, address: string, lines?: number) {
