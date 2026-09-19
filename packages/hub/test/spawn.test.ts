@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import type { Session } from '@termscape/protocol';
 import { Hub } from '../src/hub.js';
 import { removeTree } from './tmp.js';
+import { STAND_IN, standInToml } from './stand-in.js';
 
 /*
  * One agent starting another. The two promises worth pinning down: the child
@@ -43,7 +44,7 @@ beforeEach(() => {
   process.env.TERMSCAPE_HOME = dir;
   // `shell` takes no model on its own command line; this declaration is what
   // makes it able to spell one, which a template with a model needs.
-  writeConfig('[shell]\nmodel_args = ["--model", "{{model}}"]');
+  writeConfig(standInToml() + '[shell]\nmodel_args = ["--model", "{{model}}"]');
   hub = new Hub({ dbPath: join(dir, 'state.db') });
 });
 
@@ -123,7 +124,7 @@ describe('spawn_agent', () => {
     async () => {
       // A prompt without a model: a shell carrying --model would be a session
       // that exits before the readiness wait can ever see it type.
-      hub.saveTemplate({ id: 'reviewer', agent: 'shell', prompt: 'TEMPLATE OPENING' });
+      hub.saveTemplate({ id: 'reviewer', agent: STAND_IN, prompt: 'TEMPLATE OPENING' });
       const ws = hub.createWorkspace('crew2', folder('crew2'));
       const parent = await hub.startSession({ workspaceId: ws.id, profile: 'reviewer' });
 
@@ -140,6 +141,31 @@ describe('spawn_agent', () => {
       expect(count(text, 'TEMPLATE OPENING')).toBe(1);
       expect(count(text, 'run the tests')).toBe(1);
       expect(count(text, '[from ')).toBe(1);
+    },
+    60_000,
+  );
+
+  it(
+    'gives a shell its instruction as a bare command, with no attribution (issue 30)',
+    async () => {
+      const ws = hub.createWorkspace('crew7', folder('crew7'));
+      const parent = await hub.startSession({ workspaceId: ws.id, profile: STAND_IN });
+
+      const out = new Map<string, string>();
+      hub.on('data', (id: string, chunk: string) => out.set(id, (out.get(id) ?? '') + chunk));
+
+      await hub.spawnAgent(parent.id, { profile: 'shell', prompt: 'echo SPAWNED-SHELL' });
+      const child = hub.sessions.list().find((s) => s.spawnedBy === parent.id)!;
+      expect(child.profile).toBe('shell');
+
+      // Typed once and printed once: the shell ran it as a command, which it
+      // could not have with `[from ...]` in front.
+      const deadline = Date.now() + 25_000;
+      while (count(out.get(child.id) ?? '', 'SPAWNED-SHELL') < 2) {
+        if (Date.now() > deadline) throw new Error('timed out waiting for the echo to run');
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      expect(out.get(child.id)).not.toContain('[from ');
     },
     60_000,
   );

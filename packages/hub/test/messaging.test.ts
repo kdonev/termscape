@@ -9,10 +9,11 @@ import { Hub } from '../src/hub.js';
 import { serve } from '../src/server.js';
 import { DEFAULT_WINDOW } from '../src/db/store.js';
 import { removeTree } from './tmp.js';
+import { declareStandIn, STAND_IN } from './stand-in.js';
 
 /**
  * End-to-end proof of the core idea, with no LLM in the loop: two real PTYs
- * running plain shells, an agent calling the hub's MCP endpoint, and the
+ * running shells - the target one standing in for an agent - an agent calling the hub's MCP endpoint, and the
  * message landing as typed input in the other terminal.
  */
 
@@ -62,6 +63,7 @@ function parseResult(res: any): any {
 beforeAll(async () => {
   home = mkdtempSync(join(tmpdir(), 'termscape-home-'));
   process.env.TERMSCAPE_HOME = home;
+  declareStandIn(home);
 
   hub = new Hub({ dbPath: join(home, 'state.db') });
   hub.on('data', (id: string, chunk: string) => {
@@ -277,7 +279,7 @@ describe('the status hook endpoint', () => {
 describe('agent-to-agent messaging', () => {
   it('delivers a message as typed input in the target terminal', async () => {
     const a = await hub.startSession({ workspaceId, profile: 'shell', name: 'alpha' });
-    const b = await hub.startSession({ workspaceId, profile: 'shell', name: 'beta' });
+    const b = await hub.startSession({ workspaceId, profile: STAND_IN, name: 'beta' });
 
     // Wait for both shells to actually be up and printing.
     await waitFor(() => (output.get(a.id)?.length ?? 0) > 0, 15_000, 'alpha to boot');
@@ -418,7 +420,7 @@ describe('spawning', () => {
 describe('polling guidance (issue #10)', () => {
   it('attaches a note to read_screen once the same screen has been read three times', async () => {
     const c = await hub.startSession({ workspaceId, profile: 'shell', name: 'gamma' });
-    const d = await hub.startSession({ workspaceId, profile: 'shell', name: 'delta' });
+    const d = await hub.startSession({ workspaceId, profile: STAND_IN, name: 'delta' });
     await waitFor(() => (output.get(c.id)?.length ?? 0) > 0, 15_000, 'gamma to boot');
     await waitFor(() => (output.get(d.id)?.length ?? 0) > 0, 15_000, 'delta to boot');
 
@@ -449,6 +451,44 @@ describe('polling guidance (issue #10)', () => {
     // A question is genuinely outstanding here, so the wording names it
     // rather than giving the generic "you have read this screen" line.
     expect(third.note).toMatch(/asked testws\/delta something/);
+
+    await client.close();
+  });
+
+  it('sends to a shell as a bare command, and points at read_screen (issue 30)', async () => {
+    const a = hub.sessions.getByAddress('testws/alpha')!;
+    const sh = await hub.startSession({ workspaceId, profile: 'shell', name: 'epsilon' });
+    await waitFor(() => (output.get(sh.id)?.length ?? 0) > 0, 15_000, 'epsilon to boot');
+
+    const client = await mcpClient(a.id);
+    const marker = `SHELL_${Date.now()}`;
+    const sent = parseResult(
+      await client.callTool({
+        name: 'send_message',
+        arguments: { to: 'testws/epsilon', text: `echo ${marker}` },
+      }),
+    );
+    expect(sent.delivered).toBe(true);
+    expect(sent.note).toMatch(/is a shell/);
+    expect(sent.note).toMatch(/read_screen/);
+
+    // Typed once as the command line and printed once by it: the shell ran it,
+    // which it could not have with `[from ...]` in front.
+    await waitFor(
+      () => (output.get(sh.id) ?? '').split(marker).length - 1 >= 2,
+      15_000,
+      'the echo to run',
+    );
+    expect(output.get(sh.id)).not.toContain('[from ');
+
+    // Reading a shell's screen is how its output is seen, not polling for a
+    // reply, so repeated reads earn no note.
+    for (let i = 0; i < 4; i++) {
+      const r = parseResult(
+        await client.callTool({ name: 'read_screen', arguments: { address: 'testws/epsilon' } }),
+      );
+      expect(r.note).toBeUndefined();
+    }
 
     await client.close();
   });

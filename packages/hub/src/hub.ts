@@ -24,7 +24,7 @@ import {
 } from '@termscape/protocol';
 import { openDb, type Db } from './db/index.js';
 import { Store } from './db/store.js';
-import { briefMode, ProfileRegistry } from './agents/profiles.js';
+import { briefMode, isPlainTerminal, ProfileRegistry } from './agents/profiles.js';
 import { AgentDetector } from './agents/detect.js';
 import {
   TemplateRegistry,
@@ -371,6 +371,21 @@ export class Hub extends EventEmitter implements AgentApi {
       this.peers.find(address)?.session ??
       this.uplink?.agents().find((a) => a.address === address);
     return found ? { address, parentAddress: found.parentAddress ?? null } : null;
+  }
+
+  /**
+   * Whether the window at `address` is a shell rather than an agent, as far
+   * as this hub can tell. Profiles are judged against this hub's own
+   * registry, which holds every built-in one; a custom profile only another
+   * machine declares reads as an agent, which is what it was before.
+   */
+  private isShellAt(address: string): boolean {
+    const profile =
+      this.sessions.getByAddress(address)?.profile ??
+      this.peers.find(address)?.session.profile ??
+      this.uplink?.agents().find((a) => a.address === address)?.profile;
+    const p = profile ? this.profiles.get(profile) : null;
+    return p ? isPlainTerminal(p) : false;
   }
 
   /**
@@ -1771,6 +1786,17 @@ export class Hub extends EventEmitter implements AgentApi {
     if (me.address === to) throw new Error('cannot send a message to yourself');
     this.requireVisible(me, to);
     const result = await this.deliverFrom(me.address, to, text);
+    // A shell never answers: what it prints stays on its own screen, and
+    // reading that screen is the only way to see it - not polling (issue 30).
+    if (this.isShellAt(to)) {
+      return {
+        ...result,
+        note:
+          `${to} is a shell, not an agent: your text was run there as a command, ` +
+          'without a [from ...] prefix, and nothing will be sent back to you. Call ' +
+          'read_screen on it to see the output.',
+      };
+    }
     // Only a successful send counts as a question asked - deliverFrom throws
     // on failure, so a message that never arrived does not excuse polling.
     this.pollWatch.noteMessage(me.address, to);
@@ -1970,7 +1996,13 @@ export class Hub extends EventEmitter implements AgentApi {
      * gets there.
      */
     const picked = await this.pickSpawnTemplate(me, opts.profile);
-    const instruction = opts.prompt ? `[from ${me.address}] ${opts.prompt}` : null;
+    // Attributed, except in a shell, which would run the prefix (issue 30).
+    const childProfile = this.profiles.get(picked.agent);
+    const instruction = !opts.prompt
+      ? null
+      : childProfile && isPlainTerminal(childProfile)
+        ? opts.prompt
+        : `[from ${me.address}] ${opts.prompt}`;
     const opening = [picked.prompt, instruction].filter(Boolean).join('\n\n') || undefined;
 
     // A `host` naming something beyond this hub's own machine has to go up
@@ -2319,6 +2351,8 @@ export class Hub extends EventEmitter implements AgentApi {
     // readScreenAt: that path also serves peers asking on this hub's behalf
     // for a caller it never authenticated, and the count belongs to the
     // caller's own hub.
+    // Not for a shell: watching its screen is how its output is read at all.
+    if (this.isShellAt(address)) return result;
     const note = this.pollWatch.noteRead(me.address, address);
     return note ? { ...(result as Record<string, unknown>), note } : result;
   }

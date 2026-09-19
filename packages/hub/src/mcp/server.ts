@@ -132,7 +132,9 @@ export function buildMcpServer(callerSessionId: string, api: AgentApi): McpServe
         'waiting. Messages travel the same way in both directions: one sent to you is ' +
         'typed into your terminal and starts a turn, whether you were idle or not. So ' +
         'when you need an answer, ask for one in the text and then stop — end your turn. ' +
-        'You cannot miss a reply by not watching for it.',
+        'You cannot miss a reply by not watching for it. A shell is the exception (profile ' +
+        '`shell` or `powershell` in list_agents): the text is run there as a command, with ' +
+        'no prefix, and nothing is sent back — call read_screen on it to see the output.',
       inputSchema: SendMessageInput.shape,
     },
     ({ to, text }) => guard(() => api.sendMessage(callerSessionId, to, text)),
@@ -175,7 +177,8 @@ export function buildMcpServer(callerSessionId: string, api: AgentApi): McpServe
         'reply is typed into your terminal and starts your next turn, so stop and let it ' +
         'arrive rather than watching for it. Calling this repeatedly on the same agent ' +
         'tells you nothing `list_agents` would not, and that answers idle or busy in one ' +
-        'call.',
+        'call. A shell is different: it never replies, so after send_message runs a ' +
+        'command in one, reading its screen is how you see what it printed.',
       inputSchema: ReadScreenInput.shape,
     },
     ({ address, lines }) => guard(() => api.readScreen(callerSessionId, address, lines)),

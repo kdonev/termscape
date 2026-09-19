@@ -25,6 +25,7 @@ import {
   resolveBindHost,
 } from '../src/remote/lan.js';
 import { removeTree } from './tmp.js';
+import { declareStandIn, STAND_IN } from './stand-in.js';
 
 /**
  * Enrollment: a machine fetches the installer, runs it, and dials in.
@@ -77,6 +78,8 @@ beforeAll(async () => {
   homeB = mkdtempSync(join(tmpdir(), 'termscape-enroll-B-'));
   tokenFileB = join(homeB, 'host-token');
   process.env.TERMSCAPE_HOME = homeA;
+  // Both hubs load it: the environment is homeA's while each is built.
+  declareStandIn(homeA);
 
   hubA = new Hub({ dbPath: join(homeA, 'state.db') });
   servedA = await serve({ hub: hubA, port: 0, clientToken: 'client-token-a', headless: true });
@@ -689,7 +692,7 @@ describe('running agents on an enrolled host', () => {
 
     const session = await hubA.startSession({
       workspaceId: ws.id,
-      profile: 'shell',
+      profile: STAND_IN,
       name: 'worker',
     });
     expect(session.address).toBe('joinedws/worker');

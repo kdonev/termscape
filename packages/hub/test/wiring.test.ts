@@ -63,6 +63,15 @@ const varsFor = (w: ReturnType<typeof wire>) => ({
   token: TOKEN,
 });
 
+describe('the wired brief', () => {
+  it('says a shell runs what it is sent, and to read its screen (issue 30)', () => {
+    const brief = readFileSync(wire().briefPath, 'utf8');
+    expect(brief).toContain('## Sending to a shell');
+    expect(brief).toMatch(/run as\s+a command/);
+    expect(brief).toMatch(/Call\s+`read_screen`/);
+  });
+});
+
 describe('codex', () => {
   const codex = BUILTIN_PROFILES.codex!;
 

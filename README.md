@@ -216,6 +216,11 @@ back into the agent's terminal. Nothing is stored unless someone says yes.
 Every agent is also given a brief explaining its address, its peers, and that
 text arriving as `[from <address>] ...` is a colleague rather than the human.
 
+A shell window (`shell`, `powershell`, or any profile that gets no brief) is
+not an agent, and a message sent to one is a command: it is typed without the
+`[from <address>]` prefix, which the shell would otherwise try to run. A shell
+never replies, so the sender is told to read its screen for the output.
+
 ## Agent profiles
 
 An agent CLI is configuration, not code. Built-ins are `claude`, `codex`,
@@ -434,7 +439,8 @@ could be talked into sending an attacker's text to a peer.
 - Every agent gets its own bearer token. The sender of a message is taken from
   that token, never from the arguments, so attribution cannot be forged.
 - Messages are length-capped, rate-limited per sender, and always arrive with a
-  visible `[from <address>]` prefix.
+  visible `[from <address>]` prefix - except in a shell, where they arrive as
+  the bare command and are still recorded, sender included, in the message log.
 - Every delivery attempt is recorded with its outcome and shown in the message
   log. Nothing is delivered invisibly.
 - `spawn_agent` is capped per workspace, so a confused agent cannot recurse the

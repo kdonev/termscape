@@ -11,6 +11,7 @@ import { BinaryFrameKind, encodeBinaryFrame, type Host } from '@termscape/protoc
 import { Hub, HUB_VERSION } from '../src/hub.js';
 import { serve } from '../src/server.js';
 import { removeTree } from './tmp.js';
+import { declareStandIn, STAND_IN } from './stand-in.js';
 
 /**
  * Cross-host behaviour without SSH.
@@ -80,6 +81,8 @@ beforeAll(async () => {
   homeA = mkdtempSync(join(tmpdir(), 'termscape-A-'));
   homeB = mkdtempSync(join(tmpdir(), 'termscape-B-'));
   process.env.TERMSCAPE_HOME = homeA;
+  // Both hubs load it: the environment is homeA's while each is built.
+  declareStandIn(homeA);
 
   // Hub B stands in for the remote machine.
   hubB = new Hub({ dbPath: join(homeB, 'state.db') });
@@ -148,7 +151,7 @@ describe('peer link', () => {
   });
 
   it('surfaces the peer\'s sessions in the local directory', async () => {
-    await hubB.startSession({ workspaceId: wsB, profile: 'shell', name: 'worker' });
+    await hubB.startSession({ workspaceId: wsB, profile: STAND_IN, name: 'worker' });
     await waitFor(
       () => hubA.peers.sessions().some((s) => s.address === 'remotews/worker'),
       15_000,
@@ -399,8 +402,8 @@ describe('remote window removal', () => {
  */
 describe('an agent on an attached machine', () => {
   it('sees the agents on the machine that owns the canvas', async () => {
-    const here = await hubA.startSession({ workspaceId: wsA, profile: 'shell', name: 'here' });
-    const there = await hubB.startSession({ workspaceId: wsB, profile: 'shell', name: 'there' });
+    const here = await hubA.startSession({ workspaceId: wsA, profile: STAND_IN, name: 'here' });
+    const there = await hubB.startSession({ workspaceId: wsB, profile: STAND_IN, name: 'there' });
 
     await waitForAsync(
       async () => (await hubB.listAgents(there.id)).some((a) => a.address === here.address),

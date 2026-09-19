@@ -387,7 +387,8 @@ always \`workspace/name\`, and every one of them appears in
   attached to it, with their workspaces and the agent CLIs each has
   installed. Call this before passing \`host\` to \`spawn_agent\`.
 - \`send_message\` — send text to another agent. It is typed directly into
-  their terminal, as if a user had pasted it.
+  their terminal, as if a user had pasted it. Sent to a shell, it runs as a
+  command: see "Sending to a shell" below.
 - \`list_templates\` — the saved ways of starting an agent: what CLI each one
   runs, on what model, with what opening instruction. A template id is what
   \`spawn_agent\` takes as its \`profile\`.
@@ -446,6 +447,15 @@ Do not loop on \`read_screen\` to watch the other agent work. It shows you a
 half-typed answer at best, delivers nothing, and the wait does not end any
 sooner for having been watched. If you only want to know whether someone is
 still going, \`list_agents\` says idle or busy in one call.
+
+## Sending to a shell
+
+Some windows on the canvas are plain shells, not agents — \`list_agents\`
+shows their profile as \`shell\` or \`powershell\`. What you send one is run as
+a command, exactly as written, with no \`[from ...]\` prefix, so send only the
+command. A shell never replies: its output stays on its own screen. Call
+\`read_screen\` on it to see what the command printed, and again if it was
+still running.
 `;
 }
 

@@ -9,12 +9,14 @@ import {
 import { debug } from '../debug.js';
 import type { Store } from '../db/store.js';
 import type { SessionManager } from '../session/manager.js';
-import type { ProfileRegistry } from './profiles.js';
+import { isPlainTerminal, type ProfileRegistry } from './profiles.js';
 
 export interface DeliveryResult {
   delivered: boolean;
   deliveredAt: number | null;
   error?: string;
+  /** The target is a shell: the text went in as a command, unattributed. */
+  shell?: boolean;
 }
 
 /** Simple fixed-window counter, per sender address. */
@@ -105,18 +107,24 @@ export class MessageRouter {
 
     const profile = this.profiles.get(target.profile);
     const mode = profile?.inject ?? 'bracketed';
+    const shell = profile ? isPlainTerminal(profile) : false;
 
     try {
-      debug('deliver', `message ${id} typing into session ${target.id} (${toAddr}), inject ${mode}`);
+      debug(
+        'deliver',
+        `message ${id} typing into session ${target.id} (${toAddr}), inject ${mode}` +
+          (shell ? ', as a shell command' : ''),
+      );
       // Attribution comes from the hub's own record of who is calling, never
-      // from the sender's arguments, so it cannot be spoofed.
+      // from the sender's arguments, so it cannot be spoofed. Not for a shell,
+      // though: it would run `[from ...]` as part of the command line.
       this.sessions.inject(
         target.id,
-        encodeInjection(formatMessage(fromAddr, body), mode),
+        encodeInjection(shell ? body : formatMessage(fromAddr, body), mode),
         INJECT_SUBMIT,
       );
       pty.markBusy();
-      return record('delivered');
+      return { ...record('delivered'), shell };
     } catch (err) {
       return record('failed', (err as Error).message);
     }

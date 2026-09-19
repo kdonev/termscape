@@ -544,6 +544,19 @@ export function briefMode(p: AgentProfile): 'flag' | 'typed' | 'none' {
   return p.brief ?? (p.mcp ? 'flag' : 'none');
 }
 
+/**
+ * Whether this profile runs a plain terminal - a shell - rather than an agent.
+ *
+ * The same test as "gets no brief", and for the same reason: nothing in the
+ * window was ever told what a `[from ...]` line is. A shell does not read text
+ * typed at it, it runs it, so what is sent there is a command and is sent as
+ * one, with no attribution in front of it (issue 30). And it never answers:
+ * its output stays on its own screen, where `read_screen` is how to see it.
+ */
+export function isPlainTerminal(p: AgentProfile): boolean {
+  return briefMode(p) === 'none';
+}
+
 export class ProfileRegistry {
   private profiles: Record<string, AgentProfile>;
 
