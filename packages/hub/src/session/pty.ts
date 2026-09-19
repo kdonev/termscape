@@ -104,6 +104,18 @@ const SUBMIT_CONFIRM_MS = 4000;
 const SUBMIT_RETRIES = 2;
 
 /**
+ * How long a session whose hooks have not reported yet is waited on before the
+ * Enter it may be owed is given up on.
+ *
+ * A first instruction goes in before any hook has spoken, and Claude Code's
+ * SessionStart can come late: on kid7, straight after an update, it arrived
+ * more than four seconds after the paste - after the one check there was, and
+ * so the Enter it had swallowed was never sent again. Matches the hub's cap on
+ * waiting for a CLI to be ready at all.
+ */
+const SUBMIT_HOOK_WAIT_MS = 20_000;
+
+/**
  * One PTY plus a headless xterm that mirrors it.
  *
  * The headless terminal earns its keep twice: it produces the serialized
@@ -295,6 +307,7 @@ export class PtySession extends EventEmitter {
    */
   noteHook(s: AgentStatus, turnEnded = s === 'idle'): void {
     this.hooksSeen = true;
+    const confirming = this.confirmTimer !== null;
     if (s === 'busy') {
       this.atPrompt = false;
       // The prompt was taken; there is nothing left to press Enter for.
@@ -302,8 +315,19 @@ export class PtySession extends EventEmitter {
     } else if (turnEnded) {
       this.atPrompt = true;
     }
+    debug(
+      'deliver',
+      `${this.id} hook ${s}${turnEnded ? ' (turn ended)' : ''}: atPrompt=${this.atPrompt}` +
+        (confirming && s === 'busy' ? ', prompt taken - no second Enter needed' : ''),
+    );
     this.clearIdleTimer();
     this.setStatus(s);
+    this.emit('hook', s);
+  }
+
+  /** Whether the agent has reported anything through its hooks yet. */
+  get hooksReported(): boolean {
+    return this.hooksSeen;
   }
 
   setStatus(s: AgentStatus): void {
@@ -388,11 +412,23 @@ export class PtySession extends EventEmitter {
    * apart they were written, and folds the one into the other. That is how a
    * message could still sit unsent in an agent's composer on a slower machine
    * across the canvas. See awaitSubmit.
+   *
+   * That includes a session whose hooks have not reported anything yet, which
+   * is every agent receiving its first instruction. Its SessionStart hook is
+   * what says it is at its prompt, and on a slow machine that hook can land
+   * after the paste - so whether an Enter is owed is decided when the check
+   * comes due, not now. See issue 29, where the first instruction sat unsent.
    */
   inject(paste: string, submit: string): Promise<void> {
     // Read before anything is written: whoever delivered this marks the
     // session busy straight after, and that is not the agent speaking.
-    const confirmable = this.statusMode === 'hooks' && this.atPrompt;
+    const confirmable = this.statusMode === 'hooks' && (this.atPrompt || !this.hooksSeen);
+    debug(
+      'deliver',
+      `${this.id} paste ${paste.length} chars (status ${this.statusMode}, atPrompt=${this.atPrompt}, ` +
+        `hooksSeen=${this.hooksSeen}) -> Enter retry ${confirmable ? 'armed' : 'not armed'}` +
+        `${this.submitTimer ? '; replaces an Enter still pending for the previous message' : ''}`,
+    );
     this.write(paste);
     this.settleSubmit();
     this.clearConfirmTimer();
@@ -403,18 +439,23 @@ export class PtySession extends EventEmitter {
       // caller who waits is the gate every delivery to this session queues
       // behind.
       this.submitResolve = resolve;
+      const pastedAt = Date.now();
       const tick = (): void => {
         this.submitTimer = null;
-        if (this.disposed || !this.proc) return this.settleSubmit();
+        if (this.disposed || !this.proc) {
+          debug('deliver', `${this.id} exited before its Enter; nothing submitted`);
+          return this.settleSubmit();
+        }
         if (this.writeQueue.length > 0) return arm();
         try {
           this.write(submit);
+          debug('deliver', `${this.id} Enter sent, ${Date.now() - pastedAt}ms after the paste began`);
         } catch {
           // It exited between the paste and the Enter. The message log already
           // records the delivery; there is nothing left to submit it to.
           return this.settleSubmit();
         }
-        if (confirmable) this.awaitSubmit(submit, SUBMIT_RETRIES);
+        if (confirmable) this.awaitSubmit(submit, SUBMIT_RETRIES, Date.now());
         this.settleSubmit();
       };
       const arm = (): void => {
@@ -437,26 +478,63 @@ export class PtySession extends EventEmitter {
   /**
    * Press Enter again if the agent does not report the prompt it was sent.
    *
-   * Only ever armed for an agent whose hooks have shown they work and that
+   * Only ever acted on for an agent whose hooks have shown they work and that
    * was sitting at its prompt when the message went in - so a prompt hook is
-   * owed, and its absence means the Enter was swallowed. Not while it is mid-
+   * owed, and its absence means the Enter was swallowed. A fresh session is
+   * armed before its hooks have said anything; if they never do, `atPrompt`
+   * stays false and nothing is pressed. Not while it is mid-
    * turn, when a CLI queues the message and reports nothing yet, and not while
    * it waits on a permission prompt, where an Enter is an answer. A spare
    * Enter that crosses a slow hook lands in an empty composer, which submits
    * nothing.
+   *
+   * A session whose hooks have not spoken yet is waited on, up to
+   * SUBMIT_HOOK_WAIT_MS from the paste: its SessionStart may simply be late.
+   * Once it arrives, the agent gets a full confirmation window from then on,
+   * so a prompt it did take has the time to say so.
    */
-  private awaitSubmit(submit: string, retries: number): void {
+  private awaitSubmit(submit: string, retries: number, pastedAt: number, delay = SUBMIT_CONFIRM_MS): void {
     if (retries <= 0) return;
+    const hooksAtArm = this.hooksSeen;
     this.confirmTimer = setTimeout(() => {
       this.confirmTimer = null;
-      if (this.disposed || !this.proc || !this.atPrompt) return;
+      if (this.disposed || !this.proc) return;
+      if (!this.hooksSeen) {
+        if (Date.now() - pastedAt < SUBMIT_HOOK_WAIT_MS) {
+          // Checked often, so a late SessionStart is acted on promptly.
+          this.awaitSubmit(submit, retries, pastedAt, 500);
+          return;
+        }
+        debug(
+          'deliver',
+          `${this.id} its hooks never reported in ${SUBMIT_HOOK_WAIT_MS}ms; no Enter retry`,
+        );
+        return;
+      }
+      if (!hooksAtArm) {
+        debug('deliver', `${this.id} its hooks have now reported; waiting ${SUBMIT_CONFIRM_MS}ms for the prompt`);
+        this.awaitSubmit(submit, retries, pastedAt);
+        return;
+      }
+      if (!this.atPrompt) {
+        // The last report was not a turn end: mid-turn, or a question.
+        debug(
+          'deliver',
+          `${this.id} no prompt report in ${SUBMIT_CONFIRM_MS}ms, but not at its prompt; no Enter retry`,
+        );
+        return;
+      }
       try {
         this.write(submit);
       } catch {
         return;
       }
-      this.awaitSubmit(submit, retries - 1);
-    }, SUBMIT_CONFIRM_MS);
+      debug(
+        'deliver',
+        `${this.id} no prompt report in ${SUBMIT_CONFIRM_MS}ms; Enter sent again (${retries - 1} retries left)`,
+      );
+      this.awaitSubmit(submit, retries - 1, pastedAt);
+    }, delay);
     this.confirmTimer.unref?.();
   }
 

@@ -6,6 +6,7 @@ import {
   MESSAGE_RATE_LIMIT,
   type Message,
 } from '@termscape/protocol';
+import { debug } from '../debug.js';
 import type { Store } from '../db/store.js';
 import type { SessionManager } from '../session/manager.js';
 import type { ProfileRegistry } from './profiles.js';
@@ -77,6 +78,11 @@ export class MessageRouter {
       };
       this.store.insertMessage(m);
       this.onMessage(m);
+      debug(
+        'deliver',
+        `message ${id} ${fromAddr} -> ${toAddr} (${body.length} chars): ${state}` +
+          (error ? ` - ${error}` : ''),
+      );
       return { delivered: state === 'delivered', deliveredAt: m.deliveredAt, error };
     };
 
@@ -101,6 +107,7 @@ export class MessageRouter {
     const mode = profile?.inject ?? 'bracketed';
 
     try {
+      debug('deliver', `message ${id} typing into session ${target.id} (${toAddr}), inject ${mode}`);
       // Attribution comes from the hub's own record of who is calling, never
       // from the sender's arguments, so it cannot be spoofed.
       this.sessions.inject(

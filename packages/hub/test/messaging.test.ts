@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeAll, afterAll } from 'vitest';
+import { describe, expect, it, beforeAll, afterAll, vi } from 'vitest';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -110,6 +110,27 @@ describe('the status hook endpoint', () => {
         body,
       });
       expect({ headers, status: res.status }).toEqual({ headers, status: 200 });
+    }
+  });
+
+  it('reads each event as the turn boundary it is', async () => {
+    // `start` is SessionStart: at its prompt with no turn behind it, which the
+    // hub has to treat as a turn end, or a first instruction is never held to
+    // a prompt report. See PtySession.inject.
+    const token = hub.tokens.mint('hook-events-test');
+    const seen = vi.spyOn(hub.sessions, 'setStatusFromHook').mockImplementation(() => {});
+    try {
+      for (const event of ['busy', 'idle', 'waiting', 'start']) {
+        await fetch(`${origin}/hook/${token}?event=${event}`, { method: 'POST' });
+      }
+      expect(seen.mock.calls).toEqual([
+        ['hook-events-test', 'busy', false],
+        ['hook-events-test', 'idle', true],
+        ['hook-events-test', 'idle', false],
+        ['hook-events-test', 'idle', true],
+      ]);
+    } finally {
+      seen.mockRestore();
     }
   });
 

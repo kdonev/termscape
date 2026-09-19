@@ -168,12 +168,15 @@ export async function serve(opts: ServeOptions): Promise<ServeResult> {
     // just means there is nothing new to remember this turn.
     hub.sessions.noteAgentSessionId(sessionId, req.query.sid ?? req.body?.session_id);
     // `waiting` is a question put to the human mid-turn: idle to look at, but
-    // the turn has not ended.
+    // the turn has not ended. `start` is a session starting at its prompt,
+    // which is a turn end in all but name; it is named apart for the trace.
     const event = req.query.event;
+    const atPrompt = event === 'idle' || event === 'start';
+    debug('deliver', `${sessionId} hook event=${event ?? '(none)'}`);
     hub.sessions.setStatusFromHook(
       sessionId,
-      event === 'idle' || event === 'waiting' ? 'idle' : 'busy',
-      event === 'idle',
+      atPrompt || event === 'waiting' ? 'idle' : 'busy',
+      atPrompt,
     );
     return { ok: true };
   });

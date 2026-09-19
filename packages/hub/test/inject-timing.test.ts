@@ -245,4 +245,50 @@ describe('an Enter the agent never reports', () => {
 
     expect(enters(rec)).toBe(1);
   }, 20_000);
+
+  /*
+   * A first instruction goes in before the agent has finished any turn, so no
+   * Stop hook has said it is at its prompt. Its SessionStart hook says so, and
+   * on a slow machine that report can arrive after the paste has gone in -
+   * which is how an opening instruction sat unsent on kid7 (issue 29).
+   */
+  it('is sent again for a first instruction, once the session says it started', async () => {
+    const rec = startRecorder('hooks');
+    await ready(rec);
+
+    rec.pty.inject(encodeInjection('first instruction', 'bracketed'), INJECT_SUBMIT);
+    await waitFor(() => enters(rec) >= 1, 5000);
+    // SessionStart, as late as it came on kid7: after the first check was due.
+    await new Promise((r) => setTimeout(r, 5000));
+    expect(enters(rec)).toBe(1);
+    rec.pty.noteHook('idle');
+
+    expect(await waitFor(() => enters(rec) >= 2, 6000)).toBe(true);
+  }, 25_000);
+
+  it('is not, for a first instruction the agent took once it started', async () => {
+    const rec = startRecorder('hooks');
+    await ready(rec);
+
+    rec.pty.inject(encodeInjection('first instruction', 'bracketed'), INJECT_SUBMIT);
+    await waitFor(() => enters(rec) >= 1, 5000);
+    await new Promise((r) => setTimeout(r, 5000));
+    // Late SessionStart, then the prompt report it owed.
+    rec.pty.noteHook('idle');
+    rec.pty.noteHook('busy');
+    await new Promise((r) => setTimeout(r, 6000));
+
+    expect(enters(rec)).toBe(1);
+  }, 25_000);
+
+  it('is not, for a first instruction to an agent whose hooks never report', async () => {
+    const rec = startRecorder('hooks');
+    await ready(rec);
+
+    rec.pty.inject(encodeInjection('first instruction', 'bracketed'), INJECT_SUBMIT);
+    await waitFor(() => enters(rec) >= 1, 5000);
+    await new Promise((r) => setTimeout(r, 5000));
+
+    expect(enters(rec)).toBe(1);
+  }, 20_000);
 });

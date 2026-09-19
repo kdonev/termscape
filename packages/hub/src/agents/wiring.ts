@@ -232,6 +232,11 @@ function writeWiredFiles(
                 { hooks: [{ type: 'command', command: hookCmd('waiting') }] },
               ],
               Stop: [{ hooks: [{ type: 'command', command: hookCmd('idle') }] }],
+              // A fresh start, a resume or a /clear: at its prompt, with no
+              // turn behind it for Stop to have reported. Without this the hub
+              // cannot tell whether a first instruction was taken, and presses
+              // no second Enter for one that was not.
+              SessionStart: [{ hooks: [{ type: 'command', command: hookCmd('start') }] }],
             },
           }
         : {},

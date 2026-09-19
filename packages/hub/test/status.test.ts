@@ -164,12 +164,15 @@ describe('the hooks an agent is wired with', () => {
     // typed in by a peer - still reaches a tool call, which is what keeps a
     // busy window from reading as idle.
     expect(Object.keys(hooks).sort()).toEqual(
-      ['Notification', 'PreToolUse', 'Stop', 'UserPromptSubmit'].sort(),
+      ['Notification', 'PreToolUse', 'SessionStart', 'Stop', 'UserPromptSubmit'].sort(),
     );
     const command = (event: string) => JSON.stringify(hooks[event]);
     expect(command('UserPromptSubmit')).toContain('event=busy');
     expect(command('PreToolUse')).toContain('event=busy');
     expect(command('Stop')).toContain('event=idle');
+    // At its prompt from the start, so a first instruction can be held to a
+    // UserPromptSubmit like any other message.
+    expect(command('SessionStart')).toContain('event=start');
     // Waiting on a permission prompt is waiting on the human, but it is not
     // the end of a turn, and the hub has to be able to tell the two apart.
     expect(command('Notification')).toContain('event=waiting');

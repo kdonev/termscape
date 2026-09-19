@@ -43,6 +43,7 @@ import { PeerRegistry } from './remote/registry.js';
 import { SPAWN_RELAY_TIMEOUT_MS, type Uplink } from './remote/peer-serve.js';
 import { deploy, type DeployResult } from './remote/deployer.js';
 import { hubTarballPath } from './remote/tarball.js';
+import { debug } from './debug.js';
 import { paths } from './paths.js';
 import { checkFolder, folderName } from './folders.js';
 
@@ -1851,7 +1852,14 @@ export class Hub extends EventEmitter implements AgentApi {
       // alternative is writing into a CLI that is not reading, which is not a
       // delivery at all.
       const target = this.sessions.getByAddress(to);
-      if (target) await this.awaitOpened(target.id);
+      if (target) {
+        const t0 = Date.now();
+        await this.awaitOpened(target.id);
+        const waited = Date.now() - t0;
+        if (waited > 50) {
+          debug('deliver', `${fromAddr} -> ${to}: held ${waited}ms behind the agent's opening`);
+        }
+      }
       const r = this.router.send(fromAddr, to, text);
       if (!r.delivered) throw new Error(r.error ?? 'delivery failed');
       return { delivered: true, to, deliveredAt: r.deliveredAt };
@@ -1862,6 +1870,13 @@ export class Hub extends EventEmitter implements AgentApi {
     // complete on this side too.
     const id = randomUUID();
     const sentAt = Date.now();
+    debug(
+      'deliver',
+      `message ${id} ${fromAddr} -> ${to} (${text.length} chars): ` +
+        (where === 'remote'
+          ? `to the attached machine ${this.peers.hostIdFor(to) ?? '?'}, which types it`
+          : 'up to the canvas, which routes it'),
+    );
     try {
       if (where === 'remote') await this.peers.deliver(fromAddr, to, text);
       // Only the canvas knows where every address lives, so an attached hub
@@ -1873,8 +1888,10 @@ export class Hub extends EventEmitter implements AgentApi {
       };
       this.store.insertMessage(m);
       this.emit('message', m);
+      debug('deliver', `message ${id}: accepted after ${Date.now() - sentAt}ms`);
       return { delivered: true, to, deliveredAt: m.deliveredAt };
     } catch (err) {
+      debug('deliver', `message ${id}: failed - ${(err as Error).message}`);
       const m: Message = {
         id, fromAddr, toAddr: to, body: text,
         sentAt, deliveredAt: null, deliveryState: 'failed',
@@ -2174,12 +2191,22 @@ export class Hub extends EventEmitter implements AgentApi {
    * taken as answers to it. Such a screen is waited out until it changes.
    */
   private async typeWhenReady(sessionId: string, text: string): Promise<void> {
+    const t0 = Date.now();
+    debug('deliver', `${sessionId} first instruction (${text.length} chars): waiting for the CLI`);
     const ready = await this.awaitReady(sessionId);
     const pty = this.sessions.pty(sessionId);
-    if (!ready || !pty?.running) return;
+    if (!ready || !pty?.running) {
+      debug(
+        'deliver',
+        `${sessionId} first instruction dropped after ${Date.now() - t0}ms: ` +
+          (pty?.running ? 'the CLI never drew anything' : 'the CLI exited'),
+      );
+      return;
+    }
     const session = this.sessions.get(sessionId);
     if (!session) return;
     const mode = this.profiles.get(session.profile)?.inject ?? 'bracketed';
+    debug('deliver', `${sessionId} first instruction: CLI ready after ${Date.now() - t0}ms, typing it`);
     try {
       // Awaited, so that a caller holding this session's readiness gate is not
       // released until the Enter is in: a message injected between the paste
@@ -2209,10 +2236,22 @@ export class Hub extends EventEmitter implements AgentApi {
     // A question on screen outlasts any cap: the human answers it when they
     // get to the window, and the instruction is still wanted after that.
     const asking = () => !!hint && hint.test(pty.tailLines(pty.rows));
+    /*
+     * Quiet is not enough for an agent that reports through hooks. On kid7,
+     * starting straight after an update, Claude Code had drawn its prompt and
+     * gone quiet five seconds in - and was not reading yet: the instruction
+     * typed then lost its Enter, and SessionStart only arrived after the paste.
+     * Its first hook is the agent saying it is up, so for such an agent that
+     * is what readiness waits for, on top of the quiet. The cap still applies,
+     * so an agent whose hooks never run is not held forever.
+     */
+    const wantsHook = !!profile?.mcp && profile.status === 'hooks';
+    const hooked = () => !wantsHook || pty.hooksReported;
 
     return new Promise<boolean>((res) => {
       let settled = false;
       let seen = false;
+      let isQuiet = false;
       let quiet: NodeJS.Timeout | null = null;
       const done = (v: boolean) => {
         if (settled) return;
@@ -2221,23 +2260,53 @@ export class Hub extends EventEmitter implements AgentApi {
         if (quiet) clearTimeout(quiet);
         pty.off('data', onData);
         pty.off('exit', onExit);
+        pty.off('hook', onHook);
         res(v);
+      };
+      const settle = () => {
+        if (asking()) {
+          debug('deliver', `${sessionId} quiet, but a question is on screen; still waiting`);
+          return;
+        }
+        if (!hooked()) {
+          debug('deliver', `${sessionId} quiet, but its hooks have not reported yet; still waiting`);
+          return;
+        }
+        debug('deliver', `${sessionId} ready: no output for ${OPENING_QUIET_MS}ms, hooks reported`);
+        done(true);
       };
       const onData = () => {
         seen = true;
+        isQuiet = false;
         if (quiet) clearTimeout(quiet);
         quiet = setTimeout(() => {
           quiet = null;
-          if (!asking()) done(true);
+          isQuiet = true;
+          settle();
         }, OPENING_QUIET_MS);
+      };
+      // A hook that lands after the quiet is what the quiet was waiting for.
+      const onHook = () => {
+        if (isQuiet) settle();
       };
       const onExit = () => done(false);
       const cap = setTimeout(() => {
-        if (!asking()) done(seen);
+        if (asking()) return;
+        debug(
+          'deliver',
+          `${sessionId} ${OPENING_READY_CAP_MS}ms cap reached ` +
+            (!seen
+              ? 'with no output at all'
+              : hooked()
+                ? 'while still drawing; typing anyway'
+                : 'and its hooks never reported; typing anyway'),
+        );
+        done(seen);
       }, OPENING_READY_CAP_MS);
       cap.unref?.();
       pty.on('data', onData);
       pty.on('exit', onExit);
+      pty.on('hook', onHook);
     });
   }
 

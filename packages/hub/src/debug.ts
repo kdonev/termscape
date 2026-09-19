@@ -11,6 +11,13 @@
  *   output  only the mode changes in a program's output — what it asked the
  *           terminal for, which is what decides whose job a wheel is
  *   attach  attach, detach, resize, and what a replayed snapshot restores
+ *   deliver messages and first instructions on their way into an agent: the
+ *           route taken, the wait for a CLI to be ready, the hooks it reports,
+ *           and every Enter - the first, and any sent again, and why not
+ *
+ * For a message that sits unsent in a composer, `deliver` on the machine that
+ * owns the agent is the one that matters: that hub types it, and that hub
+ * decides whether to press Enter again.
  *
  * A remote session is two hubs, and each logs only its own half. To see a
  * wheel all the way to the program, set this on the canvas machine *and* on
