@@ -207,6 +207,22 @@ describe('spawn_agent', () => {
   );
 
   it(
+    'restarts a cleared session at the size its window last set, not the default',
+    async () => {
+      const ws = hub.createWorkspace('crew6', folder('crew6'));
+      const s = await hub.startSession({ workspaceId: ws.id, profile: 'shell' });
+      // The browser sends this once, when the window first measures itself,
+      // and never again while its grid stays the same - a clear included.
+      hub.sessions.resize(s.id, 113, 27);
+
+      await hub.clearSession(s.id);
+      const pty = hub.sessions.pty(s.id)!;
+      expect([pty.cols, pty.rows]).toEqual([113, 27]);
+    },
+    60_000,
+  );
+
+  it(
     'delivers the template opening alone when the spawn carries no instruction',
     async () => {
       hub.saveTemplate({ id: 'reviewer', agent: 'shell', prompt: 'TEMPLATE OPENING' });

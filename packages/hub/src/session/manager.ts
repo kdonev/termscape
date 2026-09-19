@@ -637,12 +637,17 @@ export class SessionManager extends EventEmitter {
    * a resize that would not change anything, but a caller that sends one
    * anyway (a second owner window, a stale retry) must not turn that into a
    * broadcast every follower has to redraw for.
+   *
+   * Compared against the stored row, not `get()`: that overlays the live
+   * pty's grid, which the line above has just set, so it always matched and
+   * the new size was never written. Everything that starts a process from the
+   * row - clear, resume - then launched it at the 100x30 it was created with.
    */
   resize(sessionId: string, cols: number, rows: number): void {
     const p = this.live.get(sessionId);
     p?.resize(cols, rows);
-    const current = this.get(sessionId);
-    if (current && current.cols === cols && current.rows === rows) return;
+    const stored = this.store.getSession(sessionId, this.isResumable);
+    if (stored && stored.cols === cols && stored.rows === rows) return;
     this.store.updateSession(sessionId, { cols, rows });
     this.emitSession(sessionId);
   }
