@@ -33,6 +33,13 @@ export const CLI_OPTIONS = {
   'no-open': { type: 'boolean', default: false },
   // The canvas opens in a window of its own unless this asks for a tab.
   browser: { type: 'boolean', default: false },
+  // Checking npm for a newer release is on unless this says otherwise.
+  'no-update-check': { type: 'boolean', default: false },
   version: { type: 'boolean', default: false },
   help: { type: 'boolean', default: false },
 } as const satisfies NonNullable<Parameters<typeof parseArgs>[0]>['options'];
+
+/** What `parseArgs` makes of CLI_OPTIONS. */
+export type CliValues = ReturnType<
+  typeof parseArgs<{ options: typeof CLI_OPTIONS; strict: true }>
+>['values'];

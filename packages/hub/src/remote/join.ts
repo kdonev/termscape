@@ -154,6 +154,7 @@ export function joinCanvas(opts: JoinOptions): JoinLink {
         token: hostToken ?? opts.joinToken!,
         hubVersion: HUB_VERSION,
         schemaVersion: PEER_SCHEMA_VERSION,
+        canUpdate: true,
         // Only on first contact: after that the host token identifies us and
         // the canvas hub already has a row describing this machine.
         ...(hostToken
@@ -212,7 +213,12 @@ export function joinCanvas(opts: JoinOptions): JoinLink {
       }
       if (msg.t !== 'welcome') return;
 
-      if (msg.schemaVersion !== PEER_SCHEMA_VERSION) {
+      // A canvas ahead of us that kept us on the line anyway, so it can tell
+      // us to update. Nothing works until then, but refusing would leave the
+      // canvas nobody to send that to.
+      const outdated = msg.outdated === true && msg.schemaVersion > PEER_SCHEMA_VERSION;
+
+      if (msg.schemaVersion !== PEER_SCHEMA_VERSION && !outdated) {
         fatal(
           `schema mismatch: the canvas hub ${msg.hubVersion} speaks v${msg.schemaVersion}, ` +
             `this hub speaks v${PEER_SCHEMA_VERSION}. Update whichever is older.`,
@@ -232,6 +238,12 @@ export function joinCanvas(opts: JoinOptions): JoinLink {
       // Hand the socket to the same code that serves an accepted /peer link.
       // The canvas hub drives from here; we answer.
       opts.peerServer.serve(ws, { preAuthed: true });
+      if (outdated) {
+        log(
+          `the canvas hub ${msg.hubVersion} is newer than this one (${HUB_VERSION}); ` +
+            'waiting for it to be updated from the canvas',
+        );
+      }
       // Machine-readable: the installer waits for this, not for the port.
       log(`TERMSCAPE_JOINED=1 joined ${opts.hubUrl}`);
     };

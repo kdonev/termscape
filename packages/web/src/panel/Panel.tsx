@@ -1,8 +1,13 @@
 import { useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import type { AgentTemplateInfo, Session } from '@termscape/protocol';
-import { useStore } from '../state/store.js';
-import { buildTree, type TreeMachine, type TreeWorkspace } from '../state/tree.js';
+import { UPGRADE_GRACE_MS, useStore } from '../state/store.js';
+import {
+  buildTree,
+  hostNeedsUpdate,
+  type TreeMachine,
+  type TreeWorkspace,
+} from '../state/tree.js';
 import { statusColor, statusLabel } from '../window/status.js';
 import { agentDetail, agentsOn } from '../state/agents.js';
 
@@ -23,6 +28,8 @@ const HOST_STATE_COLOR: Record<string, string> = {
   connected: '#88c07a',
   connecting: '#d8b271',
   disconnected: '#7c8596',
+  // On the line, but a schema behind: nothing runs there until it updates.
+  outdated: '#d8b271',
   error: '#e06c75',
 };
 
@@ -67,13 +74,14 @@ export function Panel() {
 }
 
 function MachineNode({ machine }: { machine: TreeMachine }) {
-  const { client, hostLogs, openDialog, profiles, hostProfiles } = useStore(
+  const { client, hostLogs, openDialog, profiles, hostProfiles, hubVersion } = useStore(
     useShallow((s) => ({
       client: s.client,
       hostLogs: s.hostLogs,
       openDialog: s.openDialog,
       profiles: s.profiles,
       hostProfiles: s.hostProfiles,
+      hubVersion: s.hubVersion,
     })),
   );
   const [collapsed, setCollapsed] = useState(false);
@@ -104,6 +112,7 @@ function MachineNode({ machine }: { machine: TreeMachine }) {
         >
           + workspace
         </button>
+        {host && <HostUpdateButton machine={machine} hubVersion={hubVersion} agents={agents} />}
         {host && (
           <button
             className="btn"
@@ -151,6 +160,12 @@ function MachineNode({ machine }: { machine: TreeMachine }) {
       </div>
 
       {host?.error && <div className="node-error">{host.error}</div>}
+      {host?.state === 'outdated' && (
+        <div className="node-error">
+          Its hub ({host.hubVersion ?? 'unknown'}) is too old to run anything for this canvas
+          ({hubVersion}) until it is updated.
+        </div>
+      )}
       {/* Per machine, because a host has its own PATH and this hub's answer
           says nothing about it. A declared agent that is missing stays here
           and says so rather than vanishing, which would look like the config
@@ -188,6 +203,74 @@ function MachineNode({ machine }: { machine: TreeMachine }) {
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * Bring a host to this canvas's version, when it runs a different one.
+ *
+ * Offered, never done on its own: updating restarts the hub over there and
+ * every agent running on it, so when is the user's call, one machine at a
+ * time. Between the click and the machine coming back at the new version the
+ * row says so, and if it never comes back, it says where to look.
+ */
+function HostUpdateButton({
+  machine,
+  hubVersion,
+  agents,
+}: {
+  machine: TreeMachine;
+  hubVersion: string;
+  agents: number;
+}) {
+  const { openDialog, upgrading, markUpgrading } = useStore(
+    useShallow((s) => ({
+      openDialog: s.openDialog,
+      upgrading: s.upgrading,
+      markUpgrading: s.markUpgrading,
+    })),
+  );
+  const host = machine.host;
+  if (!host || !hostNeedsUpdate(host, hubVersion)) return null;
+
+  const since = upgrading[host.id];
+  if (since !== undefined && Date.now() - since < UPGRADE_GRACE_MS) {
+    return <span className="node-sub">updating…</span>;
+  }
+  const overdue = since !== undefined;
+  const reachable = host.state === 'connected' || host.state === 'outdated';
+  const where = host.kind === 'ssh' ? '~/.termscape/hub.log' : '~/.termscape/update.log';
+
+  let title = `Update ${machine.label} from ${host.hubVersion ?? 'unknown'} to ${hubVersion}`;
+  if (overdue) title = `It has not come back at ${hubVersion}. See ${where} on that machine.`;
+  else if (!reachable) title = `${machine.label} is not connected; it can be updated once it is`;
+  else if (!host.canUpdate) {
+    title = 'The hub there is too old to update itself. Re-run the join command on that machine once.';
+  }
+
+  return (
+    <button
+      className={`btn ${overdue ? 'danger' : 'primary'}`}
+      title={title}
+      disabled={!reachable || !host.canUpdate}
+      onClick={() =>
+        openDialog({
+          kind: 'confirm',
+          title: `Update ${machine.label} to ${hubVersion}?`,
+          body:
+            `The hub there restarts at ${hubVersion}.` +
+            (agents > 0
+              ? ` Its running agents stop with it and are resumed once it is back.`
+              : '') +
+            ' The machine drops off the canvas for a minute or two and comes back on its own.',
+          confirmLabel: 'update and restart',
+          send: { t: 'upgradeHost', hostId: host.id },
+          onConfirmed: () => markUpgrading(host.id),
+        })
+      }
+    >
+      {overdue ? 'update stalled' : 'update'}
+    </button>
   );
 }
 

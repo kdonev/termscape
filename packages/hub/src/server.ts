@@ -302,7 +302,7 @@ export async function serve(opts: ServeOptions): Promise<ServeResult> {
     enrollAltUrl: enrollAltOrigin ? `${enrollAltOrigin}/join` : null,
     lanOrigin,
     lanAltOrigin,
-    hosts: hub.store.listHosts(),
+    hosts: hub.store.listHosts().map((h) => hub.peers.decorate(h)),
     workspaces: hub.store.listWorkspaces(),
     sessions: hub.allSessions(),
     messages: hub.messages(),
@@ -318,6 +318,7 @@ export async function serve(opts: ServeOptions): Promise<ServeResult> {
     hostProfiles: hub.peers.agentsByHost(),
     shares: hub.shares.list(),
     notes: hub.store.listNotes(),
+    update: hub.updater?.info(),
   });
 
   /**
@@ -367,6 +368,7 @@ export async function serve(opts: ServeOptions): Promise<ServeResult> {
   hub.on('message', (m) => broadcast({ t: 'messageSent', message: m }));
   hub.on('host', (h) => broadcast({ t: 'hostUpserted', host: h }));
   hub.on('hostRemoved', (id) => broadcast({ t: 'hostRemoved', hostId: id }));
+  hub.on('update', (update) => broadcast({ t: 'updateStatus', update }));
   hub.on('shares', (shares) => broadcast({ t: 'sharesChanged', shares }));
   // Revocation has to reach an already-open tab, not just the row that let it
   // in - otherwise "revoked" is untrue for the one case it exists for.
@@ -852,6 +854,15 @@ export async function serve(opts: ServeOptions): Promise<ServeResult> {
 
       case 'connectHost':
         await hub.connectHost(msg.hostId);
+        return;
+
+      case 'upgradeHost':
+        await hub.upgradeHost(msg.hostId);
+        return;
+
+      case 'applyUpdate':
+        if (!hub.updater) throw new Error('this hub does not update itself');
+        await hub.updater.apply();
         return;
 
       case 'refreshAgents':

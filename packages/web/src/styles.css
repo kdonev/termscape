@@ -47,6 +47,9 @@ body {
 .conn { font-size: 11px; font-weight: 400; }
 .conn.on { color: var(--muted); }
 .conn.off { color: var(--warn); }
+.brand .btn.update { font-size: 11px; font-weight: 500; padding: 1px 8px; align-self: center; }
+.update-note { font-size: 11px; font-weight: 400; color: var(--warn); }
+.update-note.bad { color: var(--danger); cursor: help; }
 
 .group { display: flex; align-items: center; gap: 6px; }
 .spacer { flex: 1; }

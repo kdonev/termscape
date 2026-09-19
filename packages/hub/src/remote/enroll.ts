@@ -165,6 +165,28 @@ export function registerEnrollment(
       }
       const hello = parsed.data;
 
+      /*
+       * A machine this canvas knows, a schema behind, whose hub can update
+       * itself. Refusing it would leave nothing to click: it is kept on the
+       * line as outdated instead, and the only thing ever sent to it is the
+       * `update` the user asks for. A host *ahead* of the canvas is still
+       * refused - the canvas is the one to update there.
+       */
+      if (hello.schemaVersion < PEER_SCHEMA_VERSION && hello.canUpdate) {
+        const known = hub.store.hostByToken(hello.token);
+        if (known) {
+          settled = true;
+          reply({
+            t: 'welcome',
+            hubVersion: HUB_VERSION,
+            schemaVersion: PEER_SCHEMA_VERSION,
+            outdated: true,
+          });
+          hub.peers.addOutdated(known, socket, hello.hubVersion);
+          return;
+        }
+      }
+
       if (hello.schemaVersion !== PEER_SCHEMA_VERSION) {
         return refuse(
           `peer schema mismatch: you speak v${hello.schemaVersion}, this hub speaks ` +
@@ -228,7 +250,7 @@ export function registerEnrollment(
         schemaVersion: PEER_SCHEMA_VERSION,
         ...(issuedToken ? { hostToken: issuedToken } : {}),
       });
-      hub.peers.addInbound(host, socket, hello.hubVersion);
+      hub.peers.addInbound(host, socket, hello.hubVersion, hello.canUpdate === true);
     };
 
     socket.on('message', onHello);

@@ -265,8 +265,24 @@ export function createPeerServer(hub: Hub, clientToken: string): PeerServer {
             // this process is gone. Whoever owns the process lifecycle
             // listens for this; nothing here calls process.exit, so an
             // in-process test hub is not taken down with it.
+            // Going down to be replaced, not dropped: the next hub brings
+            // back what is running now.
+            if (req.resume) hub.rememberRunning();
             ok({ stopping: true });
             setTimeout(() => hub.emit('peerShutdown'), 50);
+            return;
+
+          case 'update':
+            // Whoever started this hub knows where it came from - a joined
+            // hub knows its canvas - so the work is theirs. They answer once
+            // the installer is fetched and running: a failure to get that far
+            // is worth telling the canvas, and after it this process is gone.
+            if (hub.listenerCount('peerUpdate') === 0) {
+              return err('this hub was not started by joining a canvas, so it cannot update itself');
+            }
+            hub.emit('peerUpdate', (failure: string | null) =>
+              failure ? err(failure) : ok({ updating: true }),
+            );
             return;
 
           case 'stopSession': {

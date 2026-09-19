@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Host, Session, Workspace } from '@termscape/protocol';
-import { buildTree, sessionsIn } from '../src/state/tree.js';
+import { buildTree, hostNeedsUpdate, sessionsIn } from '../src/state/tree.js';
 import { workspaceBounds } from '../src/canvas/viewport.js';
 
 const workspace = (over: Partial<Workspace>): Workspace => ({
@@ -140,5 +140,21 @@ describe('the frame drawn around a workspace', () => {
   it('draws nothing for a workspace with no windows', () => {
     const w = workspace({ id: 'empty' });
     expect(workspaceBounds(sessionsIn(w, []).map((s) => s.window))).toBeNull();
+  });
+});
+
+describe('a host that needs an update', () => {
+  it('is one running a different hub from the canvas', () => {
+    expect(hostNeedsUpdate(host({ hubVersion: '0.1.0' }), '0.2.0')).toBe(true);
+    expect(hostNeedsUpdate(host({ hubVersion: '0.2.0' }), '0.2.0')).toBe(false);
+  });
+
+  it('is always one kept on the line as outdated', () => {
+    expect(hostNeedsUpdate(host({ hubVersion: null, state: 'outdated' }), '0.2.0')).toBe(true);
+  });
+
+  it('is not one whose version nobody knows yet', () => {
+    expect(hostNeedsUpdate(host({ hubVersion: null }), '0.2.0')).toBe(false);
+    expect(hostNeedsUpdate(host({ hubVersion: '0.1.0' }), '')).toBe(false);
   });
 });

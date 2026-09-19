@@ -974,7 +974,14 @@ function ConfirmDialog({ spec }: { spec: Extract<DialogSpec, { kind: 'confirm' }
   const request = useRequest();
   return (
     <Dialog title={spec.title}>
-      <DialogForm submitLabel={spec.confirmLabel} danger onSubmit={() => request(spec.send)}>
+      <DialogForm
+        submitLabel={spec.confirmLabel}
+        danger
+        onSubmit={async () => {
+          await request(spec.send);
+          spec.onConfirmed?.();
+        }}
+      >
         <p className="dialog-note">{spec.body}</p>
       </DialogForm>
     </Dialog>

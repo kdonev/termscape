@@ -58,6 +58,18 @@ function describe(host: Host): string | null {
   return parts.length > 0 ? parts.join(' · ') : null;
 }
 
+/**
+ * Whether a host runs a different hub from this one, which is what an update
+ * from here would fix. Different, not older: a host is brought to the
+ * canvas's own build either way, and a canvas running behind its hosts is
+ * something the canvas's own update button is for.
+ */
+export function hostNeedsUpdate(host: Host, hubVersion: string): boolean {
+  if (host.state === 'outdated') return true;
+  if (!hubVersion || !host.hubVersion) return false;
+  return host.hubVersion !== hubVersion;
+}
+
 export function buildTree(
   hosts: readonly Host[],
   workspaces: readonly Workspace[],

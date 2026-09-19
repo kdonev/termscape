@@ -10,6 +10,7 @@ import {
   AgentProfileInfo,
   AgentTemplateInfo,
   TemplateProposal,
+  UpdateInfo,
 } from './domain.js';
 
 /* ------------------------------------------------------------------ *
@@ -264,6 +265,14 @@ export const ClientMsg = z.discriminatedUnion('t', [
   }),
   z.object({ t: z.literal('removeHost'), requestId, hostId: z.string() }),
   z.object({ t: z.literal('connectHost'), hostId: z.string() }),
+  /**
+   * Bring a host to this hub's version: redeploy an ssh host, or tell an
+   * enrolled one to fetch this hub's build and restart itself.
+   */
+  z.object({ t: z.literal('upgradeHost'), requestId, hostId: z.string() }),
+
+  /** Install the newer release `update.latest` names, and restart into it. */
+  z.object({ t: z.literal('applyUpdate'), requestId }),
 
   /** Re-probe what is installed, here and on every attached machine. */
   z.object({ t: z.literal('refreshAgents') }),
@@ -295,6 +304,8 @@ export type AckableMsg = Extract<
       | 'addHost'
       | 'updateHost'
       | 'removeHost'
+      | 'upgradeHost'
+      | 'applyUpdate'
       | 'shareSession'
       | 'unshareSession';
   }
@@ -359,6 +370,8 @@ export const HubState = z.object({
    * terminal it names, nothing else on the canvas.
    */
   notes: z.array(Note),
+  /** Whether a newer release exists, and how far installing it has got. */
+  update: UpdateInfo.optional(),
 });
 export type HubState = z.infer<typeof HubState>;
 
@@ -383,6 +396,7 @@ export const ServerMsg = z.discriminatedUnion('t', [
   z.object({ t: z.literal('workspaceRemoved'), workspaceId: z.string() }),
   z.object({ t: z.literal('hostUpserted'), host: Host }),
   z.object({ t: z.literal('hostRemoved'), hostId: z.string() }),
+  z.object({ t: z.literal('updateStatus'), update: UpdateInfo }),
   /** The whole list, for the same reason `templatesChanged` sends its whole list. */
   z.object({ t: z.literal('sharesChanged'), shares: z.array(ShareInfo) }),
   /**

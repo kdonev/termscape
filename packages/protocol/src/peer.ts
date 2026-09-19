@@ -157,6 +157,12 @@ export const PeerHello = z.object({
   token: z.string(),
   hubVersion: z.string(),
   schemaVersion: z.number().int(),
+  /**
+   * This hub understands `update`, so a canvas speaking a newer schema can
+   * keep it on the line as outdated and tell it to update, rather than
+   * refusing it. Absent from hubs older than the frame.
+   */
+  canUpdate: z.boolean().optional(),
   enroll: z
     .object({
       label: z.string(),
@@ -243,7 +249,20 @@ export const PeerRequest = z.discriminatedUnion('t', [
   // Sent when the canvas drops this host: the hub over there is a daemon we
   // asked someone to start, so removing it here has to stop it there too,
   // otherwise it lingers holding its files open and its next install fails.
-  z.object({ t: z.literal('shutdown'), id: z.string() }),
+  //
+  // `resume`: the hub is going down to be replaced by a newer one, and should
+  // remember its running agents for that one to resume. Optional, so the
+  // frame stays one every hub can parse.
+  z.object({ t: z.literal('shutdown'), id: z.string(), resume: z.boolean().optional() }),
+  /**
+   * Fetch the canvas's own build and restart into it. Sent by the canvas when
+   * the user asks for it, which is usually after the canvas itself updated.
+   *
+   * FROZEN, along with `shutdown`, `hello`, `welcome`, `ok` and `err`: this is
+   * the one request that has to work across a schema gap, sent by a newer
+   * canvas to a host speaking an older schema. Never change its shape.
+   */
+  z.object({ t: z.literal('update'), id: z.string() }),
   z.object({ t: z.literal('resumeSession'), id: z.string(), address: z.string() }),
   z.object({ t: z.literal('clearSession'), id: z.string(), address: z.string() }),
   // The canvas telling a host who else is on it. Sent whenever that set
@@ -343,6 +362,11 @@ export const PeerResponse = z.discriminatedUnion('t', [
      * reboot rejoins without another trip to the download page.
      */
     hostToken: z.string().optional(),
+    /**
+     * The host speaks an older schema and was kept on the line only so it can
+     * be told to `update`. Nothing else will be asked of it until it has.
+     */
+    outdated: z.boolean().optional(),
   }),
   z.object({ t: z.literal('ok'), id: z.string(), result: z.unknown() }),
   z.object({
@@ -392,5 +416,10 @@ export type PeerResponse = z.infer<typeof PeerResponse>;
  * nor enforce who may see whom, so it would quietly bypass the visibility
  * rule, and it would drop a `notify` it cannot parse. Joined machines re-run
  * the installer again.
+ *
+ * `hello.canUpdate`, `welcome.outdated` and the `update` request came later
+ * without a bump: a canvas only sends `update` to a host whose hello said
+ * `canUpdate`, and from then on a host a schema behind is kept on the line
+ * as outdated and updated from the canvas, rather than refused.
  */
 export const PEER_SCHEMA_VERSION = 10;

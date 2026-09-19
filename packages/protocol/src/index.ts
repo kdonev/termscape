@@ -5,3 +5,4 @@ export * from './inject.js';
 export * from './address.js';
 export * from './peer.js';
 export * from './mouse.js';
+export * from './version.js';

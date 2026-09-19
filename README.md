@@ -411,6 +411,31 @@ Two consequences worth knowing:
 - Resume relaunches in the **same working directory**, because that is how
   Claude Code finds a conversation. Move the folder and resume starts fresh.
 
+## Updating
+
+The hub asks npm for a newer release shortly after it starts and every six
+hours after that. When there is one, an **update** button appears next to the
+version in the top bar. Nothing restarts until you press it. Then the hub
+downloads the release, restarts on the same address in the same terminal,
+and the canvas reconnects on its own. The agents that were running stop with
+the old hub and are resumed by the new one, continuing their conversations.
+(Stopping the hub yourself is different: those agents come back stopped, as
+described under [State and restart](#state-and-restart).)
+
+This works for `npx @kdonev/termscape` and for a global `npm install -g`. A
+checkout of this repository updates the way checkouts do, so for one of those
+the button only links to the release. `--no-update-check` (or
+`TERMSCAPE_NO_UPDATE_CHECK=1`) turns the check off.
+
+Other machines take the canvas's own build, not npm's. When one runs a
+different version from the canvas, its row in the machines panel gets an
+**update** button, so you pick when each machine restarts. A deployed machine
+is redeployed over SSH. A joined one runs the join installer again by itself
+(its output is in `~/.termscape/update.log` there) and rejoins as the same
+machine. Either way, the agents that were running there are resumed. A joined machine one protocol version behind the canvas stays on the
+canvas as *outdated* until you update it. Machines joined with 0.1.9 or
+earlier can't update themselves yet, so re-run the join command on those once.
+
 ## Remote machines
 
 Add a machine in the panel. The hub is copied over SSH, installed, and started as a

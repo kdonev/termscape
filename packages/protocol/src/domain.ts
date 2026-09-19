@@ -37,9 +37,21 @@ export const Host = z.object({
   /** `linux-x64`, `darwin-arm64`, ... as reported by an enrolling host. */
   platform: z.string().nullable(),
   hubVersion: z.string().nullable(),
-  state: z.enum(['disconnected', 'connecting', 'connected', 'error']),
+  /**
+   * `outdated`: the host dialled in speaking an older peer schema. It is kept
+   * on the line so the canvas can tell it to update itself, and nothing else
+   * is routed to it until it has.
+   */
+  state: z.enum(['disconnected', 'connecting', 'connected', 'outdated', 'error']),
   lastSeenAt: z.number().nullable(),
   error: z.string().nullable(),
+  /**
+   * Whether the canvas can bring this host to its own version: always for an
+   * ssh host, which it redeploys; for an enrolled one, only when its hello
+   * said it understands `update`. Not stored - it is a fact about the hub
+   * running over there right now.
+   */
+  canUpdate: z.boolean().optional(),
 });
 export type Host = z.infer<typeof Host>;
 
@@ -305,7 +317,7 @@ export const HostInfo = z.object({
   id: z.string(),
   label: z.string(),
   kind: z.enum(['canvas', 'ssh', 'enrolled']),
-  state: z.enum(['disconnected', 'connecting', 'connected', 'error']),
+  state: z.enum(['disconnected', 'connecting', 'connected', 'outdated', 'error']),
   /** True for the machine the *calling* agent is running on. */
   you: z.boolean(),
   platform: z.string().nullable(),
@@ -327,3 +339,24 @@ export const HostInfo = z.object({
   ),
 });
 export type HostInfo = z.infer<typeof HostInfo>;
+
+/**
+ * How a hub can replace itself with a newer release.
+ *
+ * `npx` and `global` can fetch from npm and restart in place. `host` is a
+ * machine joined to a canvas: it takes the canvas's own build instead, when
+ * the canvas tells it to. `source` is a checkout, which updates by git.
+ */
+export const InstallKind = z.enum(['npx', 'global', 'host', 'source']);
+export type InstallKind = z.infer<typeof InstallKind>;
+
+export const UpdateInfo = z.object({
+  /** The newest release on npm, or null until a check has answered. */
+  latest: z.string().nullable(),
+  kind: InstallKind,
+  /** Whether this hub runs under the supervisor that can restart it. */
+  canRestart: z.boolean(),
+  state: z.enum(['idle', 'downloading', 'restarting', 'failed']),
+  error: z.string().nullable(),
+});
+export type UpdateInfo = z.infer<typeof UpdateInfo>;

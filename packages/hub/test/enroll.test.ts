@@ -1025,6 +1025,97 @@ describe('re-joining a machine the canvas has forgotten', () => {
   }, 45_000);
 });
 
+describe('updating a host from the canvas', () => {
+  it('knows a joined hub can update itself, and hands it the request', async () => {
+    const host = hubA.store.listHosts().find((h) => h.label === 'joined-box')!;
+    expect(hubA.peers.decorate(host).canUpdate).toBe(true);
+
+    // Nothing over there is listening yet: a hub not started by joining has
+    // nowhere to fetch a build from, and says so rather than going quiet.
+    await expect(hubA.upgradeHost(host.id)).rejects.toThrow(/cannot update itself/);
+
+    let asked = 0;
+    const onUpdate = (answer: (failure: string | null) => void) => {
+      asked++;
+      answer(null);
+    };
+    hubB.on('peerUpdate', onUpdate);
+    try {
+      await hubA.upgradeHost(host.id);
+    } finally {
+      hubB.off('peerUpdate', onUpdate);
+    }
+    expect(asked).toBe(1);
+  }, 20_000);
+
+  it('keeps a host a schema behind on the line, and only ever asks it to update', async () => {
+    const enrolled = await handshake(originA, servedA.enrollment.mint(), {
+      enroll: { label: 'old-box', platform: 'linux', arch: 'x64', homeDir: '/home/old' },
+    });
+    const hostId = hubA.store.hostByToken(enrolled.hostToken)!.id;
+
+    const ws = new WebSocket(originA.replace(/^http/, 'ws') + '/peer-in');
+    const frames: any[] = [];
+    ws.on('message', (raw: Buffer) => {
+      const msg = JSON.parse(raw.toString('utf8'));
+      frames.push(msg);
+      if (msg.t === 'update') ws.send(JSON.stringify({ t: 'ok', id: msg.id, result: {} }));
+    });
+    await new Promise<void>((resolve) => ws.on('open', () => resolve()));
+    ws.send(
+      JSON.stringify({
+        t: 'hello',
+        token: enrolled.hostToken,
+        hubVersion: '0.0.1-old',
+        schemaVersion: PEER_SCHEMA_VERSION - 1,
+        canUpdate: true,
+      }),
+    );
+
+    await waitFor(() => frames.length > 0, 5_000, 'welcome');
+    expect(frames[0]).toMatchObject({ t: 'welcome', outdated: true });
+    await waitFor(
+      () => hubA.store.getHost(hostId)?.state === 'outdated',
+      5_000,
+      'host to be outdated',
+    );
+    expect(hubA.store.getHost(hostId)?.hubVersion).toBe('0.0.1-old');
+    // Not a peer: nothing that walks the canvas's machines can reach it.
+    expect(hubA.peers.peer(hostId)).toBeNull();
+
+    await hubA.upgradeHost(hostId);
+    // Nothing but the welcome and the one request it can parse.
+    expect(frames.map((f) => f.t)).toEqual(['welcome', 'update']);
+
+    ws.close();
+    await waitFor(
+      () => hubA.store.getHost(hostId)?.state === 'disconnected',
+      5_000,
+      'host to drop',
+    );
+    await hubA.removeHost(hostId);
+  }, 20_000);
+
+  it('still refuses a host a schema behind that cannot update itself', async () => {
+    const enrolled = await handshake(originA, servedA.enrollment.mint());
+    const res = await handshake(originA, enrolled.hostToken, {
+      schemaVersion: PEER_SCHEMA_VERSION - 1,
+      enroll: undefined,
+    });
+    expect(res).toMatchObject({ t: 'err', code: 'schema-mismatch' });
+  });
+
+  it('refuses a host ahead of the canvas: the canvas is the one to update', async () => {
+    const enrolled = await handshake(originA, servedA.enrollment.mint());
+    const res = await handshake(originA, enrolled.hostToken, {
+      schemaVersion: PEER_SCHEMA_VERSION + 1,
+      canUpdate: true,
+      enroll: undefined,
+    });
+    expect(res).toMatchObject({ t: 'err', code: 'schema-mismatch' });
+  });
+});
+
 describe('dropping a host', () => {
   it('asks the machine to stop its hub, not just forgets it', async () => {
     // The hub over there is a daemon someone started on their own machine.

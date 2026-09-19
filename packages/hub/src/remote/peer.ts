@@ -149,6 +149,28 @@ export class PeerConnection extends EventEmitter {
     this.onLive();
   }
 
+  /**
+   * Take a socket from a host a schema behind this hub. Only replies are
+   * read from it - its unsolicited frames may not even parse here - and
+   * nothing is fetched on the way in: the only thing ever asked of it is
+   * `update` or `shutdown`, whose shapes never change.
+   */
+  adoptLimited(socket: WebSocket, remoteVersion: string): void {
+    this.ws = socket;
+    this._remoteVersion = remoteVersion;
+    socket.on('message', (raw: Buffer) => this.onMessage(raw, true));
+    socket.on('close', () => {
+      if (this.ws && this.ws !== socket) return;
+      this.ws = null;
+      this.failAllPending('peer connection closed');
+      this.emit('disconnected');
+    });
+    socket.on('error', (err: Error) => {
+      this.emit('error', err);
+      socket.close();
+    });
+  }
+
   /** Everything that must happen once a socket is usable, either way in. */
   private onLive(): void {
     for (const address of this.attached) {
@@ -161,7 +183,7 @@ export class PeerConnection extends EventEmitter {
     void this.refresh();
   }
 
-  private onMessage(raw: Buffer): void {
+  private onMessage(raw: Buffer, repliesOnly = false): void {
     let parsed;
     try {
       parsed = PeerResponse.safeParse(JSON.parse(raw.toString('utf8')));
@@ -170,6 +192,7 @@ export class PeerConnection extends EventEmitter {
     }
     if (!parsed.success) return;
     const msg = parsed.data;
+    if (repliesOnly && msg.t !== 'ok' && msg.t !== 'err') return;
 
     switch (msg.t) {
       case 'welcome': {

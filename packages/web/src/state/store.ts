@@ -13,6 +13,7 @@ import type {
   Viewport,
   WindowRect,
   Workspace,
+  UpdateInfo,
 } from '@termscape/protocol';
 import { HubClient } from '../net/client.js';
 
@@ -62,11 +63,25 @@ export type DialogSpec =
       body: string;
       confirmLabel: string;
       send: AckableMsg;
+      /** Run once the hub has accepted `send`, before the dialog closes. */
+      onConfirmed?: () => void;
     };
+
+/**
+ * How long a host told to update is given to come back at the new version
+ * before its row stops saying "updating" and says where to look instead.
+ * The installer may compile native modules, which is minutes, not seconds.
+ */
+export const UPGRADE_GRACE_MS = 3 * 60_000;
 
 interface AppState {
   connected: boolean;
   hubVersion: string;
+  /** Whether a newer release is out, and how installing it is going. */
+  update: UpdateInfo | null;
+  /** Hosts told to update, by id, with when. Cleared by coming back updated. */
+  upgrading: Record<string, number>;
+  markUpgrading: (hostId: string) => void;
   /** The join page's URL, or null when the hub is bound to loopback. */
   enrollUrl: string | null;
   /** The same page by IP, for a network that cannot resolve the name. */
@@ -171,6 +186,14 @@ const upsert = <T extends { id: string }>(list: T[], item: T): T[] => {
 export const useStore = create<AppState>((set, get) => ({
   connected: false,
   hubVersion: '',
+  update: null,
+  upgrading: {},
+  markUpgrading: (hostId) => {
+    set((s) => ({ upgrading: { ...s.upgrading, [hostId]: Date.now() } }));
+    // Nothing else may re-render the row once the grace runs out - a host
+    // that never comes back sends nothing - so this is the nudge.
+    setTimeout(() => set((s) => ({ upgrading: { ...s.upgrading } })), UPGRADE_GRACE_MS + 100);
+  },
   enrollUrl: null,
   enrollAltUrl: null,
   lanOrigin: null,
@@ -205,6 +228,7 @@ export const useStore = create<AppState>((set, get) => ({
       case 'ready':
         set((s) => ({
           hubVersion: m.state.hubVersion,
+          update: m.state.update ?? null,
           enrollUrl: m.state.enrollUrl,
           enrollAltUrl: m.state.enrollAltUrl,
           lanOrigin: m.state.lanOrigin,
@@ -301,6 +325,10 @@ export const useStore = create<AppState>((set, get) => ({
 
       case 'hostUpserted':
         set((s) => ({ hosts: upsert(s.hosts, m.host) }));
+        return;
+
+      case 'updateStatus':
+        set({ update: m.update });
         return;
 
       case 'hostRemoved':

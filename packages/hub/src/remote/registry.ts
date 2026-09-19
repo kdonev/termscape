@@ -70,6 +70,10 @@ export class PeerRegistry extends EventEmitter {
    * foreign key would reject a parent that is not one of its own.
    */
   private readonly lineage = new Map<string, Map<string, string>>();
+  /** Hosts a schema behind, held only so they can be told to update. */
+  private readonly outdated = new Map<string, PeerConnection>();
+  /** Enrolled hosts whose hello said they understand `update`. */
+  private readonly updatable = new Set<string>();
 
   constructor(
     private readonly store: Store,
@@ -98,10 +102,74 @@ export class PeerRegistry extends EventEmitter {
    * same routing — only the direction of the dial differs, and nothing
    * downstream of here can tell.
    */
-  addInbound(host: Host, socket: WsSocket, remoteVersion: string): PeerConnection {
+  addInbound(
+    host: Host,
+    socket: WsSocket,
+    remoteVersion: string,
+    canUpdate = false,
+  ): PeerConnection {
+    this.markUpdatable(host.id, canUpdate);
     const peer = this.create(host, {});
     peer.adopt(socket, remoteVersion);
     return peer;
+  }
+
+  /**
+   * Keep a host that speaks an older schema on the line, only so it can be
+   * told to update. It is not a peer in any other sense: it lives outside
+   * `peers`, so nothing that walks the canvas's machines - the directory,
+   * routing, agent detection - ever sends it a frame it cannot parse.
+   */
+  addOutdated(host: Host, socket: WsSocket, remoteVersion: string): void {
+    this.remove(host.id);
+    this.markUpdatable(host.id, true);
+    const peer = new PeerConnection({ hostId: host.id, hubVersion: this.hubVersion });
+    peer.on('error', () => {
+      // Nothing to do: it is already outdated, and it redials on its own.
+    });
+    peer.on('disconnected', () => {
+      if (this.outdated.get(host.id) !== peer) return;
+      this.outdated.delete(host.id);
+      this.updateHost(host.id, { state: 'disconnected' });
+    });
+    this.outdated.set(host.id, peer);
+    peer.adoptLimited(socket, remoteVersion);
+    this.updateHost(host.id, {
+      state: 'outdated',
+      hubVersion: remoteVersion,
+      error: null,
+    });
+  }
+
+  private markUpdatable(hostId: string, canUpdate: boolean): void {
+    if (canUpdate) this.updatable.add(hostId);
+    else this.updatable.delete(hostId);
+  }
+
+  /** A host as the browser should see it: with whether it can be updated. */
+  decorate(host: Host): Host {
+    return {
+      ...host,
+      canUpdate: host.kind === 'ssh' || this.updatable.has(host.id),
+    };
+  }
+
+  /**
+   * Tell an enrolled host to fetch this hub's build and restart into it. It
+   * answers before it goes, so a reply is the whole of the success there is
+   * to report here; coming back at the new version is the rest.
+   */
+  async requestUpdate(hostId: string): Promise<void> {
+    const peer = this.outdated.get(hostId) ?? this.peers.get(hostId);
+    if (!peer || (!peer.connected && !this.outdated.has(hostId))) {
+      throw new Error('that machine is not connected');
+    }
+    if (!this.updatable.has(hostId)) {
+      throw new Error(
+        'the hub on that machine is too old to update itself; re-run the join command there once',
+      );
+    }
+    await peer.request({ t: 'update', id: randomUUID() });
   }
 
   private create(host: Host, opts: { url?: string; token?: string }): PeerConnection {
@@ -223,6 +291,9 @@ export class PeerRegistry extends EventEmitter {
   }
 
   remove(hostId: string): void {
+    const outdated = this.outdated.get(hostId);
+    this.outdated.delete(hostId);
+    outdated?.close();
     this.peers.get(hostId)?.close();
     this.peers.delete(hostId);
     this.remote.delete(hostId);
@@ -233,6 +304,8 @@ export class PeerRegistry extends EventEmitter {
   }
 
   closeAll(): void {
+    for (const p of this.outdated.values()) p.close();
+    this.outdated.clear();
     for (const p of this.peers.values()) p.close();
     this.peers.clear();
     this.remote.clear();
@@ -539,11 +612,16 @@ export class PeerRegistry extends EventEmitter {
    * Ask a peer to stop its whole hub. Best effort by nature: it may already be
    * gone, and it stops answering the moment it obeys.
    */
-  async requestShutdown(hostId: string): Promise<boolean> {
-    const peer = this.peers.get(hostId);
-    if (!peer?.connected) return false;
+  async requestShutdown(hostId: string, opts: { resume?: boolean } = {}): Promise<boolean> {
+    const outdated = this.outdated.get(hostId);
+    const peer = outdated ?? this.peers.get(hostId);
+    if (!peer || (!outdated && !peer.connected)) return false;
     try {
-      await peer.request({ t: 'shutdown', id: randomUUID() });
+      await peer.request({
+        t: 'shutdown',
+        id: randomUUID(),
+        ...(opts.resume ? { resume: true } : {}),
+      });
       return true;
     } catch {
       // It went away before replying, which is the outcome we wanted.

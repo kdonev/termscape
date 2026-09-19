@@ -46,6 +46,8 @@ import { hubTarballPath } from './remote/tarball.js';
 import { debug } from './debug.js';
 import { paths } from './paths.js';
 import { checkFolder, folderName } from './folders.js';
+import type { Updater } from './update/updater.js';
+import { saveResumeList, takeResumeList } from './update/resume.js';
 
 /** A template resolved to the values a launch needs. */
 interface PickedTemplate {
@@ -150,6 +152,12 @@ export class Hub extends EventEmitter implements AgentApi {
   readonly router: MessageRouter;
   readonly peers: PeerRegistry;
   /**
+   * Newer releases and installing them. Set by the command line once it knows
+   * how this hub was installed; null in tests and on a joined machine, which
+   * takes its canvas's build instead.
+   */
+  updater: Updater | null = null;
+  /**
    * The link back to the canvas this hub was attached to, if it was. Null on a
    * hub that owns a canvas — which is what makes the difference between the
    * two roles a null check rather than a flag.
@@ -231,7 +239,7 @@ export class Hub extends EventEmitter implements AgentApi {
       this.everyAgent()
         .filter((o) => o.address !== s.address && canSee(s, o))
         .map((o) => o.address);
-    this.peers.on('host', (h) => this.emit('host', h));
+    this.peers.on('host', (h: Host) => this.emit('host', this.peers.decorate(h)));
     this.peers.on('peerAgents', (hostId: string, found: AgentProfileInfo[]) =>
       this.emit('hostAgents', hostId, found),
     );
@@ -969,6 +977,30 @@ export class Hub extends EventEmitter implements AgentApi {
   }
 
   /**
+   * Bring a host to this hub's version.
+   *
+   * An ssh host is redeployed: its hub is stopped first, because a deploy
+   * reuses a hub it finds running, and then `connectHost` finds the version
+   * wrong and installs this one. An enrolled host is told to fetch this hub's
+   * build and restart itself; it comes back on its own, at the new version.
+   */
+  async upgradeHost(hostId: string): Promise<void> {
+    const host = this.store.listHosts().find((h) => h.id === hostId);
+    if (!host) throw new Error(`unknown host ${hostId}`);
+    if (host.kind === 'ssh') {
+      // Asked to remember its running agents on the way down: the hub the
+      // redeploy starts resumes them.
+      await this.peers.requestShutdown(hostId, { resume: true }).catch(() => false);
+      this.peers.remove(hostId);
+      await this.tunnels.get(hostId)?.dispose().catch(() => {});
+      this.tunnels.delete(hostId);
+      await this.connectHost(hostId);
+      return;
+    }
+    await this.peers.requestUpdate(hostId);
+  }
+
+  /**
    * Deploy the hub to a host if needed, tunnel to it, and join it to the
    * directory. The peer token is minted per connection and never written to
    * the local database.
@@ -1248,6 +1280,38 @@ export class Hub extends EventEmitter implements AgentApi {
       .join('\n\n');
     this.noteOpening(session.id, opening || null);
     return session;
+  }
+
+  /**
+   * Write down which agents on this machine are running, ahead of a restart
+   * for an update, so the hub that comes up next can resume them.
+   */
+  rememberRunning(): void {
+    const running = this.sessions
+      .list()
+      .filter((s) => s.state === 'running' || s.state === 'starting')
+      .map((s) => s.id);
+    saveResumeList(running);
+  }
+
+  /**
+   * Resume what the hub before this one was running when it went down for an
+   * update. One agent that will not come back is reported and skipped, not a
+   * reason to leave the others stopped.
+   */
+  async resumeRemembered(): Promise<string[]> {
+    const resumed: string[] = [];
+    for (const id of takeResumeList()) {
+      const s = this.sessions.get(id);
+      if (!s || s.state === 'running' || s.state === 'starting') continue;
+      try {
+        await this.resumeSession(id);
+        resumed.push(s.address);
+      } catch (err) {
+        this.emit('error', new Error(`resume ${s.address}: ${(err as Error).message}`));
+      }
+    }
+    return resumed;
   }
 
   async resumeWorkspace(workspaceId: string): Promise<Session[]> {
