@@ -193,7 +193,18 @@ export class PeerRegistry extends EventEmitter {
       hubVersion: this.hubVersion,
     });
 
+    /*
+     * Whether this peer is still the one the host is on. A socket that has
+     * been replaced - by a redial, or by the same machine coming back a
+     * schema behind - can fail long after it stopped being current, and its
+     * close or error would otherwise stamp `disconnected` or `error` over the
+     * row its successor is keeping. The state a superseded socket reports is
+     * about the socket, not about the machine.
+     */
+    const current = () => this.peers.get(host.id) === peer;
+
     peer.on('connected', (version: string) => {
+      if (!current()) return;
       this.updateHost(host.id, { state: 'connected', hubVersion: version, error: null });
       // A host that was unreachable when the user closed one of its windows
       // has an instruction waiting for it.
@@ -206,6 +217,7 @@ export class PeerRegistry extends EventEmitter {
     });
 
     peer.on('disconnected', () => {
+      if (!current()) return;
       this.updateHost(host.id, { state: 'disconnected' });
       // Windows stay on the canvas (layout is local) but go offline, rather
       // than vanishing and losing the user's arrangement.
@@ -213,6 +225,7 @@ export class PeerRegistry extends EventEmitter {
     });
 
     peer.on('error', (err: Error) => {
+      if (!current()) return;
       this.updateHost(host.id, { state: 'error', error: err.message });
     });
 

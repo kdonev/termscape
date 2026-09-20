@@ -1096,6 +1096,69 @@ describe('updating a host from the canvas', () => {
     await hubA.removeHost(hostId);
   }, 20_000);
 
+  /*
+   * The socket a host arrives on is not the host. One that has been replaced
+   * can fall over afterwards - a machine that reconnects a schema behind
+   * leaves its previous socket to be torn down, and the reset lands whenever
+   * the platform gets round to it - and what it reports then is about that
+   * socket, not about the machine the canvas is now talking to.
+   */
+  it('stays outdated when the socket it replaced falls over afterwards', async () => {
+    const url = originA.replace(/^http/, 'ws') + '/peer-in';
+
+    // A normal enrollment, left open so its peer is still the live one.
+    const first = new WebSocket(url);
+    const welcomes: any[] = [];
+    first.on('error', () => {
+      // The abrupt teardown below is the point; it is not a failure here.
+    });
+    first.on('message', (raw: Buffer) => welcomes.push(JSON.parse(raw.toString('utf8'))));
+    await new Promise<void>((resolve) => first.on('open', () => resolve()));
+    first.send(
+      JSON.stringify({
+        t: 'hello',
+        token: servedA.enrollment.mint(),
+        hubVersion: '0.0.1-old',
+        schemaVersion: PEER_SCHEMA_VERSION,
+        canUpdate: true,
+        enroll: { label: 'flaky-box', platform: 'linux', arch: 'x64', homeDir: '/home/old' },
+      }),
+    );
+    await waitFor(() => welcomes.length > 0, 5_000, 'welcome');
+    const hostToken = welcomes[0].hostToken;
+    const hostId = hubA.store.hostByToken(hostToken)!.id;
+
+    // The same machine, back a schema behind, on a socket of its own.
+    const second = new WebSocket(url);
+    const frames: any[] = [];
+    second.on('message', (raw: Buffer) => frames.push(JSON.parse(raw.toString('utf8'))));
+    await new Promise<void>((resolve) => second.on('open', () => resolve()));
+    second.send(
+      JSON.stringify({
+        t: 'hello',
+        token: hostToken,
+        hubVersion: '0.0.1-old',
+        schemaVersion: PEER_SCHEMA_VERSION - 1,
+        canUpdate: true,
+      }),
+    );
+    await waitFor(() => frames.length > 0, 5_000, 'welcome for the older socket');
+    expect(hubA.store.getHost(hostId)?.state).toBe('outdated');
+
+    // Only now does the socket it replaced go away, without a close frame.
+    first.terminate();
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    expect(hubA.store.getHost(hostId)?.state).toBe('outdated');
+
+    second.close();
+    await waitFor(
+      () => hubA.store.getHost(hostId)?.state === 'disconnected',
+      5_000,
+      'host to drop',
+    );
+    await hubA.removeHost(hostId);
+  }, 20_000);
+
   it('still refuses a host a schema behind that cannot update itself', async () => {
     const enrolled = await handshake(originA, servedA.enrollment.mint());
     const res = await handshake(originA, enrolled.hostToken, {
