@@ -19,7 +19,9 @@ import { WINDOW_UNAVAILABLE } from './open-window.js';
  * The package is an optional dependency with a native binary per platform, so
  * it is absent wherever npm had no prebuilt for it. Importing its types would
  * make the hub fail to typecheck on exactly the machines this file exists to
- * degrade gracefully on.
+ * degrade gracefully on. That is also this declaration's whole risk: it can
+ * drift from the real thing, which ships its own index.d.ts and is documented
+ * in the package's docs/api/application.md - diff against those, not memory.
  */
 interface WebviewModule {
   Application: new () => WebviewApp;
@@ -165,16 +167,25 @@ async function main(): Promise<void> {
   /*
    * @webviewjs/webview does not run a native message loop: it pumps the
    * platform's native events from a JS timer at this interval, 16ms by
-   * default. One pumpEvents() call does not drain the queue, so the pump's
-   * ceiling is roughly one message per tick - about 62 per second at the
-   * default - and on Windows a mouse wheel alone produced 64 Win32 messages
-   * per second in the capture that found this, before mouse-move and paint
-   * messages compete for the same slots. The queue fills faster than it
-   * drains and never recovers: a low-level Windows mouse hook measured
-   * Ctrl+wheel events reaching this process 17, 313, 1079, 2135, 3771 and
-   * 6180ms late across six gestures on WebView2, the delay growing gesture
-   * over gesture rather than settling between them - which is what makes it
-   * a bug rather than a latency budget. 1ms removes the backlog entirely.
+   * default. Measured, with a low-level Windows mouse hook correlated
+   * against the page's own clock: Ctrl+wheel events reached this process 17,
+   * 313, 1079, 2135, 3771 and 6180ms late across six gestures on WebView2,
+   * the delay growing gesture over gesture rather than settling between
+   * them; the browser's own event timestamp to the page's handler was 0-1ms
+   * every time, so nothing downstream of this process was at fault; and
+   * setting interval to 1 removes the delay entirely.
+   *
+   * The likely explanation - not an established one - is that pumpEvents()
+   * cannot keep the queue drained at 16ms under wheel input, and the backlog
+   * compounds rather than clearing between gestures. Upstream's own docs do
+   * not agree on this: getting-started/event-loop.md says pumpEvents()
+   * "drains the OS message queue" each call, while api/application.md calls
+   * it "one batch". The arithmetic does not cleanly support a one-message-
+   * per-tick ceiling either - at ~62/sec against a wheel that produced 64
+   * messages/sec, the ~1.5/sec surplus would take roughly 258 seconds of
+   * continuous wheeling to build a 6180ms backlog, not the well-under-two-
+   * seconds these six gestures actually spanned. Whatever the real mechanism
+   * turns out to be, interval 1 fixes the measured symptom.
    *
    * Scoped to Windows because that is where it was measured, not because the
    * pump is Windows-specific: it is the same JS timer on WKWebView and
@@ -187,10 +198,13 @@ async function main(): Promise<void> {
    * a window that is usually idle, costing about 2.4% of a core on Windows
    * measured over 30s idle (1.41% at 16ms, 3.80% at 1ms) - and, per the above,
    * scoped to where the symptom was actually reproduced rather than to where
-   * the bug is known to be absent. Both upgrade paths are upstream's to
-   * give: draining pumpEvents() until it returns false within one tick
-   * instead of raising the frequency, or a real blocking message loop on its
-   * own thread.
+   * the bug is known to be absent. Both upgrade paths are upstream's to give:
+   * a pumpEvents() that reports whether work remains, so this could back off
+   * instead of polling at a fixed rate regardless of load - nothing in the
+   * current API says whether the queue drained or the app merely stayed
+   * alive, `false` means the latter (app.run()'s own wrapper is `if
+   * (!pumpEvents()) stop()`) - or a real blocking message loop on its own
+   * thread.
    */
   await app.whenReady(process.platform === 'win32' ? { interval: 1 } : {});
 }
