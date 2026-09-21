@@ -1,3 +1,5 @@
+import { isPasteImageType } from './paste.js';
+
 /**
  * Clipboard access that survives a non-secure context.
  *
@@ -63,4 +65,42 @@ export async function readClipboard(): Promise<string | null> {
   } catch {
     return null;
   }
+}
+
+/** What a clipboard read found: an image, text, or (both absent) nothing. */
+export interface ClipboardContent {
+  image?: Blob;
+  text?: string;
+}
+
+/**
+ * Read an image off the clipboard if there is one, and text otherwise - the
+ * read behind right-click and Ctrl+Shift+V, neither of which gets a native
+ * `paste` event to take one from (see paste.ts).
+ *
+ * `navigator.clipboard.read` is the only API that returns an image, and it
+ * is newer than `readText`, so a browser without it, or one that refuses it,
+ * still gets its text through `readClipboard`. `null` keeps that function's
+ * contract: nothing could be read at all, as opposed to an empty clipboard.
+ */
+export async function readClipboardContent(): Promise<ClipboardContent | null> {
+  try {
+    const items = await navigator.clipboard?.read?.();
+    if (items) {
+      for (const item of items) {
+        const type = item.types.find(isPasteImageType);
+        if (type) return { image: await item.getType(type) };
+      }
+      for (const item of items) {
+        if (item.types.includes('text/plain')) {
+          return { text: await (await item.getType('text/plain')).text() };
+        }
+      }
+      return {};
+    }
+  } catch {
+    // Refused, or a type it would not hand over - text is still worth trying.
+  }
+  const text = await readClipboard();
+  return text === null ? null : { text };
 }

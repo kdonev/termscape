@@ -474,7 +474,8 @@ could be talked into sending an attacker's text to a peer.
 - `--dangerously-skip-permissions` is never a default.
 - A share link is a real grant of a keyboard on an agent that can run
   commands, not a read-only view — the dialog says so before you copy one.
-  It opens exactly one terminal and nothing else: no canvas, no other agent's
+  That includes pasting images: each one is written, capped at 5 MB, to a file
+  under that session's own directory in `~/.termscape/run`. It opens exactly one terminal and nothing else: no canvas, no other agent's
   name, no panel. It is scoped to that one session everywhere the canvas
   token is checked, stored in `state.db` so it survives a hub restart, and
   reachable only on the interfaces the hub bound — a hub started with

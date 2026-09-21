@@ -2,14 +2,15 @@ import { useCallback, useEffect, useRef } from 'react';
 import { Terminal as XTerm } from '@xterm/xterm';
 import { WebglAddon } from '@xterm/addon-webgl';
 import '@xterm/xterm/css/xterm.css';
-import { describeSnapshotModes } from '@termscape/protocol';
+import { MAX_PASTE_IMAGE_BYTES, describeSnapshotModes } from '@termscape/protocol';
 import { useStore } from '../state/store.js';
 import { debug, debugOn } from '../debug.js';
 import { terminalFontSize } from '../canvas/viewport.js';
 import { wheelAction, wheelKey } from './wheel.js';
 import { rightClickAction } from './rightClick.js';
 import { pinScroll, restoreScroll, type ScrollPin } from './scrollPin.js';
-import { readClipboard, writeClipboard } from './clipboard.js';
+import { readClipboardContent, writeClipboard, type ClipboardContent } from './clipboard.js';
+import { isPasteImageType, pasteChord, pastedImage, toBase64 } from './paste.js';
 import {
   TERMINAL_FONT_FAMILY,
   TERMINAL_LINE_HEIGHT,
@@ -54,6 +55,9 @@ interface Props {
  * once the position already holds.
  */
 const PIN_FRAMES = 10;
+
+/** Whether Cmd+V, not Ctrl+V, is this machine's paste - see paste.ts. */
+const IS_MAC = /Mac|iPhone|iPad/.test(navigator.platform);
 
 const THEME = {
   background: '#0e1117',
@@ -331,6 +335,88 @@ export function TerminalView({
     frame?.addEventListener('wheel', onWheelBubble, { passive: true });
 
     /*
+     * Pasting, text or an image, from every key and click that means paste.
+     * See paste.ts for why an image arrives as a path and for which keys
+     * take which route; everything here ends in pasteContent.
+     */
+    const pasteFailed = (why: string) => {
+      debug('input', sessionId, `paste FAILED: ${why}`);
+      useStore.setState((s) => ({ errors: [...s.errors, `Paste failed: ${why}`].slice(-5) }));
+    };
+    const pasteImage = async (image: Blob) => {
+      if (!isPasteImageType(image.type)) throw new Error(`cannot paste an image of type ${image.type}`);
+      if (image.size > MAX_PASTE_IMAGE_BYTES) {
+        const mb = (n: number) => (n / 1024 / 1024).toFixed(1);
+        throw new Error(`the image is ${mb(image.size)} MB; the limit is ${mb(MAX_PASTE_IMAGE_BYTES)} MB`);
+      }
+      debug('input', sessionId, `paste image ${image.type} ${image.size}B -> hub`);
+      const data = toBase64(new Uint8Array(await image.arrayBuffer()));
+      const { path } = await client.request({ t: 'pasteImage', sessionId, mime: image.type, data });
+      if (!path) throw new Error('the hub did not say where it saved the image');
+      debug('input', sessionId, `paste image saved as ${path}`);
+      term.paste(path);
+    };
+    const pasteContent = (content: ClipboardContent) => {
+      if (content.image) {
+        pasteImage(content.image).catch((e: Error) => pasteFailed(e.message));
+      } else if (content.text) {
+        term.paste(content.text);
+      }
+    };
+
+    /*
+     * Keys xterm would otherwise send as themselves - Ctrl+V as ^V, which
+     * also cancels the keydown so the browser never pastes at all. Returning
+     * false stops xterm without preventDefault, so for a `native` chord the
+     * browser goes on to fire its own paste, handled by onPaste below.
+     *
+     * `async` (Ctrl+Shift+V) reads the clipboard itself where it can, because
+     * the browser's own Ctrl+Shift+V strips images. Where it cannot - a
+     * non-secure context - the native plain-text paste is still let through.
+     */
+    let pasteFallback: string | undefined;
+    term.attachCustomKeyEventHandler((e) => {
+      const chord = pasteChord(e, IS_MAC);
+      if (!chord) return true;
+      if (chord.route === 'async' && typeof navigator.clipboard?.read === 'function') {
+        e.preventDefault();
+        void readClipboardContent().then((content) => {
+          if (content === null) debug('input', sessionId, 'ctrl+shift+v -> clipboard unreadable');
+          else pasteContent(content);
+        });
+        return false;
+      }
+      pasteFallback = chord.fallback;
+      return false;
+    });
+
+    /*
+     * The browser's paste, whichever key started it. Capture, for the same
+     * reason as the wheel and right-click listeners: xterm's own handler on
+     * its textarea inside this frame reads only text, and has to be kept away
+     * from an image. Text is left to it exactly as before.
+     *
+     * A paste with nothing in it hands the key back to the program: Ctrl+V
+     * is ^V to anything that reads the clipboard itself on it.
+     */
+    const onPaste = (e: ClipboardEvent) => {
+      const fallback = pasteFallback;
+      pasteFallback = undefined;
+      const image = pastedImage(e.clipboardData);
+      if (image) {
+        e.preventDefault();
+        e.stopPropagation();
+        pasteContent({ image });
+        return;
+      }
+      if (fallback && !e.clipboardData?.getData('text/plain')) {
+        debug('input', sessionId, 'paste: nothing on the clipboard; sending the key instead');
+        client.sendInput(sessionId, fallback);
+      }
+    };
+    frame?.addEventListener('paste', onPaste, { capture: true });
+
+    /*
      * Right-click, decided the way rightClick.ts decides it and executed
      * here because that is where the clipboard and the terminal both live.
      *
@@ -372,22 +458,23 @@ export function TerminalView({
           if (wrote) term.clearSelection();
         });
       } else {
-        void readClipboard().then((text) => {
-          if (text === null) {
-            // The one a LAN user will hit: navigator.clipboard.readText does
-            // not exist outside a secure context, so a plain-http canvas
-            // opened from another machine cannot read the clipboard at all.
+        void readClipboardContent().then((content) => {
+          if (content === null) {
+            // The one a LAN user will hit: navigator.clipboard does not exist
+            // outside a secure context, so a plain-http canvas opened from
+            // another machine cannot read the clipboard from a click at all.
             // Traced rather than thrown, because there is nothing to recover
-            // into - Ctrl+V still works, since it never touches this API.
+            // into - Ctrl+V and Shift+Insert still work, text and images
+            // both, since they take the browser's own paste event instead.
             debug('input', sessionId, 'right-click -> paste: clipboard unreadable (non-secure context?)');
             return;
           }
-          if (text.length === 0) {
+          if (!content.image && !content.text) {
             debug('input', sessionId, 'right-click -> paste: clipboard empty');
             return;
           }
-          debug('input', sessionId, `right-click -> pasted ${text.length} char(s)`);
-          term.paste(text);
+          debug('input', sessionId, 'right-click -> paste');
+          pasteContent(content);
         });
       }
     };
@@ -448,6 +535,7 @@ export function TerminalView({
       frame?.removeEventListener('wheel', onWheelCapture, { capture: true });
       frame?.removeEventListener('wheel', onWheelBubble);
       frame?.removeEventListener('mousedown', onRightClickMouseDown, { capture: true });
+      frame?.removeEventListener('paste', onPaste, { capture: true });
       unwatchSnapshot();
       onData.dispose();
       onBinary.dispose();

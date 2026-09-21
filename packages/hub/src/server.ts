@@ -19,6 +19,7 @@ import {
 } from '@termscape/protocol';
 import { Hub, HUB_VERSION } from './hub.js';
 import { debug, debugOn } from './debug.js';
+import { savePastedImage } from './session/paste-image.js';
 import { createPeerServer, type PeerServer } from './remote/peer-serve.js';
 import { registerEnrollment, type Enrollment } from './remote/enroll.js';
 import {
@@ -566,8 +567,12 @@ export async function serve(opts: ServeOptions): Promise<ServeResult> {
   ): Promise<void> {
     const requestId = 'requestId' in msg ? msg.requestId : undefined;
     try {
-      const sessionId = (await dispatchClientMsg(socket, msg)) || undefined;
-      if (requestId) send(socket, { t: 'ack', requestId, ok: true, sessionId });
+      const result = await dispatchClientMsg(socket, msg);
+      // A string is the session a mutation created; an object is what a
+      // `pasteImage` saved.
+      const sessionId = typeof result === 'string' && result ? result : undefined;
+      const path = typeof result === 'object' ? result.path : undefined;
+      if (requestId) send(socket, { t: 'ack', requestId, ok: true, sessionId, path });
     } catch (err) {
       const message = (err as Error).message;
       if (requestId) send(socket, { t: 'ack', requestId, ok: false, message });
@@ -578,7 +583,7 @@ export async function serve(opts: ServeOptions): Promise<ServeResult> {
   async function dispatchClientMsg(
     socket: import('ws').WebSocket,
     msg: ClientMsg,
-  ): Promise<string | void> {
+  ): Promise<string | { path: string } | void> {
     /*
      * A share-scoped socket may only ask about the one session it was
      * handed. Everything downstream of `hello` for the canvas token is a
@@ -593,10 +598,15 @@ export async function serve(opts: ServeOptions): Promise<ServeResult> {
      * PTY's size and leave the *owner* rendering on a grid the PTY no longer
      * has. Accepting a resize here would be a permission nothing uses whose
      * only effect is to reopen that.
+     *
+     * `pasteImage` is on it: a share link can already type into the PTY, and
+     * a pasted image is only ever a file in that session's own directory
+     * plus a path typed in the same way.
      */
     const scope = scopes.get(socket);
     if (typeof scope === 'string') {
-      const allowed = msg.t === 'hello' || msg.t === 'attach' || msg.t === 'detach';
+      const allowed =
+        msg.t === 'hello' || msg.t === 'attach' || msg.t === 'detach' || msg.t === 'pasteImage';
       if (!allowed || ('sessionId' in msg && msg.sessionId !== scope)) {
         throw new Error('not permitted on a shared-session link');
       }
@@ -681,6 +691,32 @@ export async function serve(opts: ServeOptions): Promise<ServeResult> {
         }
         hub.sessions.resize(msg.sessionId, msg.cols, msg.rows);
         return;
+      }
+
+      case 'pasteImage': {
+        const remote = hub.peers.find(msg.sessionId);
+        const size = Math.floor((msg.data.length * 3) / 4);
+        debug(
+          'input',
+          `paste image ${msg.sessionId} ${msg.mime} ~${size}B ` +
+            (remote ? `-> peer host=${hub.peers.hostIdFor(msg.sessionId) ?? '?'}` : 'local'),
+        );
+        if (remote) {
+          const result = (await remote.peer.request({
+            t: 'pasteImage',
+            id: randomUUID(),
+            address: msg.sessionId,
+            mime: msg.mime,
+            data: msg.data,
+          })) as { path?: unknown } | undefined;
+          if (typeof result?.path !== 'string') throw new Error('the host did not say where it saved the image');
+          debug('input', `paste image ${msg.sessionId} saved on peer: ${result.path}`);
+          return { path: result.path };
+        }
+        if (!hub.sessions.get(msg.sessionId)) throw new Error(`no session ${msg.sessionId}`);
+        const path = savePastedImage(msg.sessionId, msg.mime, msg.data);
+        debug('input', `paste image ${msg.sessionId} saved: ${path}`);
+        return { path };
       }
 
       case 'checkFolder':

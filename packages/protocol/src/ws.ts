@@ -88,6 +88,29 @@ export function decodeBinaryFrame(buf: Uint8Array): DecodedBinaryFrame {
  */
 const requestId = z.string().optional();
 
+/**
+ * The image types a paste can carry into a terminal. Kept to what the agent
+ * CLIs accept as an attachment, and what a browser actually puts on a
+ * clipboard - a screenshot is a PNG everywhere.
+ */
+export const PASTE_IMAGE_TYPES = {
+  'image/png': 'png',
+  'image/jpeg': 'jpg',
+  'image/gif': 'gif',
+  'image/webp': 'webp',
+} as const;
+export type PasteImageType = keyof typeof PASTE_IMAGE_TYPES;
+export const PasteImageMime = z.enum(
+  Object.keys(PASTE_IMAGE_TYPES) as [PasteImageType, ...PasteImageType[]],
+);
+
+/**
+ * The largest image a paste may carry, before encoding. It travels as base64
+ * (a third bigger) inside a JSON frame, and a remote one inside a second
+ * envelope to a peer - both capped at the hub's 8 MiB websocket payload.
+ */
+export const MAX_PASTE_IMAGE_BYTES = 5 * 1024 * 1024;
+
 export const ClientMsg = z.discriminatedUnion('t', [
   z.object({ t: z.literal('hello'), token: z.string() }),
 
@@ -95,6 +118,20 @@ export const ClientMsg = z.discriminatedUnion('t', [
   z.object({ t: z.literal('attach'), sessionId: z.string() }),
   z.object({ t: z.literal('detach'), sessionId: z.string() }),
   z.object({ t: z.literal('resize'), sessionId: z.string(), cols: z.number().int().positive(), rows: z.number().int().positive() }),
+  /**
+   * An image pasted into a terminal. The machine that runs the session saves
+   * it and answers with the file's path, which the canvas then pastes as
+   * text: the agent CLIs attach an image when its path is pasted, and that
+   * works wherever the browser and the agent each happen to be.
+   */
+  z.object({
+    t: z.literal('pasteImage'),
+    requestId,
+    sessionId: z.string(),
+    mime: PasteImageMime,
+    /** base64 */
+    data: z.string(),
+  }),
 
   // workspaces
   /**
@@ -307,7 +344,8 @@ export type AckableMsg = Extract<
       | 'upgradeHost'
       | 'applyUpdate'
       | 'shareSession'
-      | 'unshareSession';
+      | 'unshareSession'
+      | 'pasteImage';
   }
 >;
 
@@ -447,6 +485,8 @@ export const ServerMsg = z.discriminatedUnion('t', [
      * and the broadcast alone does not tell it which session was its own.
      */
     sessionId: z.string().optional(),
+    /** Where a `pasteImage` was saved, on the machine running the session. */
+    path: z.string().optional(),
   }),
 ]);
 export type ServerMsg = z.infer<typeof ServerMsg>;

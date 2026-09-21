@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
   BinaryFrameKind,
+  ClientMsg,
+  ServerMsg,
   decodeBinaryFrame,
   encodeBinaryFrame,
 } from '../src/ws.js';
+import { PeerRequest } from '../src/peer.js';
 
 /*
  * The input path has to be byte-faithful.
@@ -41,5 +44,21 @@ describe('binary frames', () => {
     const asString = Buffer.from(report).toString('latin1');
     const back = Buffer.from(JSON.parse(JSON.stringify(asString)) as string, 'latin1');
     expect([...back]).toEqual([...report]);
+  });
+});
+
+describe('pasteImage', () => {
+  it('parses as a client message, and its ack carries the path', () => {
+    const msg = { t: 'pasteImage', requestId: 'r1', sessionId: 'ws/a', mime: 'image/png', data: 'AQID' };
+    expect(ClientMsg.parse(msg)).toEqual(msg);
+    expect(ClientMsg.safeParse({ ...msg, mime: 'image/svg+xml' }).success).toBe(false);
+
+    const ack = { t: 'ack', requestId: 'r1', ok: true, path: '/home/u/.termscape/run/s/pastes/1.png' };
+    expect(ServerMsg.parse(ack)).toEqual(ack);
+  });
+
+  it('parses as a peer request', () => {
+    const req = { t: 'pasteImage', id: 'x', address: 'ws/a', mime: 'image/jpeg', data: 'AQID' };
+    expect(PeerRequest.parse(req)).toEqual(req);
   });
 });

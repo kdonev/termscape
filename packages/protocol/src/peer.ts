@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { AgentProfileInfo, AgentStatus, Session, SessionState } from './domain.js';
+import { PasteImageMime } from './ws.js';
 
 /**
  * Hub-to-hub RPC.
@@ -348,6 +349,20 @@ export const PeerRequest = z.discriminatedUnion('t', [
    * answered on the canvas, and only this hub owns its terminal.
    */
   z.object({ t: z.literal('notify'), id: z.string(), address: z.string(), text: z.string() }),
+  /**
+   * An image pasted into one of this host's terminals, saved here because
+   * this is where the agent that will read it runs. Answered with
+   * `{ path }`. Added without a schema bump: an older host drops the frame
+   * and the request times out, which the canvas reports as a failed paste -
+   * nothing is corrupted or bypassed by that.
+   */
+  z.object({
+    t: z.literal('pasteImage'),
+    id: z.string(),
+    address: z.string(),
+    mime: PasteImageMime,
+    data: z.string(),
+  }),
 ]);
 export type PeerRequest = z.infer<typeof PeerRequest>;
 

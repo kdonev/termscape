@@ -23,6 +23,8 @@ interface Pending {
 export interface RequestResult {
   /** The session the mutation created, when it created one. */
   sessionId?: string;
+  /** Where a pasted image was saved, on the machine running the session. */
+  path?: string;
 }
 
 /**
@@ -84,10 +86,10 @@ export class HubClient {
       if (!parsed.success) return;
 
       if (parsed.data.t === 'ack') {
-        const { requestId, ok, message, sessionId } = parsed.data;
+        const { requestId, ok, message, sessionId, path } = parsed.data;
         const waiting = this.pending.get(requestId);
         this.pending.delete(requestId);
-        if (ok) waiting?.resolve({ sessionId });
+        if (ok) waiting?.resolve({ sessionId, path });
         else waiting?.reject(new Error(message || 'the hub refused that'));
         // The promise is the whole interface for callers that only need to
         // know it happened; the ones that want a created id read the result.

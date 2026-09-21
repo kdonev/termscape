@@ -18,6 +18,7 @@ import type { Hub } from '../hub.js';
 import { HUB_VERSION } from '../hub.js';
 import { debug, debugOn } from '../debug.js';
 import { checkFolder } from '../folders.js';
+import { savePastedImage } from '../session/paste-image.js';
 
 /**
  * The answering half of the hub-to-hub link: it serves requests about *this*
@@ -378,6 +379,14 @@ export function createPeerServer(hub: Hub, clientToken: string): PeerServer {
               hub.sessions.write(t.id, req.data);
             }
             return ok({ ok: true });
+          }
+
+          case 'pasteImage': {
+            const t = hub.sessions.getByAddress(req.address);
+            if (!t) return err(`no agent at address "${req.address}"`);
+            const path = savePastedImage(t.id, req.mime, req.data);
+            debug('input', `peer paste image ${req.id} ${req.address} saved: ${path}`);
+            return ok({ path });
           }
 
           case 'resize': {
