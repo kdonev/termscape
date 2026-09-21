@@ -405,8 +405,9 @@ export const WHEEL_FLICK_GAP_MS = 80;
  * Calibrated against 40 measured flick attempts on a build where wheel event
  * delivery was healthy (no host-side delivery lag muddying the timing): they
  * ran 4 to 7 detents at 26 to 94 detents per second. 4 is the floor of that
- * observed range — low enough to fire on the slowest deliberate flick, with
- * WHEEL_FLICK_MIN_SPEED below to keep a slow 4-notch zoom from snapping.
+ * observed range — low enough to fire on the slowest deliberate flick.
+ * WHEEL_FLICK_MIN_SPEED below guards a different case, not this one: the
+ * event gap already keeps a monotonic spin from reaching this floor slowly.
  */
 export const WHEEL_FLICK_MIN_DETENTS = 4;
 
@@ -420,14 +421,22 @@ export const WHEEL_FLICK_MIN_DETENTS = 4;
 export const WHEEL_FLICK_MAX_MS = 400;
 
 /**
- * How fast a spin has to be, in detents per second, once it clears
- * WHEEL_FLICK_MIN_DETENTS.
+ * How fast a burst's net ratio has to cover ground, in detents per second,
+ * once it clears WHEEL_FLICK_MIN_DETENTS.
  *
- * Lowering that floor to 4 means a slow, deliberate 4-notch zoom that happens
- * to finish inside WHEEL_FLICK_MAX_MS would otherwise snap the viewport,
- * which was never the intent. Every one of the 40 measured flick attempts ran
- * at 25.8 detents/sec or faster; 15 sits below that with margin while still
- * excluding deliberate zooming, which is slower.
+ * A monotonic spin can never trip this on its own: the burst only holds
+ * together while consecutive events land within WHEEL_FLICK_GAP_MS (80ms) of
+ * each other, so a burst of E events spans at most 80(E-1)ms — putting a
+ * monotonic spin's slowest reachable rate at N/(0.08(N-1)) detents/sec: 16.7
+ * at 4 detents, 15.6 at 5, 15.0 at 6, and 7+ is rejected by
+ * WHEEL_FLICK_MAX_MS first. Nothing between 4 and 10 detents can be slower
+ * than 15/sec that way.
+ *
+ * What this actually catches is a burst that doubles back on itself: the gap
+ * keeps a spin that reverses mid-burst held together (each leg's own events
+ * are still within it), but the net ratio covers little ground for how long
+ * the whole burst ran. Six events of five-in-then-one-out at 70ms apart nets
+ * 4 detents over 350ms — 11.4/sec — and this is what rejects it.
  */
 export const WHEEL_FLICK_MIN_SPEED = 15;
 
@@ -435,11 +444,13 @@ export const WHEEL_FLICK_MIN_SPEED = 15;
  * Whether a finished burst of detents reads as a flick, and in which
  * direction.
  *
- * Detents plus a speed floor, unlike a pinch's speed-and-distance pair: the
- * count already says how far, and the gap that held the burst together
- * already said the burst didn't stall out, but a spin that clears the detent
- * floor slowly is a deliberate zoom, not a flick. Not firing is the safe
- * failure — the zoom the spin asked for happened either way.
+ * Detents plus a speed floor, unlike a pinch's speed-and-distance pair — but
+ * a monotonic spin can't actually be slow enough to trip the speed floor,
+ * because WHEEL_FLICK_GAP_MS already keeps a burst from holding together at
+ * that pace (see WHEEL_FLICK_MIN_SPEED). What the floor catches instead is a
+ * burst that doubles back: held together by the gap, but covering little net
+ * ground for how long it ran. Not firing is the safe failure — the zoom the
+ * spin asked for happened either way.
  *
  * events guards against the count alone: a single coalesced event can now
  * carry several detents on its own (see wheelZoomFactor), so a flick has to
@@ -455,7 +466,8 @@ export function wheelFlickIntent(b: {
   if (!(b.durationMs >= 0 && b.durationMs <= WHEEL_FLICK_MAX_MS)) return null;
 
   const detents = Math.abs(Math.log(b.ratio)) / Math.log(WHEEL_NOTCH_FACTOR);
-  // Epsilon because exactly four detents is a float product of four factors.
+  // Epsilon because exactly WHEEL_FLICK_MIN_DETENTS detents is a float
+  // product of that many factors.
   if (detents < WHEEL_FLICK_MIN_DETENTS - 1e-9) return null;
 
   // A burst delivered inside a single frame has no measurable duration. It is

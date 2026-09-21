@@ -672,17 +672,28 @@ describe('wheelFlickIntent', () => {
   });
 
   it('fires at the measured median speed of a real flick', () => {
-    // 4 detents at 60/sec sits in the middle of 40 measured flick attempts
-    // (4-7 detents, 26-94 detents/sec).
+    // 4 detents is the floor of 40 measured flick attempts (4-7 detents);
+    // 60/sec is the median speed among them (26-94 detents/sec).
     expect(wheelFlickIntent(spinAtSpeed(4, 60))).toBe('in');
   });
 
-  it('never snaps a slow deliberate zoom just because it cleared the detent floor', () => {
-    // The regression WHEEL_FLICK_MIN_SPEED exists to prevent: lowering the
-    // floor to 4 detents means a slow zoom can now clear it on count alone.
-    // 4 detents over 350ms is inside WHEEL_FLICK_MAX_MS but well under 15
-    // detents/sec, so it must stay an ordinary zoom.
-    expect(wheelFlickIntent(spin(4, 350))).toBeNull();
+  it('fires on the measured shape: several detents delivered as fewer coalesced events', () => {
+    // The whole point of this change: 5 detents can arrive as 2 events, not
+    // 5, once wheelZoomFactor recovers a coalesced event's real notch count.
+    // This is the one test where events and detents diverge and it still
+    // accepts - events is otherwise only ever tested in its rejecting
+    // direction (events < 2, or a burst that doubled back).
+    expect(wheelFlickIntent(spin(5, 200, 2))).toBe('in');
+  });
+
+  it('never snaps a burst that doubles back, even though the gap holds it together', () => {
+    // What WHEEL_FLICK_MIN_SPEED actually guards, per its doc comment: a
+    // monotonic spin can't be slow enough to trip it, because
+    // WHEEL_FLICK_GAP_MS (80ms) already breaks a burst apart before it could
+    // reach this floor that slowly. Six events netting 4 detents over 350ms
+    // (spaced well within the 80ms gap) is the reachable case - it doubled
+    // back on itself, covering little net ground for how long it ran.
+    expect(wheelFlickIntent(spin(4, 350, 6))).toBeNull();
   });
 
   it('never flicks a 3-detent spin, at any speed', () => {
