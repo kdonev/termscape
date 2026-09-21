@@ -438,7 +438,7 @@ export function TerminalView({
       if (action === 'program') {
         // xterm still gets to encode this as a mouse report; staying out of
         // its way is the whole point of this branch.
-        debug('input', sessionId, 'right-click -> program (mouse tracking on)');
+        debug('input', sessionId, 'right-click -> program (Shift, mouse tracking on)');
         return;
       }
       e.preventDefault();

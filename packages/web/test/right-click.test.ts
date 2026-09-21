@@ -2,16 +2,17 @@ import { describe, expect, it } from 'vitest';
 import { rightClickAction } from '../src/window/rightClick.js';
 
 /*
- * The decision table this exercises, from the conhost / Windows Terminal
- * convention the fix follows:
+ * The decision table: right-click copies or pastes like conhost and Windows
+ * Terminal, even over a program that asked for mouse reports (issue 33), and
+ * Shift is what hands the button to such a program.
  *
  *   mouseTracking | shift | selection | action
  *   --------------+-------+-----------+--------
- *   none          | any   | yes       | copy
- *   none          | any   | no        | paste
- *   not none      | no    | any       | program
- *   not none      | yes   | yes       | copy
- *   not none      | yes   | no        | paste
+ *   any value     | no    | yes       | copy
+ *   any value     | no    | no        | paste
+ *   none          | yes   | yes       | copy
+ *   none          | yes   | no        | paste
+ *   not none      | yes   | any       | program
  */
 
 const ctx = (over: Partial<Parameters<typeof rightClickAction>[0]> = {}) => ({
@@ -32,25 +33,18 @@ describe('rightClickAction', () => {
     expect(rightClickAction(ctx({ hasSelection: false, shift: true }))).toBe('paste');
   });
 
-  it('leaves the button to the program once it asks for reports', () => {
+  it('copies or pastes even when a program asked for reports', () => {
     for (const tracking of ['x10', 'vt200', 'drag', 'any'] as const) {
-      expect(rightClickAction(ctx({ mouseTracking: tracking, hasSelection: false }))).toBe('program');
-      expect(rightClickAction(ctx({ mouseTracking: tracking, hasSelection: true }))).toBe('program');
+      expect(rightClickAction(ctx({ mouseTracking: tracking, hasSelection: false }))).toBe('paste');
+      expect(rightClickAction(ctx({ mouseTracking: tracking, hasSelection: true }))).toBe('copy');
     }
   });
 
-  it('still goes to the program with a selection but no Shift', () => {
-    // The boundary worth naming: a selection alone is not enough to reclaim
-    // the button from a program that asked for it - only Shift is.
-    const c = ctx({ mouseTracking: 'any', hasSelection: true });
-    expect(rightClickAction(c)).toBe('program');
-  });
-
-  it('lets Shift reclaim the button from the program', () => {
-    // The other boundary: tracking is on, but Shift wins over it, exactly as
-    // it does in every real terminal.
-    const c = ctx({ mouseTracking: 'any', shift: true });
-    expect(rightClickAction({ ...c, hasSelection: true })).toBe('copy');
-    expect(rightClickAction({ ...c, hasSelection: false })).toBe('paste');
+  it('gives the button to the program only with Shift', () => {
+    for (const tracking of ['x10', 'vt200', 'drag', 'any'] as const) {
+      const c = ctx({ mouseTracking: tracking, shift: true });
+      expect(rightClickAction({ ...c, hasSelection: false })).toBe('program');
+      expect(rightClickAction({ ...c, hasSelection: true })).toBe('program');
+    }
   });
 });

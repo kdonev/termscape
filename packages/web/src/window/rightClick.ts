@@ -15,11 +15,12 @@
  * something the user just made on purpose - overwriting it with a paste would
  * discard that gesture rather than serve it.
  *
- * A program that *did* ask for mouse reports keeps the button by default, the
- * same way it keeps the wheel in wheel.ts: it is expecting to see button 2
- * itself, most often to open its own context menu or extend a selection of
- * its own. Shift is the escape hatch that takes the button back, exactly as
- * Shift is what every real terminal uses to reach past a mouse-hungry program.
+ * That holds even when a program has asked for mouse reports. Claude Code
+ * turns on full tracking and does nothing with button 2, so giving the button
+ * to the program left right-click dead in exactly the windows the canvas is
+ * for (issue 33). Shift is the way through instead: Shift+right-click sends
+ * the button to a program that asked for it - the reverse of the wheel in
+ * wheel.ts, where the program's claim is the one that matters.
  *
  * Kept pure and kept here rather than inline in the component so it can be
  * tested without a DOM, which is the only environment the web tests have.
@@ -31,16 +32,16 @@ export interface RightClickContext {
   mouseTracking: MouseTracking;
   /** Whether the terminal currently has a selection. */
   hasSelection: boolean;
-  /** Whether Shift was held, the override that reclaims the button. */
+  /** Whether Shift was held, which hands the button to a program that asked. */
   shift: boolean;
 }
 
 export type RightClickAction = 'program' | 'copy' | 'paste';
 
 export function rightClickAction(ctx: RightClickContext): RightClickAction {
-  // The program owns the button the moment it asks for reports, unless Shift
-  // says otherwise - the same deal a mouse-hungry program gets on the wheel.
-  if (ctx.mouseTracking !== 'none' && !ctx.shift) return 'program';
+  // Only Shift gives the button to the program, and only if it asked for
+  // reports - otherwise there is nobody to give it to.
+  if (ctx.shift && ctx.mouseTracking !== 'none') return 'program';
 
   return ctx.hasSelection ? 'copy' : 'paste';
 }
