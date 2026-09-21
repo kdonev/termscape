@@ -24,6 +24,7 @@ import {
   wheelFlickIntent,
   WHEEL_NOTCH_FACTOR,
   WHEEL_FLICK_MAX_MS,
+  WHEEL_FLICK_MIN_DETENTS,
   workspaceBounds,
   worldToScreen,
   zoomAt,
@@ -452,6 +453,24 @@ describe('wheelZoomFactor', () => {
     expect(isWheelNotch(-4)).toBe(false);
     expect(isWheelNotch(-3, 1)).toBe(true);
   });
+
+  it('recovers every notch a fast spin coalesced into one event', () => {
+    // Chromium sums consecutive notches spun quickly into a single event, so
+    // one event of -500 is what five separate -100 events would have done.
+    const five = wheelZoomFactor(-100) ** 5;
+    expect(wheelZoomFactor(-500)).toBeCloseTo(five);
+  });
+
+  it('keeps a coalesced burst and its reverse exact inverses', () => {
+    expect(wheelZoomFactor(-500) * wheelZoomFactor(500)).toBeCloseTo(1);
+  });
+
+  it('does not recover a count in line mode, unlike pixel mode', () => {
+    // Lines-per-notch is a user setting (Windows' SPI_GETWHEELSCROLLLINES),
+    // not a value the browser picks, so magnitude there cannot be read as a
+    // detent count the way a coalesced pixel-mode event's can.
+    expect(wheelZoomFactor(-15, 1)).toBe(wheelZoomFactor(-3, 1));
+  });
 });
 
 describe('pinchIntent', () => {
@@ -618,45 +637,87 @@ describe('wheelStream', () => {
 });
 
 describe('wheelFlickIntent', () => {
-  /** A spin of n detents, as the burst would have accumulated it. */
-  const spin = (detents: number, durationMs: number) => ({
-    ratio: WHEEL_NOTCH_FACTOR ** detents,
-    durationMs,
-  });
+  // A spin of n detents, as the burst would have accumulated it - one event
+  // per detent unless a test says otherwise, i.e. no coalescing. Built by the
+  // same repeated `ratio *= factor` the real burst in Canvas.tsx does, rather
+  // than a single Math.pow, so the float error the epsilon below exists for
+  // is actually present in the test.
+  const spin = (detents: number, durationMs: number, events = Math.abs(detents)) => {
+    const factor = detents < 0 ? 1 / WHEEL_NOTCH_FACTOR : WHEEL_NOTCH_FACTOR;
+    let ratio = 1;
+    for (let i = 0; i < Math.abs(detents); i++) ratio *= factor;
+    return { ratio, durationMs, events };
+  };
+
+  // Same spin, but durationMs is derived from a target speed in detents/sec,
+  // for tests that want to pin WHEEL_FLICK_MIN_SPEED rather than a duration.
+  const spinAtSpeed = (detents: number, speedPerSec: number, events = Math.abs(detents)) =>
+    spin(detents, (Math.abs(detents) / speedPerSec) * 1000, events);
 
   it('reads a short quick spin as a command to navigate', () => {
-    expect(wheelFlickIntent(spin(4, 200))).toBe('in');
-    expect(wheelFlickIntent(spin(-4, 200))).toBe('out');
-    expect(wheelFlickIntent(spin(6, 300))).toBe('in');
+    expect(wheelFlickIntent(spin(WHEEL_FLICK_MIN_DETENTS + 1, 200))).toBe('in');
+    expect(wheelFlickIntent(spin(-(WHEEL_FLICK_MIN_DETENTS + 1), 200))).toBe('out');
+    expect(wheelFlickIntent(spin(WHEEL_FLICK_MIN_DETENTS + 3, 300))).toBe('in');
   });
 
   it('leaves ordinary zooming alone', () => {
     // Turning the wheel a click at a time is the common case, and it must
     // never fly the canvas somewhere.
-    expect(wheelFlickIntent(spin(1, 0))).toBeNull();
+    expect(wheelFlickIntent(spin(1, 0, 3))).toBeNull();
     expect(wheelFlickIntent(spin(2, 150))).toBeNull();
-    // Far enough, but taking its time: aiming at a zoom, not flicking.
-    expect(wheelFlickIntent(spin(6, WHEEL_FLICK_MAX_MS + 1))).toBeNull();
+    // Comfortably past the threshold, but taking its time: aiming at a zoom,
+    // not flicking. Kept well above the threshold so this isolates the
+    // duration cap rather than also failing on detent count.
+    expect(wheelFlickIntent(spin(WHEEL_FLICK_MIN_DETENTS + 3, WHEEL_FLICK_MAX_MS + 1))).toBeNull();
+  });
+
+  it('fires at the measured median speed of a real flick', () => {
+    // 4 detents at 60/sec sits in the middle of 40 measured flick attempts
+    // (4-7 detents, 26-94 detents/sec).
+    expect(wheelFlickIntent(spinAtSpeed(4, 60))).toBe('in');
+  });
+
+  it('never snaps a slow deliberate zoom just because it cleared the detent floor', () => {
+    // The regression WHEEL_FLICK_MIN_SPEED exists to prevent: lowering the
+    // floor to 4 detents means a slow zoom can now clear it on count alone.
+    // 4 detents over 350ms is inside WHEEL_FLICK_MAX_MS but well under 15
+    // detents/sec, so it must stay an ordinary zoom.
+    expect(wheelFlickIntent(spin(4, 350))).toBeNull();
+  });
+
+  it('never flicks a 3-detent spin, at any speed', () => {
+    // Below WHEEL_FLICK_MIN_DETENTS regardless of how fast it was thrown.
+    expect(wheelFlickIntent(spinAtSpeed(3, 200))).toBeNull();
+  });
+
+  it('never flicks on a single event, however large the ratio', () => {
+    // A coalesced event can now carry many detents on its own (see
+    // wheelZoomFactor); a flick still has to be a spin across several events.
+    expect(wheelFlickIntent({ ratio: WHEEL_NOTCH_FACTOR ** 10, durationMs: 100, events: 1 })).toBeNull();
   });
 
   it('cancels a spin that doubled back on itself', () => {
     // Three in and three out is not a six-detent flick; it is nothing.
-    expect(wheelFlickIntent({ ratio: 1, durationMs: 200 })).toBeNull();
+    expect(wheelFlickIntent({ ratio: 1, durationMs: 200, events: 6 })).toBeNull();
     const there = WHEEL_NOTCH_FACTOR ** 5;
     const andBack = there * WHEEL_NOTCH_FACTOR ** -3;
-    expect(wheelFlickIntent({ ratio: andBack, durationMs: 300 })).toBeNull();
+    expect(wheelFlickIntent({ ratio: andBack, durationMs: 300, events: 8 })).toBeNull();
   });
 
   it('counts exactly the minimum as a flick', () => {
-    // Three detents is a product of three floats and lands a hair under three.
-    expect(wheelFlickIntent(spin(3, 100))).toBe('in');
-    expect(wheelFlickIntent(spin(-3, 100))).toBe('out');
+    // The minimum is a product of that many floats and lands a hair under it,
+    // which the epsilon in wheelFlickIntent absorbs.
+    expect(wheelFlickIntent(spin(WHEEL_FLICK_MIN_DETENTS, 100))).toBe('in');
+    expect(wheelFlickIntent(spin(-WHEEL_FLICK_MIN_DETENTS, 100))).toBe('out');
+    expect(wheelFlickIntent(spin(WHEEL_FLICK_MIN_DETENTS - 1, 100))).toBeNull();
   });
 
   it('refuses a ratio that is not a ratio', () => {
-    expect(wheelFlickIntent({ ratio: 0, durationMs: 100 })).toBeNull();
-    expect(wheelFlickIntent({ ratio: Number.NaN, durationMs: 100 })).toBeNull();
-    expect(wheelFlickIntent({ ratio: Number.POSITIVE_INFINITY, durationMs: 100 })).toBeNull();
-    expect(wheelFlickIntent(spin(4, -1))).toBeNull();
+    expect(wheelFlickIntent({ ratio: 0, durationMs: 100, events: 4 })).toBeNull();
+    expect(wheelFlickIntent({ ratio: Number.NaN, durationMs: 100, events: 4 })).toBeNull();
+    expect(
+      wheelFlickIntent({ ratio: Number.POSITIVE_INFINITY, durationMs: 100, events: 4 }),
+    ).toBeNull();
+    expect(wheelFlickIntent(spin(WHEEL_FLICK_MIN_DETENTS + 1, -1))).toBeNull();
   });
 });

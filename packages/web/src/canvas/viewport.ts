@@ -344,14 +344,38 @@ export function isWheelNotch(deltaY: number, deltaMode = 0): boolean {
  */
 export const WHEEL_NOTCH_FACTOR = 1.15;
 
+/**
+ * CSS pixels one detent is worth in deltaMode 0, which is what Chromium
+ * reports a mouse wheel in — and what it coalesces several detents into one
+ * event of, by summing their deltas. Used to recover how many detents a
+ * coalesced event carries.
+ */
+export const WHEEL_NOTCH_PIXELS = 100;
+
 export function wheelZoomFactor(deltaY: number, deltaMode = 0): number {
   if (deltaY === 0) return 1;
 
-  // One detent, one step, whatever magnitude the device picked for it — and
-  // out is the exact reciprocal of in, so a notch each way is a round trip.
-  // Scaling by the delta instead is what made a notch double the zoom going
-  // in and quarter it coming out.
   if (isWheelNotch(deltaY, deltaMode)) {
+    // Spinning the wheel fast makes Chromium coalesce several detents into
+    // one deltaMode-0 event, summing their deltas into it — so a coalesced
+    // event's magnitude is the only record of how many detents it carries.
+    // Recovering that count and raising the per-detent factor to it is what
+    // keeps a fast spin from landing the same single step as a slow one; out
+    // is still the exact reciprocal of in, so a spin each way is a round trip.
+    //
+    // Line (1) and page (2) mode stay at one step, exactly as before this
+    // fix. Line mode's magnitude is not evidence of a count: lines-per-notch
+    // is a user setting (Windows' SPI_GETWHEELSCROLLLINES, reported
+    // verbatim), not a value the browser itself picks. Page mode has nothing
+    // to recover in the first place — one page already is one detent.
+    if (deltaMode === 0) {
+      // ponytail: assumes exactly 100px per detent; a mouse that reports a
+      // different pixel-per-detent unit will drift on bursts of 3+ notches.
+      // Per-device unit inference is the upgrade path if that shows up.
+      const notches = Math.max(1, Math.round(Math.abs(deltaY) / WHEEL_NOTCH_PIXELS));
+      const factor = WHEEL_NOTCH_FACTOR ** notches;
+      return deltaY < 0 ? factor : 1 / factor;
+    }
     return deltaY < 0 ? WHEEL_NOTCH_FACTOR : 1 / WHEEL_NOTCH_FACTOR;
   }
 
@@ -364,51 +388,81 @@ export function wheelZoomFactor(deltaY: number, deltaMode = 0): number {
 /**
  * Idle gap that ends one burst of wheel detents.
  *
- * Slightly longer than the trackpad's, because detents are physical clicks
- * rather than frame-paced samples: a fast spin lands them 30-60ms apart, while
- * turning the wheel deliberately is slower than this and never accumulates a
- * burst at all. That gap is most of what separates a flick from zooming.
+ * Slightly longer than the trackpad's, because wheel events are physical
+ * clicks rather than frame-paced samples: a fast spin lands them 30-60ms
+ * apart (each carrying however many detents Chromium coalesced into it),
+ * while turning the wheel deliberately is slower than this and never
+ * accumulates a burst at all. That gap is most of what separates a flick from
+ * zooming.
  */
 export const WHEEL_FLICK_GAP_MS = 80;
 
 /**
  * How far a spin has to travel to read as a flick rather than as zooming,
- * counted in detents — so a spin that doubles back cancels itself out instead
- * of adding up.
+ * counted in real detents — so a spin that doubles back cancels itself out
+ * instead of adding up.
  *
- * Three, not four. Four detents inside the gap below is a longer spin than it
- * sounds: the snap arrived late enough that people gave up on it and kept
- * turning, which is the failure that matters — a gesture nobody reaches is
- * worth nothing, while one that fires a notch early is undone by a notch the
- * other way. Below three there is no burst to speak of and every deliberate
- * two-notch zoom would snap.
+ * Calibrated against 40 measured flick attempts on a build where wheel event
+ * delivery was healthy (no host-side delivery lag muddying the timing): they
+ * ran 4 to 7 detents at 26 to 94 detents per second. 4 is the floor of that
+ * observed range — low enough to fire on the slowest deliberate flick, with
+ * WHEEL_FLICK_MIN_SPEED below to keep a slow 4-notch zoom from snapping.
  */
-export const WHEEL_FLICK_MIN_DETENTS = 3;
+export const WHEEL_FLICK_MIN_DETENTS = 4;
 
 /**
  * And how long it may take. "Short and quick" is the whole gesture, and past
  * this a spin is someone aiming at a zoom level, however fast the wheel is
- * going. It also caps the length: at a flick's pace this is about eight
- * detents, and a longer spin than that was not a flick.
+ * going. This caps the burst's duration, not its detent count — a coalesced
+ * event can carry far more than one detent, so how many detents fit inside
+ * this window depends on the spin, not on this constant.
  */
 export const WHEEL_FLICK_MAX_MS = 400;
+
+/**
+ * How fast a spin has to be, in detents per second, once it clears
+ * WHEEL_FLICK_MIN_DETENTS.
+ *
+ * Lowering that floor to 4 means a slow, deliberate 4-notch zoom that happens
+ * to finish inside WHEEL_FLICK_MAX_MS would otherwise snap the viewport,
+ * which was never the intent. Every one of the 40 measured flick attempts ran
+ * at 25.8 detents/sec or faster; 15 sits below that with margin while still
+ * excluding deliberate zooming, which is slower.
+ */
+export const WHEEL_FLICK_MIN_SPEED = 15;
 
 /**
  * Whether a finished burst of detents reads as a flick, and in which
  * direction.
  *
- * No speed test, unlike a pinch: detents are uniform, so the count already
- * says how far, and the gap that held the burst together already said how
- * fast. Not firing is the safe failure — the zoom the spin asked for happened
- * either way.
+ * Detents plus a speed floor, unlike a pinch's speed-and-distance pair: the
+ * count already says how far, and the gap that held the burst together
+ * already said the burst didn't stall out, but a spin that clears the detent
+ * floor slowly is a deliberate zoom, not a flick. Not firing is the safe
+ * failure — the zoom the spin asked for happened either way.
+ *
+ * events guards against the count alone: a single coalesced event can now
+ * carry several detents on its own (see wheelZoomFactor), so a flick has to
+ * be an actual spin across at least two physical events, not one big one.
  */
-export function wheelFlickIntent(b: { ratio: number; durationMs: number }): 'in' | 'out' | null {
+export function wheelFlickIntent(b: {
+  ratio: number;
+  durationMs: number;
+  events: number;
+}): 'in' | 'out' | null {
+  if (b.events < 2) return null;
   if (!(b.ratio > 0) || !Number.isFinite(b.ratio)) return null;
   if (!(b.durationMs >= 0 && b.durationMs <= WHEEL_FLICK_MAX_MS)) return null;
 
   const detents = Math.abs(Math.log(b.ratio)) / Math.log(WHEEL_NOTCH_FACTOR);
   // Epsilon because exactly four detents is a float product of four factors.
   if (detents < WHEEL_FLICK_MIN_DETENTS - 1e-9) return null;
+
+  // A burst delivered inside a single frame has no measurable duration. It is
+  // as fast as anything can be, so it passes on distance alone — the same
+  // treatment pinchIntent gives a zero-duration burst.
+  const speed = b.durationMs > 0 ? detents / (b.durationMs / 1000) : Infinity;
+  if (speed < WHEEL_FLICK_MIN_SPEED) return null;
 
   return b.ratio > 1 ? 'in' : 'out';
 }

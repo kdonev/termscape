@@ -509,7 +509,7 @@ export function Canvas() {
 
     const durationMs = b.lastAt - b.startedAt;
     const intent = b.notch
-      ? wheelFlickIntent({ ratio: b.ratio, durationMs })
+      ? wheelFlickIntent({ ratio: b.ratio, durationMs, events: b.events })
       : pinchIntent({ ratio: b.ratio, durationMs, events: b.events });
     if (!intent) return;
 
@@ -624,23 +624,31 @@ export function Canvas() {
         // Recorded before the zoom is applied, so the burst keeps the
         // viewport the gesture started from.
         noteZoom(point, factor, isWheelNotch(e.deltaY, e.deltaMode));
-        setViewport(zoomAt(viewport, point, viewport.zoom * factor));
+        const current = viewportRef.current;
+        setViewport(zoomAt(current, point, current.zoom * factor));
       } else {
         discardBurst();
+        const current = viewportRef.current;
         setViewport({
-          ...viewport,
-          panX: viewport.panX - e.deltaX,
-          panY: viewport.panY - e.deltaY,
+          ...current,
+          panX: current.panX - e.deltaX,
+          panY: current.panY - e.deltaY,
         });
       }
     };
 
     // Non-passive so preventDefault actually takes effect; React's synthetic
     // wheel handler is passive, which is why this is registered natively.
+    // viewport is deliberately not a dependency: reading it here would remove
+    // and re-add this listener on every zoom, and onWheel would compute from
+    // whatever viewport the last render closed over — two events dispatched
+    // before React commits both zoom from the same base and one is lost.
+    // viewportRef.current is current as of the last render, which is ahead of
+    // anything the effect could have closed over, instead.
     const opts = { passive: false, capture: true } as const;
     el.addEventListener('wheel', onWheel, opts);
     return () => el.removeEventListener('wheel', onWheel, opts);
-  }, [viewport, setViewport, markInteracting, noteZoom, discardBurst]);
+  }, [setViewport, markInteracting, noteZoom, discardBurst]);
 
   /* ----------------------------------------------------- keyboard nav */
 
