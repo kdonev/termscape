@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import {
+  INPUT_MODES_RESET,
   makeAddress,
   uniqueName,
   type Session,
@@ -541,11 +542,17 @@ export class SessionManager extends EventEmitter {
     // prior content immediately rather than flashing empty.
     const snap = this.store.getSnapshot(session.id);
     if (snap) p.restore(snap.serialized);
+    // The screen, but not the previous process's input modes - see
+    // INPUT_MODES_RESET. Into the mirror, for every window that attaches from
+    // now on, and down the stream, for the ones already showing this session
+    // with the old modes still set.
+    p.restore(INPUT_MODES_RESET);
 
     p.on('data', (chunk: string) => {
       this.emit('data', session.id, chunk);
       this.scheduleSnapshot(session.id);
     });
+    this.emit('data', session.id, INPUT_MODES_RESET);
     p.on('status', () => this.emitSession(session.id));
     p.on('title', (title: string) => this.noteTitle(session.id, title));
     p.on('exit', ({ exitCode }: { exitCode: number }) => {

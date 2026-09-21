@@ -2,7 +2,8 @@ import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { Session } from '@termscape/protocol';
+import { INPUT_MODES_RESET, describeSnapshotModes, type Session } from '@termscape/protocol';
+import { createRequire } from 'node:module';
 import { Hub } from '../src/hub.js';
 import { removeTree } from './tmp.js';
 import { STAND_IN, standInToml } from './stand-in.js';
@@ -13,6 +14,9 @@ import { STAND_IN, standInToml } from './stand-in.js';
  * and the wire says who the parent is, because the canvas frames parent and
  * child together off that field.
  */
+
+// CommonJS only, the same way pty.ts loads it.
+const { Terminal } = createRequire(import.meta.url)('@xterm/headless') as typeof import('@xterm/headless');
 
 let dir: string;
 let hub: Hub;
@@ -231,6 +235,54 @@ describe('spawn_agent', () => {
     },
     60_000,
   );
+
+  it(
+    "does not hand a resumed process the previous one's mouse and paste modes",
+    async () => {
+      // Moving the mouse over a resuming Claude Code window typed mouse
+      // reports into its prompt: the restored screen had switched them on
+      // for a process that had not asked for them yet.
+      const ws = hub.createWorkspace('crew7', folder('crew7'));
+      const s = await hub.startSession({ workspaceId: ws.id, profile: 'shell' });
+      hub.sessions.stop(s.id);
+      // The exit saves the screen too; plant the old one after it, not before.
+      await waitForText(() => hub.sessions.get(s.id)?.state ?? '', 'exited');
+      hub.store.saveSnapshot(s.id, 'OLD-SCREEN\x1b[?1003h\x1b[?1006h\x1b[?2004h', 80, 24);
+
+      const out: string[] = [];
+      hub.on('data', (id: string, chunk: string) => {
+        if (id === s.id) out.push(chunk);
+      });
+      await hub.resumeSession(s.id);
+
+      // Windows already showing the session are told first, before any output.
+      expect(out[0]).toBe(INPUT_MODES_RESET);
+      // And a window that attaches later gets a screen without the modes. (Not
+      // the old text: the new process's console repaints over it on Windows.)
+      await new Promise((r) => setTimeout(r, 500));
+      const snap = hub.sessions.snapshotForAttach(s.id)?.serialized ?? '';
+      // Mouse modes only: on Windows the new process's console asks for focus
+      // events itself, which is exactly the kind of mode it is entitled to.
+      expect(describeSnapshotModes(snap)).not.toContain('mouse');
+      expect(snap).not.toContain('\x1b[?2004h');
+    },
+    60_000,
+  );
+
+  it('INPUT_MODES_RESET switches off what a restored screen switched on', async () => {
+    const term = new Terminal({ cols: 80, rows: 24, allowProposedApi: true });
+    const write = (d: string) => new Promise<void>((r) => term.write(d, r));
+    await write('\x1b[?1003h\x1b[?1006h\x1b[?2004h\x1b[?1004h\x1b[?1h');
+    expect(term.modes.mouseTrackingMode).toBe('any');
+    expect(term.modes.bracketedPasteMode).toBe(true);
+
+    await write(INPUT_MODES_RESET);
+    expect(term.modes.mouseTrackingMode).toBe('none');
+    expect(term.modes.bracketedPasteMode).toBe(false);
+    expect(term.modes.sendFocusMode).toBe(false);
+    expect(term.modes.applicationCursorKeysMode).toBe(false);
+    term.dispose();
+  });
 
   it(
     'restarts a cleared session at the size its window last set, not the default',

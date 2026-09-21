@@ -110,6 +110,24 @@ export function describeLatin1(data: string): string {
 }
 
 /**
+ * Turns off every mode that makes a terminal send input nobody typed: mouse
+ * reports in every encoding, focus events, bracketed paste, and application
+ * cursor keys.
+ *
+ * Written when a session launches. The screen restored for it was saved from
+ * the previous process and carries that process's modes - Claude Code's
+ * `?1003h` among them - so the window went on reporting every mouse move to a
+ * new process that had not asked for any, and was still starting up and
+ * reading its input as text. Moving the mouse over a resuming window typed
+ * `C{"Co$Cf&...` into its prompt. The new process turns back on whatever it
+ * actually wants.
+ */
+export const INPUT_MODES_RESET =
+  '\x1b[?9l\x1b[?1000l\x1b[?1002l\x1b[?1003l' +
+  '\x1b[?1005l\x1b[?1006l\x1b[?1015l\x1b[?1016l' +
+  '\x1b[?1004l\x1b[?2004l\x1b[?1l';
+
+/**
  * The modes that decide whether a wheel is the program's business or the
  * terminal's, named by what they do rather than by number.
  *
