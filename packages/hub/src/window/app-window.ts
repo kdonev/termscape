@@ -37,7 +37,7 @@ interface WebviewApp {
     }): unknown;
   };
   on(event: 'window-close-requested' | 'application-close-requested', listener: () => void): void;
-  whenReady(): Promise<void>;
+  whenReady(options?: { interval?: number }): Promise<void>;
   exit(): void;
 }
 
@@ -162,7 +162,37 @@ async function main(): Promise<void> {
     unavailable('cannot open a webview', err);
   }
 
-  await app.whenReady();
+  /*
+   * @webviewjs/webview does not run a native message loop: it pumps the
+   * platform's native events from a JS timer at this interval, 16ms by
+   * default. One pumpEvents() call does not drain the queue, so the pump's
+   * ceiling is roughly one message per tick - about 62 per second at the
+   * default - and on Windows a mouse wheel alone produced 64 Win32 messages
+   * per second in the capture that found this, before mouse-move and paint
+   * messages compete for the same slots. The queue fills faster than it
+   * drains and never recovers: a low-level Windows mouse hook measured
+   * Ctrl+wheel events reaching this process 17, 313, 1079, 2135, 3771 and
+   * 6180ms late across six gestures on WebView2, the delay growing gesture
+   * over gesture rather than settling between them - which is what makes it
+   * a bug rather than a latency budget. 1ms removes the backlog entirely.
+   *
+   * Scoped to Windows because that is where it was measured, not because the
+   * pump is Windows-specific: it is the same JS timer on WKWebView and
+   * WebKitGTK, so the same ceiling plausibly exists there too. Left at the
+   * default off Windows because nobody has measured it there, and a busy
+   * timer is not worth spending on a platform where no one has seen the
+   * symptom.
+   *
+   * ponytail: this is a busy timer, waking up a thousand times a second for
+   * a window that is usually idle, costing about 2.4% of a core on Windows
+   * measured over 30s idle (1.41% at 16ms, 3.80% at 1ms) - and, per the above,
+   * scoped to where the symptom was actually reproduced rather than to where
+   * the bug is known to be absent. Both upgrade paths are upstream's to
+   * give: draining pumpEvents() until it returns false within one tick
+   * instead of raising the frequency, or a real blocking message loop on its
+   * own thread.
+   */
+  await app.whenReady(process.platform === 'win32' ? { interval: 1 } : {});
 }
 
 main().catch((err) => {
