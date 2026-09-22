@@ -3,6 +3,8 @@
 Run a crew of AI coding agents on one infinite canvas, and let them talk to
 each other.
 
+![Agents on a Termscape canvas messaging each other](https://raw.githubusercontent.com/kdonev/termscape/main/docs/intro.gif)
+
 Each terminal window on the canvas runs an agent CLI wired to an MCP server the
 hub exposes. Agents can look each other up, send each other messages, spawn
 helpers into their workspace, and check on each other's terminals. A message
