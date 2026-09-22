@@ -263,7 +263,7 @@ describe('spawn_agent', () => {
       const snap = hub.sessions.snapshotForAttach(s.id)?.serialized ?? '';
       // Mouse modes only: on Windows the new process's console asks for focus
       // events itself, which is exactly the kind of mode it is entitled to.
-      expect(describeSnapshotModes(snap)).not.toContain('mouse');
+      expect(describeSnapshotModes(snap)).not.toMatch(/\+[\w-]*mouse/);
       expect(snap).not.toContain('\x1b[?2004h');
     },
     60_000,
