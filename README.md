@@ -1,57 +1,89 @@
 # Termscape
 
-Run a crew of AI coding agents on one infinite canvas, and let them talk to
+Run a crew of AI coding agents side by side on one canvas, and let them talk to
 each other.
 
 ![Agents on a Termscape canvas messaging each other](https://raw.githubusercontent.com/kdonev/termscape/main/docs/intro.gif)
 
-Each terminal window on the canvas runs an agent CLI wired to an MCP server the
-hub exposes. Agents can look each other up, send each other messages, spawn
-helpers into their workspace, and check on each other's terminals. A message
-from one agent is delivered by typing it into the other's terminal, immediately.
+## What it's for
 
-Local-first: the hub runs on your machine and the UI opens in a window of its
-own — the same web page a browser would show. It binds
-every interface, so the canvas opens on your phone or a second screen as well —
-with its token — and another machine can attach itself from the join page.
-`--listen loopback` keeps the whole thing to this machine. Other machines run
-the same hub as a daemon and appear on the same canvas.
+Running several coding agents at once usually means a pile of terminal tabs
+that know nothing about each other, with you copying text between them.
+Termscape puts them all in one place and lets them work together:
 
-## Getting started
+- **See every agent at once.** Each agent is a live terminal on a zoomable
+  canvas, grouped by project.
+- **Let agents talk to each other.** An agent can message another, ask it for
+  a review, or start a helper to take part of the work.
+- **Pick up where you left off.** Close Termscape and start it again: the
+  canvas comes back, and your agents can continue their conversations.
+- **Use more than one machine.** Agents on another computer appear on the same
+  canvas and are messaged the same way.
+- **Check in from anywhere.** Open the canvas on your phone or a second screen,
+  or share a single terminal with a colleague.
+
+Works with Claude Code, Codex, Gemini CLI, Kilo Code and opencode.
+
+## Quick start
+
+You need Node 24 or newer and at least one agent CLI, such as
+[Claude Code](https://claude.com/claude-code). Then run:
 
 ```bash
 npx @kdonev/termscape
 ```
 
-That starts the hub and opens the canvas in a window of its own. The window is
-the app: closing it stops the hub, saving state first, just as Ctrl+C in the
-terminal would. `--browser` opens the canvas in a browser tab instead, which
-the hub outlives, and `--no-open` opens nothing; the URL is printed either
-way. Nothing is installed system-wide: state lives in `~/.termscape`, and
-deleting that directory is the uninstall.
+The canvas opens in a window of its own; close the window to stop Termscape.
+Nothing is installed system-wide. To remove it, delete `~/.termscape`.
 
-The window is the operating system's own webview — WebView2 on Windows,
-WebKit on macOS, WebKitGTK on Linux — so there is no browser bundled with it.
-Linux needs WebKitGTK 4.1 and libxdo (`sudo apt install libwebkit2gtk-4.1-0
-libxdo3` on Debian and Ubuntu). Where no webview can be loaded, the hub says
-why and opens the browser instead.
+On Linux, install WebKitGTK first (`sudo apt install libwebkit2gtk-4.1-0
+libxdo3` on Debian and Ubuntu), or the canvas opens in your browser instead.
 
-The hub is reachable from your network, so the same URL — token and all — opens
-the canvas on a phone or a second screen, and the **+ machine** dialog already
-has a join link in it for the second machine; see
-[Adding another machine](#adding-another-machine). To keep the hub to this
-machine entirely — no join page, nothing off 127.0.0.1:
+## Quick tour
+
+1. **Add a workspace.** Click **machines** in the top bar, then
+   **+ workspace**, and pick a project folder.
+2. **Start an agent.** Click **+ agent** on the workspace and choose one, such
+   as `claude`. Its terminal appears on the canvas, and you use it as you
+   would in any terminal.
+3. **Start a second one** in the same workspace.
+4. **Let them work together.** Just ask, in plain words: *"ask the other agent
+   to review your last change"*. The message shows up in the other agent's
+   terminal with the sender's name, and the answer comes back the same way.
+   Agents can also start helpers of their own.
+5. **Find your way around.** Scroll to pan, **Ctrl/⌘ + scroll** to zoom,
+   **Ctrl/⌘ + 1** to see everything, **Ctrl/⌘ + 2** to zoom in on one
+   terminal. Clicking an agent in the panel takes you to it.
+6. **See what was said.** **messages** in the top bar lists every message the
+   agents have sent each other.
+7. **Come back later.** Stop Termscape and start it again. The canvas returns
+   as you left it, and **resume** on a window continues that agent's
+   conversation. (Agents that can't continue one show **restart** instead.)
+
+That's the core of it. The sections below cover the details.
+
+## Starting options
+
+The window is the app: closing it stops Termscape, saving state first, just as
+Ctrl+C in the terminal would. `--browser` opens the canvas in a browser tab
+instead, which Termscape outlives, and `--no-open` opens nothing; the URL is
+printed either way. State lives in `~/.termscape`.
+
+The window is the operating system's own webview (WebView2 on Windows, WebKit
+on macOS, WebKitGTK on Linux), so no browser is bundled. Where no webview can
+be loaded, Termscape says why and opens the browser instead.
+
+The canvas is reachable from your network with its token, so the same URL
+opens it on a phone or a second screen, and the **+ machine** dialog has a join
+link for adding another computer (see
+[Adding another machine](#adding-another-machine)). To keep everything on this
+machine only:
 
 ```bash
 npx @kdonev/termscape --listen loopback
 ```
 
-Slide out the **machines** panel: every machine, the workspaces on it, and
-the agents in each. Point a workspace at a folder there, and start an agent
-in it. Adding, editing and removing all open a dialog over the canvas, so the
-node you acted on stays where it was and a refusal — a folder that is not
-there, a rename the addresses will not allow — arrives in the dialog next to
-the field, with what you typed still in it.
+## Using the canvas
 
 - **Scroll** to pan, **Ctrl/⌘ + scroll** to zoom, **Ctrl/⌘ + 1** to fit,
   **Ctrl/⌘ + 2** to zoom to one terminal
@@ -59,12 +91,16 @@ the field, with what you typed still in it.
   navigates instead of zooming: in over a terminal maximizes it, out steps
   back to the workspace around it and then to everything. Zooming at any
   ordinary pace is left alone
-- Every window shows its real terminal at every zoom; the text minifies
-  rather than being replaced by a card, so a zoomed-out canvas still shows
-  the shape of what each agent is doing
-- Clicking an agent in the panel brings the canvas to it
+- Every window shows its real terminal at every zoom; the text shrinks rather
+  than being replaced by a card, so a zoomed-out canvas still shows the shape
+  of what each agent is doing
+- The **machines** panel lists every machine, the workspaces on it, and the
+  agents in each. Clicking an agent brings the canvas to it
 - Clicking the canvas closes the panel, as does **Escape** — which closes the
   panel first and clears the selection only once it is shut
+- Adding, editing and removing open a dialog over the canvas; if something is
+  refused, such as a folder that does not exist, the reason appears next to
+  the field with what you typed still in it
 - **share** on a window's title bar hands a reviewer a link to that one
   terminal, live, with nothing else on the canvas visible to them — see
   [Security](#security) for what the link actually grants
@@ -75,7 +111,8 @@ the field, with what you typed still in it.
   needs 22)
 - An agent CLI on your `PATH` — [Claude Code](https://claude.com/claude-code)
   is the profile that ships configured
-- macOS, Windows, or Linux
+- macOS, Windows, or Linux; on Linux, WebKitGTK 4.1 and libxdo for the app
+  window
 
 Everything native is prebuilt on all three platforms, so no compiler is
 needed.
@@ -93,10 +130,11 @@ Hub (Node)
 Remote hub (same binary, --headless)
 ```
 
+Each terminal window runs an agent CLI wired to an MCP server the hub exposes.
 Agents never talk to each other directly. They call `send_message` on their own
-hub; the hub does the delivery, locally or by forwarding to a peer. That is why
-an agent addresses a peer on another machine exactly as it addresses one in the
-next window.
+hub; the hub does the delivery, locally or by forwarding to a peer, by typing
+the message into the other agent's terminal. That is why an agent addresses a
+peer on another machine exactly as it addresses one in the next window.
 
 ## Adding another machine
 
