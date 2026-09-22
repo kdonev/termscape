@@ -471,9 +471,24 @@ export async function serve(opts: ServeOptions): Promise<ServeResult> {
                   `${where}: ${describeInput(f.payload)}`,
               );
             }
+            /*
+             * Input for a window whose program has exited has nowhere to go,
+             * and is dropped here rather than refused. A stopped window still
+             * has a live xterm: a keystroke, a wheel, or just the focus report
+             * a click sends makes a frame, and refusing each one raised a red
+             * toast per frame that no amount of dismissing kept away
+             * (issue 31). The window already says "stopped".
+             */
+            const running = remote
+              ? remote.session.state === 'running' || remote.session.state === 'starting'
+              : !!hub.sessions.pty(f.sessionId)?.running;
+            if (!running) {
+              debug('input', `browser -> hub ${f.sessionId} dropped: not running`);
+              return;
+            }
             if (remote) {
-              // Typing into a remote terminal whose PTY has since exited is
-              // ordinary, and the peer says so by rejecting. Unhandled, that
+              // The peer can still refuse - the link is down, or the PTY
+              // exited after the state above was sent. Unhandled, that
               // rejection reaches the process and takes the whole canvas with
               // it — so it is reported to this browser and goes no further.
               const id = randomUUID();
@@ -680,13 +695,25 @@ export async function serve(opts: ServeOptions): Promise<ServeResult> {
             `(${remote ? 'remote' : 'local'})`,
         );
         if (remote) {
-          await remote.peer.request({
-            t: 'resize',
-            id: randomUUID(),
-            address: msg.sessionId,
-            cols: msg.cols,
-            rows: msg.rows,
-          });
+          /*
+           * Logged, not raised. A window sends this on its own whenever it
+           * is laid out, so a refusal - the agent is gone from that machine,
+           * or the link is down - is nothing the user did and nothing they
+           * can act on, and it turned every such window into a red toast in
+           * the corner (issue 31). A local resize of a missing session is
+           * already a silent no-op; this makes the remote one match.
+           */
+          await remote.peer
+            .request({
+              t: 'resize',
+              id: randomUUID(),
+              address: msg.sessionId,
+              cols: msg.cols,
+              rows: msg.rows,
+            })
+            .catch((e: Error) =>
+              debug('attach', `resize ${msg.sessionId} FAILED: ${e.message}`),
+            );
           return;
         }
         hub.sessions.resize(msg.sessionId, msg.cols, msg.rows);

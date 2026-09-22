@@ -950,6 +950,65 @@ describe('remote terminal input', () => {
     // the raw path must not have swallowed the ordinary one on its way in.
     expect(seen[0]).toBe('héllo');
   });
+
+  it('drops input to a stopped window instead of raising an error toast (issue 31)', async () => {
+    const s = await hubA.startSession({ workspaceId: wsA, profile: 'shell', name: 'stopped' });
+    await waitFor(() => !!hubA.sessions.pty(s.id)?.running, 15_000, 'the shell to start');
+    hubA.sessions.stop(s.id);
+    await waitFor(() => !hubA.sessions.pty(s.id)?.running, 15_000, 'the shell to stop');
+
+    const errors: string[] = [];
+    const sock = await browser();
+    sock.on('message', (raw: Buffer, isBinary: boolean) => {
+      if (isBinary) return;
+      const m = JSON.parse(raw.toString());
+      if (m.t === 'error') errors.push(m.message);
+    });
+    try {
+      // A keystroke, then the focus report a click on the window sends.
+      sock.send(encodeBinaryFrame(BinaryFrameKind.PtyInput, s.id, Buffer.from('x')), {
+        binary: true,
+      });
+      sock.send(encodeBinaryFrame(BinaryFrameKind.PtyInputRaw, s.id, Buffer.from('\x1b[I')), {
+        binary: true,
+      });
+      await new Promise((r) => setTimeout(r, 300));
+    } finally {
+      sock.close();
+    }
+
+    expect(errors).toEqual([]);
+  });
+
+  it('does not raise a refused resize as an error toast (issue 31)', async () => {
+    // The far hub refusing, as it does for an agent that is no longer there.
+    let asked = false;
+    const real = hubB.sessions.resize.bind(hubB.sessions);
+    hubB.sessions.resize = () => {
+      asked = true;
+      throw new Error('no agent at address "remotews/wheelie"');
+    };
+
+    const errors: string[] = [];
+    const sock = await browser();
+    sock.on('message', (raw: Buffer, isBinary: boolean) => {
+      if (isBinary) return;
+      const m = JSON.parse(raw.toString());
+      if (m.t === 'error') errors.push(m.message);
+    });
+    try {
+      sock.send(JSON.stringify({ t: 'resize', sessionId: 'remotews/wheelie', cols: 90, rows: 30 }));
+      await waitFor(() => asked, 10_000, 'the resize to reach the far hub');
+      // Long enough for the refusal to travel back and be turned into a
+      // message, had it been going to be.
+      await new Promise((r) => setTimeout(r, 300));
+    } finally {
+      hubB.sessions.resize = real;
+      sock.close();
+    }
+
+    expect(errors).toEqual([]);
+  });
 });
 
 describe('peer loss', () => {
