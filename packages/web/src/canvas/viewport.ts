@@ -121,19 +121,27 @@ export function terminalFontSize(renderScale: number): number {
  * Align the zoom about the viewport centre, then put the pan on whole device
  * pixels. Idempotent: this runs from an effect watching the viewport, so a
  * version that kept moving would loop.
+ *
+ * `origin` is where the canvas element itself sits in the page. Device pixels
+ * are counted from the page, not from the canvas, so a toolbar of fractional
+ * height above it (47.84px, say) would otherwise put every window a fraction
+ * of a pixel off however carefully the pan was rounded.
  */
 export function alignViewport(
   v: Viewport,
   viewportW: number,
   viewportH: number,
   dpr: number,
+  origin: Point = { x: 0, y: 0 },
 ): Viewport {
   // About the centre rather than the origin, so aligning never lurches the view.
   const centred = zoomAt(v, { x: viewportW / 2, y: viewportH / 2 }, alignZoom(v.zoom, dpr));
+  const snap = (pan: number, offset: number) =>
+    (Math.round((offset + pan) * dpr) - offset * dpr) / dpr;
   return {
     zoom: centred.zoom,
-    panX: Math.round(centred.panX * dpr) / dpr,
-    panY: Math.round(centred.panY * dpr) / dpr,
+    panX: snap(centred.panX, origin.x),
+    panY: snap(centred.panY, origin.y),
   };
 }
 

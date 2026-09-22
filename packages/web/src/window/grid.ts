@@ -11,11 +11,17 @@ export const TERMINAL_FONT_FAMILY =
 
 export const TERMINAL_LINE_HEIGHT = 1.2;
 
-/** Character box at BASE_FONT_SIZE, in CSS pixels. */
-export interface BaseCell {
-  charW: number;
-  charH: number;
+/**
+ * xterm's character box at one font size, in CSS pixels: what its
+ * CharSizeService reports and every renderer quantises from.
+ */
+export interface CharSize {
+  width: number;
+  height: number;
 }
+
+/** Measures the character box at a font size in CSS px, the way xterm does. */
+export type MeasureChar = (fontSize: number) => CharSize;
 
 /*
  * Why the grid is computed here rather than by the fit addon.
@@ -32,7 +38,13 @@ export interface BaseCell {
  * largest cell any render scale can produce. Two consequences, both wanted:
  * cols/rows depend only on the window geometry and the display, never on the
  * zoom; and because the divisor is an upper bound, the terminal can never
- * overflow its host at any zoom, only leave a sliver of matching background.
+ * overflow its area at any zoom. The window frame then hugs whatever xterm
+ * actually drew (TerminalWindow), so the slack never shows as a gap.
+ *
+ * The bound is only as good as the measurement under it, which is why each
+ * render scale is measured at its own font size rather than extrapolated from
+ * one: font metrics are not linear in size, and a cell predicted a pixel short
+ * is a last row hanging out of the frame (issue 32).
  */
 
 /** The device font sizes a terminal can be rendered at. See renderScaleFor. */
@@ -44,19 +56,22 @@ function deviceFontRange(): number[] {
 
 /**
  * Cell size in world pixels, for a terminal rendered at `deviceFont` device
- * pixels of text and counter-scaled back down. This inverts xterm's own
- * quantisation, so it reports what a column really costs at that render scale.
+ * pixels of text and counter-scaled back down. Mirrors the WebGL renderer's
+ * own quantisation (WebglRenderer._updateDimensions), so it reports what a
+ * column really costs at that render scale.
  */
 export function normalisedCell(
-  base: BaseCell,
+  measure: MeasureChar,
   deviceFont: number,
+  dpr: number,
   lineHeight = TERMINAL_LINE_HEIGHT,
 ): { w: number; h: number } {
-  // A render scale k means fontSize = deviceFont / dpr and k = deviceFont /
-  // (BASE_FONT_SIZE * dpr), so charWidth * dpr collapses to charW * deviceFont
-  // / BASE_FONT_SIZE and the dpr drops out of the normalised result entirely.
-  const deviceCharW = Math.floor((base.charW * deviceFont) / BASE_FONT_SIZE);
-  const deviceCharH = Math.ceil((base.charH * deviceFont) / BASE_FONT_SIZE);
+  // A render scale k = deviceFont / (BASE_FONT_SIZE * dpr) means the terminal
+  // is given fontSize BASE_FONT_SIZE * k = deviceFont / dpr, and a device
+  // pixel of it is BASE_FONT_SIZE / deviceFont world pixels.
+  const char = measure(deviceFont / dpr);
+  const deviceCharW = Math.floor(char.width * dpr);
+  const deviceCharH = Math.ceil(char.height * dpr);
   const deviceCellH = Math.floor(deviceCharH * lineHeight);
   return {
     w: (deviceCharW * BASE_FONT_SIZE) / deviceFont,
@@ -64,12 +79,12 @@ export function normalisedCell(
   };
 }
 
-/** The worst case over every render scale, so no zoom can overflow the host. */
-export function widestCell(base: BaseCell, lineHeight = TERMINAL_LINE_HEIGHT) {
+/** The worst case over every render scale, so no zoom can overflow the area. */
+export function widestCell(measure: MeasureChar, dpr: number, lineHeight = TERMINAL_LINE_HEIGHT) {
   let w = 0;
   let h = 0;
   for (const deviceFont of deviceFontRange()) {
-    const cell = normalisedCell(base, deviceFont, lineHeight);
+    const cell = normalisedCell(measure, deviceFont, dpr, lineHeight);
     if (cell.w > w) w = cell.w;
     if (cell.h > h) h = cell.h;
   }
@@ -78,16 +93,17 @@ export function widestCell(base: BaseCell, lineHeight = TERMINAL_LINE_HEIGHT) {
 
 /**
  * Grid for a terminal area of `frameW` x `frameH` world pixels. Pure, and a
- * pure function of geometry alone: the same window is the same grid at every
- * zoom level. Minimums match the fit addon's.
+ * function of geometry and display alone: the same window is the same grid at
+ * every zoom level. Minimums match the fit addon's.
  */
 export function gridFor(
   frameW: number,
   frameH: number,
-  base: BaseCell,
+  measure: MeasureChar,
+  dpr: number,
   lineHeight = TERMINAL_LINE_HEIGHT,
 ): { cols: number; rows: number } {
-  const cell = widestCell(base, lineHeight);
+  const cell = widestCell(measure, dpr, lineHeight);
   if (!(cell.w > 0) || !(cell.h > 0)) return { cols: 2, rows: 1 };
   return {
     cols: Math.max(2, Math.floor(frameW / cell.w)),
@@ -134,12 +150,12 @@ export function fitGrid(
   availW: number,
   availH: number,
   dpr: number,
-  base: BaseCell,
+  measure: MeasureChar,
   lineHeight = TERMINAL_LINE_HEIGHT,
 ): GridFit {
   const unit = BASE_FONT_SIZE * dpr;
   const areaAt = (deviceFont: number) => {
-    const cell = normalisedCell(base, deviceFont, lineHeight);
+    const cell = normalisedCell(measure, deviceFont, dpr, lineHeight);
     return { w: Math.ceil(cols * cell.w), h: Math.ceil(rows * cell.h) };
   };
 
@@ -156,16 +172,56 @@ export function fitGrid(
   return { w, h, zoom, renderScale: MIN_DEVICE_FONT / unit };
 }
 
-let cached: BaseCell | null = null;
+/** Last measurement per font size. Keyed by size alone: the family is fixed. */
+const measured = new Map<number, CharSize>();
 
 /**
- * Measure the base character box, once per page. Deliberately mirrors xterm's
- * own DOM measurement (a `white-space: pre` span of 32 'W's at `line-height:
- * normal`), so the number we divide by is the one xterm will scale.
+ * Measure the character box at `fontSize` CSS px exactly as xterm 5.5's
+ * CharSizeService does, so the cell predicted here is the cell xterm builds.
+ *
+ * xterm prefers canvas text metrics - `measureText('W')` for the width and the
+ * font bounding box for the height - and falls back to a DOM span of 32 'W's
+ * only where those are missing. The height the two report differs, so
+ * mirroring the fallback alone (as this once did) under-predicted the cell and
+ * let the last row hang out of the window.
  */
-export function measureBaseCell(): BaseCell {
-  if (cached) return cached;
+export const measureChar: MeasureChar = (fontSize) => {
+  const hit = measured.get(fontSize);
+  if (hit) return hit;
+  const char = measureWithTextMetrics(fontSize) ?? measureWithDom(fontSize);
+  // A zero measurement means fonts are not ready; leave it uncached so the next
+  // caller measures again rather than freezing a broken grid for the session.
+  if (!(char.width > 0) || !(char.height > 0)) {
+    return { width: fontSize * 0.6, height: fontSize * 1.2 };
+  }
+  measured.set(fontSize, char);
+  return char;
+};
 
+let metricsCtx: OffscreenCanvasRenderingContext2D | null | undefined;
+
+/** xterm's TextMetricsMeasureStrategy, or null where it would not be used. */
+function measureWithTextMetrics(fontSize: number): CharSize | null {
+  if (metricsCtx === undefined) {
+    metricsCtx = null;
+    try {
+      const ctx = new OffscreenCanvas(100, 100).getContext('2d');
+      const probe = ctx?.measureText('W');
+      if (ctx && probe && 'fontBoundingBoxAscent' in probe && 'fontBoundingBoxDescent' in probe) {
+        metricsCtx = ctx;
+      }
+    } catch {
+      // No OffscreenCanvas: xterm falls back to the DOM, and so do we.
+    }
+  }
+  if (!metricsCtx) return null;
+  metricsCtx.font = `${fontSize}px ${TERMINAL_FONT_FAMILY}`;
+  const m = metricsCtx.measureText('W');
+  return { width: m.width, height: m.fontBoundingBoxAscent + m.fontBoundingBoxDescent };
+}
+
+/** xterm's DomMeasureStrategy: a `white-space: pre` span of 32 'W's. */
+function measureWithDom(fontSize: number): CharSize {
   const el = document.createElement('span');
   el.textContent = 'W'.repeat(32);
   el.setAttribute('aria-hidden', 'true');
@@ -173,15 +229,9 @@ export function measureBaseCell(): BaseCell {
     'display:inline-block;visibility:hidden;position:absolute;top:0;left:-9999em;' +
     'line-height:normal;white-space:pre;font-kerning:none;';
   el.style.fontFamily = TERMINAL_FONT_FAMILY;
-  el.style.fontSize = `${BASE_FONT_SIZE}px`;
+  el.style.fontSize = `${fontSize}px`;
   document.body.appendChild(el);
-  const charW = el.offsetWidth / 32;
-  const charH = el.offsetHeight;
+  const char = { width: el.offsetWidth / 32, height: el.offsetHeight };
   el.remove();
-
-  // A zero measurement means fonts are not ready; leave it uncached so the next
-  // caller measures again rather than freezing a broken grid for the session.
-  if (!(charW > 0) || !(charH > 0)) return { charW: BASE_FONT_SIZE * 0.6, charH: BASE_FONT_SIZE * 1.2 };
-  cached = { charW, charH };
-  return cached;
+  return char;
 }

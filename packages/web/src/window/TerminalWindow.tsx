@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import type { Session, Workspace } from '@termscape/protocol';
 import { useStore } from '../state/store.js';
@@ -22,6 +22,17 @@ interface Props {
 const MIN_W = 320;
 const MIN_H = 200;
 
+/**
+ * `.window`'s border as written in the CSS, in world px. What it is laid out
+ * at is measured below: browsers snap borders to whole device pixels, so at
+ * dpr 1.5 this is 0.667px, and assuming 1 put the terminal a third of a
+ * pixel off and its frame two thirds of one too wide.
+ */
+const BORDER = 1;
+/** Padding between the window body and the terminal, in world px. */
+const INSET_X = 6;
+const INSET_Y = 4;
+
 export const TerminalWindow = memo(function TerminalWindow({
   session,
   workspace,
@@ -44,6 +55,38 @@ export const TerminalWindow = memo(function TerminalWindow({
   );
   const rectRef = useRef(session.window);
   rectRef.current = session.window;
+
+  // The title bar's height, which the terminal area is the rest of. Measured
+  // rather than written down, because it is a line box around buttons - and
+  // fractional, which offsetHeight would round away, leaving the terminal a
+  // fraction of a pixel off the grid its origin is snapped to. The observer's
+  // border box is the exact layout size, untouched by the world transform.
+  const headerRef = useRef<HTMLElement>(null);
+  const [headerH, setHeaderH] = useState<number | null>(null);
+  const windowRef = useRef<HTMLDivElement>(null);
+  const [border, setBorder] = useState(BORDER);
+  useLayoutEffect(() => {
+    const el = windowRef.current;
+    if (!el) return;
+    const measured = parseFloat(getComputedStyle(el).borderLeftWidth);
+    if (Number.isFinite(measured)) setBorder(measured);
+  }, [dpr]);
+  useLayoutEffect(() => {
+    const header = headerRef.current;
+    if (!header) return;
+    const observer = new ResizeObserver(([entry]) => {
+      const size = entry?.borderBoxSize?.[0]?.blockSize;
+      if (size !== undefined) setHeaderH(size);
+    });
+    observer.observe(header);
+    return () => observer.disconnect();
+  }, []);
+
+  // What xterm actually drew, in world px. See the frame note below.
+  const [content, setContent] = useState<{ w: number; h: number } | null>(null);
+  const onContentSize = useCallback((next: { w: number; h: number }) => {
+    setContent((prev) => (prev && prev.w === next.w && prev.h === next.h ? prev : next));
+  }, []);
 
   const onPointerDown = useCallback(
     (mode: 'move' | 'resize') => (e: React.PointerEvent) => {
@@ -92,19 +135,43 @@ export const TerminalWindow = memo(function TerminalWindow({
   const px = snapWorldPx(x, zoom, dpr);
   const py = snapWorldPx(y, zoom, dpr);
 
+  /*
+   * The frame hugs the terminal (issue 32).
+   *
+   * The grid is fixed by the stored rect so zooming never reflows, and xterm
+   * draws it in whole device pixels so the text stays sharp - which together
+   * mean the terminal's size in world px moves a little with every zoom step,
+   * and no font choice can make it fill an arbitrary area exactly. So the
+   * window is painted around what xterm drew rather than the other way round:
+   * the stored rect only decides the grid, and gridFor's bound keeps the
+   * painted frame from ever outgrowing it.
+   *
+   * The terminal's origin is snapped for the same reason the window's is: a
+   * whole-pixel bitmap that starts mid-pixel is resampled into blur anyway,
+   * and border + title bar + inset times the zoom rarely lands on one.
+   */
+  const areaW = w - 2 * BORDER - 2 * INSET_X;
+  const areaH = headerH === null ? 0 : h - 2 * BORDER - headerH - 2 * INSET_Y;
+  const bar = headerH ?? 0;
+  const hostLeft = snapWorldPx(border + INSET_X, zoom, dpr) - border;
+  const hostTop = snapWorldPx(border + bar + INSET_Y, zoom, dpr) - border - bar;
+  const frameW = content ? 2 * border + hostLeft + content.w + INSET_X : w;
+  const frameH = content && headerH !== null ? 2 * border + bar + hostTop + content.h + INSET_Y : h;
+
   return (
     <div
+      ref={windowRef}
       className={`window${selected ? ' selected' : ''}${stopped ? ' stopped' : ''}`}
       style={{
         transform: `translate(${px}px, ${py}px)`,
-        width: w,
-        height: h,
+        width: frameW,
+        height: frameH,
         zIndex: session.window.z + (selected ? 1000 : 0),
         borderColor: selected ? '#7c9cf5' : workspace?.color ?? '#2a3040',
       }}
       onPointerDown={() => select(session.id)}
     >
-      <header className="window-bar" onPointerDown={onPointerDown('move')}>
+      <header className="window-bar" ref={headerRef} onPointerDown={onPointerDown('move')}>
         <span className="dot" style={{ background: statusColor(session) }} />
         {/* The program's own title when it set one - it says what the agent
             is doing, which the canvas address never can. The address stays a
@@ -203,8 +270,11 @@ export const TerminalWindow = memo(function TerminalWindow({
             Canvas.tsx for why there is no cheap card underneath this. */}
         <TerminalView
           sessionId={session.id}
-          w={w}
-          h={h}
+          w={areaW}
+          h={areaH}
+          dpr={dpr}
+          placement={{ left: hostLeft, top: hostTop, right: INSET_X, bottom: INSET_Y }}
+          onContentSize={onContentSize}
           renderScale={renderScale}
           focused={selected}
         />

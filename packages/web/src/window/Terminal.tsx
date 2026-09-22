@@ -15,14 +15,31 @@ import {
   TERMINAL_FONT_FAMILY,
   TERMINAL_LINE_HEIGHT,
   gridFor,
-  measureBaseCell,
+  measureChar,
 } from './grid.js';
 
 interface Props {
   sessionId: string;
-  /** Redraws when the window is resized so cols/rows follow the geometry. */
+  /**
+   * The terminal area in world px that cols/rows are sized from - the stored
+   * window rect less its chrome, never the painted frame, which follows the
+   * terminal rather than leading it.
+   */
   w: number;
   h: number;
+  /** The display's devicePixelRatio; the grid depends on it (grid.ts). */
+  dpr?: number;
+  /**
+   * Where the terminal sits inside its parent, in world px. The canvas passes
+   * a device-pixel-snapped origin; omitted, `.term-host`'s CSS inset applies.
+   */
+  placement?: { left: number; top: number; right: number; bottom: number };
+  /**
+   * The size xterm actually drew, in world px, whenever it changes. A fixed
+   * grid of whole-device-pixel cells cannot fill an arbitrary area exactly, so
+   * the window sizes itself from this instead (issue 32).
+   */
+  onContentSize?: (size: { w: number; h: number }) => void;
   /**
    * The canvas zoom, quantised to a whole device pixel of text height and
    * shared by every terminal. See the host scaling note below.
@@ -139,6 +156,9 @@ export function TerminalView({
   sessionId,
   w,
   h,
+  dpr = window.devicePixelRatio || 1,
+  placement,
+  onContentSize,
   renderScale,
   focused,
   grid = 'drive',
@@ -159,9 +179,10 @@ export function TerminalView({
   followGridRef.current = { cols: followCols, rows: followRows };
 
   /**
-   * Size the PTY from the window geometry. The frame's clientWidth/Height are
-   * layout sizes, unaffected by the world transform or by the host's own
-   * counter-scale, so this is world pixels at any zoom.
+   * Size the PTY from the window geometry: `w`/`h` are world pixels, so this
+   * is the same grid at any zoom. Not the host's own clientWidth - the window
+   * now shrinks to fit what xterm drew, so that would feed the grid back into
+   * itself.
    *
    * Never called in 'follow' mode - see the prop's own comment for why a
    * share view must not do this.
@@ -169,14 +190,8 @@ export function TerminalView({
   const applyGrid = useCallback(() => {
     if (follow) return;
     const term = termRef.current;
-    const frame = frameRef.current;
-    if (!term || !frame || !client) return;
-    const { cols, rows } = gridFor(
-      frame.clientWidth,
-      frame.clientHeight,
-      measureBaseCell(),
-      TERMINAL_LINE_HEIGHT,
-    );
+    if (!term || !client || !(w > 0) || !(h > 0)) return;
+    const { cols, rows } = gridFor(w, h, measureChar, dpr, TERMINAL_LINE_HEIGHT);
     if (cols === term.cols && rows === term.rows) return;
     // Logged next to the input, because a mouse report is a pair of
     // coordinates and xterm refuses to encode one outside this grid. A window
@@ -186,13 +201,32 @@ export function TerminalView({
     debug('attach', sessionId, `grid ${term.cols}x${term.rows} -> ${cols}x${rows}`);
     term.resize(cols, rows);
     client.send({ t: 'resize', sessionId, cols, rows });
-  }, [client, sessionId, follow]);
+  }, [client, sessionId, follow, w, h, dpr]);
 
   // Read through a ref inside the mount effect: the initial font size must
   // match the current zoom (a terminal mounted while zoomed in has to start
   // sharp) without renderScale becoming a remount trigger.
   const scaleRef = useRef(renderScale);
   scaleRef.current = renderScale;
+
+  // Same reasoning: a new callback identity must not remount the terminal.
+  const onContentSizeRef = useRef(onContentSize);
+  onContentSizeRef.current = onContentSize;
+
+  /**
+   * Tell the window what xterm actually drew. `.xterm-screen` is sized by the
+   * renderer to its canvas in whole CSS px, so offsetWidth/Height are exact,
+   * and being layout sizes they sit inside the host's counter-scale: dividing
+   * by the render scale gives world pixels.
+   */
+  const reportContentSize = useCallback(() => {
+    const screen = termRef.current?.element?.querySelector<HTMLElement>('.xterm-screen');
+    if (!screen || !screen.offsetWidth || !screen.offsetHeight) return;
+    onContentSizeRef.current?.({
+      w: screen.offsetWidth / scaleRef.current,
+      h: screen.offsetHeight / scaleRef.current,
+    });
+  }, []);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -237,6 +271,13 @@ export function TerminalView({
     }
 
     termRef.current = term;
+
+    // Fires whenever the renderer resizes its screen: a grid change, or a font
+    // change that moved the cell. The renderScale effect below covers the one
+    // case this misses - a zoom step whose cell rounds to the same CSS size.
+    const screen = term.element?.querySelector('.xterm-screen');
+    const screenObserver = new ResizeObserver(() => reportContentSize());
+    if (screen) screenObserver.observe(screen);
 
     /*
      * The serialized screen, which arrives by one of two routes.
@@ -532,6 +573,7 @@ export function TerminalView({
     applyGrid();
 
     return () => {
+      screenObserver.disconnect();
       frame?.removeEventListener('wheel', onWheelCapture, { capture: true });
       frame?.removeEventListener('wheel', onWheelBubble);
       frame?.removeEventListener('mousedown', onRightClickMouseDown, { capture: true });
@@ -548,7 +590,8 @@ export function TerminalView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId, client]);
 
-  // Only the window geometry changes the grid. Zoom deliberately does not.
+  // Only the window geometry (and the display's dpr, which the cell depends
+  // on) changes the grid. Zoom deliberately does not.
   // No-op in 'follow' mode; kept unconditional so this hook never changes
   // count between renders.
   useEffect(() => {
@@ -609,6 +652,9 @@ export function TerminalView({
     const hold = () => {
       const state = pinRef.current;
       if (!state || termRef.current !== term) return;
+      // The screen may keep its CSS size across a zoom step while its world
+      // size changes with the scale, which the ResizeObserver cannot see.
+      reportContentSize();
       const to = restoreScroll(state.pin, term.buffer.active);
       if (to === 'bottom') term.scrollToBottom();
       else if (to !== null) term.scrollToLine(to);
@@ -619,7 +665,7 @@ export function TerminalView({
       state.raf = requestAnimationFrame(hold);
     };
     pinRef.current = { pin, frames: PIN_FRAMES, raf: requestAnimationFrame(hold) };
-  }, [renderScale]);
+  }, [renderScale, reportContentSize]);
 
   useEffect(() => {
     const term = termRef.current;
@@ -640,6 +686,7 @@ export function TerminalView({
        * up whichever one happened.
        */
       onContextMenu={(e) => e.preventDefault()}
+      style={placement}
     >
       <div
         className="term-scale"

@@ -234,6 +234,20 @@ describe('alignViewport', () => {
       }
     }
   });
+
+  it('counts device pixels from the page when the canvas sits at a fractional offset', () => {
+    // A toolbar 47.84px tall puts the canvas there; a pan rounded against the
+    // canvas alone would leave every window 0.16px off the pixel grid.
+    const origin = { x: 0.5, y: 47.84375 };
+    for (const dpr of DPRS) {
+      for (const zoom of ZOOMS) {
+        const v = alignViewport({ ...base, zoom }, 1200, 800, dpr, origin);
+        expect(isInteger((origin.x + v.panX) * dpr)).toBe(true);
+        expect(isInteger((origin.y + v.panY) * dpr)).toBe(true);
+        expect(alignViewport(v, 1200, 800, dpr, origin)).toEqual(v);
+      }
+    }
+  });
 });
 
 describe('snapWorldPx', () => {

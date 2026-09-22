@@ -237,7 +237,9 @@ a.btn { text-decoration: none; display: inline-block; }
 /* .term-host is the terminal's true content box; the inset reproduces what used
    to be its padding, while leaving it with none so .term-scale's percentages
    resolve against exactly the terminal area. .term-scale is sized 100*k% and
-   counter-scaled by 1/k so xterm rasterizes at the canvas zoom (Terminal.tsx). */
+   counter-scaled by 1/k so xterm rasterizes at the canvas zoom (Terminal.tsx).
+   On the canvas the inset is overridden inline with a device-pixel-snapped
+   origin (TerminalWindow.tsx); this is the value it is snapped from. */
 .term-host { position: absolute; inset: 4px 6px; overflow: hidden; }
 .term-scale { position: absolute; top: 0; left: 0; transform-origin: 0 0; }
 .term-scale .xterm { width: 100%; height: 100%; }

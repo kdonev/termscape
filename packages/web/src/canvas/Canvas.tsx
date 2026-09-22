@@ -96,6 +96,7 @@ export function Canvas() {
   const [interacting, setInteracting] = useState(false);
   const settleRef = useRef<number | null>(null);
   const [devicePixelRatio, setDevicePixelRatio] = useState(dpr);
+  const [origin, setOrigin] = useState({ x: 0, y: 0 });
 
   const {
     sessions,
@@ -126,11 +127,17 @@ export function Canvas() {
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
-    const ro = new ResizeObserver(() => {
+    // The canvas's place in the page comes along with its size: whatever sits
+    // above it (the toolbar) resizes it when it changes height, and that
+    // offset is what the pan has to be snapped against - see alignViewport.
+    const measure = () => {
       setSize({ w: el.clientWidth, h: el.clientHeight });
-    });
+      const r = el.getBoundingClientRect();
+      setOrigin((cur) => (cur.x === r.left && cur.y === r.top ? cur : { x: r.left, y: r.top }));
+    };
+    const ro = new ResizeObserver(measure);
     ro.observe(el);
-    setSize({ w: el.clientWidth, h: el.clientHeight });
+    measure();
     return () => ro.disconnect();
   }, []);
 
@@ -151,6 +158,8 @@ export function Canvas() {
   // aligns against this one, and a disagreement would leave `applied` stale.
   const dprRef = useRef(devicePixelRatio);
   dprRef.current = devicePixelRatio;
+  const originRef = useRef(origin);
+  originRef.current = origin;
 
   /* ------------------------------------------------ gesture settling */
 
@@ -162,9 +171,15 @@ export function Canvas() {
    */
   useEffect(() => {
     if (interacting) return;
-    const aligned = alignViewport(viewport, sizeRef.current.w, sizeRef.current.h, devicePixelRatio);
+    const aligned = alignViewport(
+      viewport,
+      sizeRef.current.w,
+      sizeRef.current.h,
+      devicePixelRatio,
+      origin,
+    );
     if (!sameViewport(aligned, viewport)) setViewport(aligned);
-  }, [viewport, interacting, devicePixelRatio, setViewport]);
+  }, [viewport, interacting, devicePixelRatio, origin, setViewport]);
 
   const settle = useCallback(() => {
     settleRef.current = null;
@@ -405,7 +420,7 @@ export function Canvas() {
 
       // Aligned up front so the settle effect finds nothing to nudge, which is
       // what keeps `applied` equal to the live viewport once the glide lands.
-      const next = alignViewport(focusRect(target.window, w, h), w, h, dprRef.current);
+      const next = alignViewport(focusRect(target.window, w, h), w, h, dprRef.current, originRef.current);
       setMaximized({ sessionId, restore: restore ?? carried, applied: next });
       glideTo(next);
     },
@@ -547,7 +562,7 @@ export function Canvas() {
     // The view is no longer one window's close-up, so the ⤡ state stops
     // describing it.
     setMaximized(null);
-    glideTo(alignViewport(next, w, h, dprRef.current));
+    glideTo(alignViewport(next, w, h, dprRef.current, originRef.current));
   }, [focusSession, glideTo]);
 
   const noteZoom = useCallback(

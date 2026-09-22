@@ -3,7 +3,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { useStore } from '../state/store.js';
 import { TerminalView } from '../window/Terminal.js';
 import { statusColor, statusLabel } from '../window/status.js';
-import { fitGrid, measureBaseCell } from '../window/grid.js';
+import { fitGrid, measureChar } from '../window/grid.js';
 
 /** Breathing room around the terminal, so it does not touch the page edge. */
 const GUTTER = 8;
@@ -85,7 +85,7 @@ export function ShareView() {
   const availH = size.h - 2 * GUTTER;
   const fit =
     availW > 0 && availH > 0
-      ? fitGrid(session.cols, session.rows, availW, availH, dpr, measureBaseCell())
+      ? fitGrid(session.cols, session.rows, availW, availH, dpr, measureChar)
       : null;
   // Centred, and on a whole device pixel for the same reason the canvas pan is.
   const snap = (v: number) => Math.round(v * dpr) / dpr;

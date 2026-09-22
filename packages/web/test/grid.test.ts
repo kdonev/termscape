@@ -5,17 +5,38 @@ import {
   gridFor,
   normalisedCell,
   widestCell,
-  type BaseCell,
+  type MeasureChar,
 } from '../src/window/grid.js';
 import { BASE_FONT_SIZE, MAX_DEVICE_FONT, MIN_DEVICE_FONT } from '../src/canvas/viewport.js';
 
-/** Consolas-ish, plus a few deliberately awkward metrics. */
-const FONTS: BaseCell[] = [
-  { charW: 7.2, charH: 14 },
-  { charW: 7.9, charH: 15.4 },
-  { charW: 6.0, charH: 12 },
-  { charW: 7.03, charH: 13.72 },
+/** A font whose metrics scale linearly from its box at BASE_FONT_SIZE. */
+const linear =
+  (charW: number, charH: number): MeasureChar =>
+  (size) => ({ width: (charW * size) / BASE_FONT_SIZE, height: (charH * size) / BASE_FONT_SIZE });
+
+/**
+ * Real fonts are hinted, so their metrics are not linear in size: this one
+ * gains a pixel of height at every size from 20px up. A base cell scaled
+ * linearly from 12px under-predicts it, which is the overflow in issue 32.
+ */
+const hinted: MeasureChar = (size) => ({
+  width: size * 0.6,
+  height: size * 1.17 + (size >= 20 ? 1 : 0),
+});
+
+/** Consolas-ish, a few deliberately awkward metrics, and a non-linear one. */
+const FONTS: MeasureChar[] = [
+  linear(7.2, 14),
+  linear(7.9, 15.4),
+  linear(6.0, 12),
+  linear(7.03, 13.72),
+  hinted,
 ];
+
+/** The unquantised character box at zoom 1, for the bounds below. */
+const baseW = (m: MeasureChar) => m(BASE_FONT_SIZE).width;
+
+const DPRS = [1, 1.25, 1.5, 2];
 
 const deviceFonts = () => {
   const out: number[] = [];
@@ -27,30 +48,48 @@ describe('normalisedCell', () => {
   it('drifts with the render scale, which is why fit cannot size the grid', () => {
     // If this stopped being true the whole grid module would be unnecessary, so
     // assert the premise rather than trusting it.
-    const base = FONTS[1];
+    const base = FONTS[1]!;
     const sizes = new Set(
-      deviceFonts().map((d) => normalisedCell(base, d, TERMINAL_LINE_HEIGHT).w.toFixed(4)),
+      deviceFonts().map((d) => normalisedCell(base, d, 1, TERMINAL_LINE_HEIGHT).w.toFixed(4)),
     );
     expect(sizes.size).toBeGreaterThan(1);
   });
 
   it('never exceeds the unquantised character box', () => {
-    for (const base of FONTS) {
-      for (const d of deviceFonts()) {
-        expect(normalisedCell(base, d).w).toBeLessThanOrEqual(base.charW + 1e-9);
+    for (const base of FONTS.slice(0, 4)) {
+      for (const dpr of DPRS) {
+        for (const d of deviceFonts()) {
+          expect(normalisedCell(base, d, dpr).w).toBeLessThanOrEqual(baseW(base) + 1e-9);
+        }
       }
     }
+  });
+
+  it('measures at the font size xterm is given, not a scaled 12px box', () => {
+    // At dpr 1 and 24 device px the terminal is given a 24px font, where the
+    // hinted font is a pixel taller than twice its 12px self.
+    const requested: number[] = [];
+    const spy: MeasureChar = (size) => {
+      requested.push(size);
+      return hinted(size);
+    };
+    const cell = normalisedCell(spy, 24, 1);
+    expect(requested).toEqual([24]);
+    const deviceCellH = Math.floor(Math.ceil(24 * 1.17 + 1) * TERMINAL_LINE_HEIGHT);
+    expect(cell.h).toBeCloseTo((deviceCellH * BASE_FONT_SIZE) / 24, 9);
   });
 });
 
 describe('widestCell', () => {
-  it('bounds every render scale', () => {
+  it('bounds every render scale, at every dpr', () => {
     for (const base of FONTS) {
-      const widest = widestCell(base);
-      for (const d of deviceFonts()) {
-        const cell = normalisedCell(base, d);
-        expect(cell.w).toBeLessThanOrEqual(widest.w + 1e-9);
-        expect(cell.h).toBeLessThanOrEqual(widest.h + 1e-9);
+      for (const dpr of DPRS) {
+        const widest = widestCell(base, dpr);
+        for (const d of deviceFonts()) {
+          const cell = normalisedCell(base, d, dpr);
+          expect(cell.w).toBeLessThanOrEqual(widest.w + 1e-9);
+          expect(cell.h).toBeLessThanOrEqual(widest.h + 1e-9);
+        }
       }
     }
   });
@@ -68,12 +107,14 @@ describe('gridFor', () => {
     // The property that replaces fit: whatever zoom the terminal is rendered
     // at, the fixed grid still fits the window, so it can never clip a column.
     for (const base of FONTS) {
-      for (const [fw, fh] of FRAMES) {
-        const { cols, rows } = gridFor(fw, fh, base);
-        for (const d of deviceFonts()) {
-          const cell = normalisedCell(base, d);
-          expect(cols * cell.w).toBeLessThanOrEqual(fw + 1e-9);
-          expect(rows * cell.h).toBeLessThanOrEqual(fh + 1e-9);
+      for (const dpr of DPRS) {
+        for (const [fw, fh] of FRAMES) {
+          const { cols, rows } = gridFor(fw, fh, base, dpr);
+          for (const d of deviceFonts()) {
+            const cell = normalisedCell(base, d, dpr);
+            expect(cols * cell.w).toBeLessThanOrEqual(fw + 1e-9);
+            expect(rows * cell.h).toBeLessThanOrEqual(fh + 1e-9);
+          }
         }
       }
     }
@@ -84,8 +125,8 @@ describe('gridFor', () => {
     // visibly underfills its window.
     for (const base of FONTS) {
       for (const [fw, fh] of FRAMES) {
-        const { cols, rows } = gridFor(fw, fh, base);
-        const widest = widestCell(base);
+        const { cols, rows } = gridFor(fw, fh, base, 1);
+        const widest = widestCell(base, 1);
         expect(fw - cols * widest.w).toBeLessThan(widest.w);
         expect(fh - rows * widest.h).toBeLessThan(widest.h);
       }
@@ -94,18 +135,18 @@ describe('gridFor', () => {
 
   it('depends only on the geometry', () => {
     for (const base of FONTS) {
-      expect(gridFor(640, 420, base)).toEqual(gridFor(640, 420, base));
-      expect(gridFor(640, 420, base)).not.toEqual(gridFor(641 + base.charW, 420, base));
+      expect(gridFor(640, 420, base, 1)).toEqual(gridFor(640, 420, base, 1));
+      expect(gridFor(640, 420, base, 1)).not.toEqual(gridFor(641 + baseW(base), 420, base, 1));
     }
   });
 
   it('honours the minimum grid for a collapsed window', () => {
-    expect(gridFor(0, 0, FONTS[0])).toEqual({ cols: 2, rows: 1 });
-    expect(gridFor(1, 1, FONTS[0])).toEqual({ cols: 2, rows: 1 });
+    expect(gridFor(0, 0, FONTS[0]!, 1)).toEqual({ cols: 2, rows: 1 });
+    expect(gridFor(1, 1, FONTS[0]!, 1)).toEqual({ cols: 2, rows: 1 });
   });
 
   it('survives an unmeasurable font without dividing by zero', () => {
-    expect(gridFor(400, 300, { charW: 0, charH: 0 })).toEqual({ cols: 2, rows: 1 });
+    expect(gridFor(400, 300, () => ({ width: 0, height: 0 }), 1)).toEqual({ cols: 2, rows: 1 });
   });
 });
 
@@ -137,7 +178,7 @@ describe('fitGrid', () => {
     for (const base of FONTS) {
       for (const [cols, rows, w, h] of [[120, 40, 1400, 900], [200, 55, 982, 480], [80, 24, 1920, 1000]]) {
         const fit = fitGrid(cols!, rows!, w!, h!, dpr, base);
-        const cell = normalisedCell(base, Math.round(fit.renderScale * BASE_FONT_SIZE * dpr));
+        const cell = normalisedCell(base, Math.round(fit.renderScale * BASE_FONT_SIZE * dpr), dpr);
         expect(cols! * cell.w).toBeLessThanOrEqual(fit.w);
         expect(rows! * cell.h).toBeLessThanOrEqual(fit.h);
         // Tight: no more than the one pixel ceil() can add.
@@ -153,7 +194,7 @@ describe('fitGrid', () => {
     if (device < MAX_DEVICE_FONT) {
       const next = fitGrid(100, 30, 1200, 700, dpr, BASE);
       expect(next.zoom).toBe(fit.zoom);
-      const bigger = normalisedCell(BASE, device + 1);
+      const bigger = normalisedCell(BASE, device + 1, dpr);
       const z = (device + 1) / (BASE_FONT_SIZE * dpr);
       const overflows = Math.ceil(100 * bigger.w) * z > 1200 || Math.ceil(30 * bigger.h) * z > 700;
       expect(overflows).toBe(true);
