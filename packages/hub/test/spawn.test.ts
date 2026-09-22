@@ -261,10 +261,10 @@ describe('spawn_agent', () => {
       // the old text: the new process's console repaints over it on Windows.)
       await new Promise((r) => setTimeout(r, 500));
       const snap = hub.sessions.snapshotForAttach(s.id)?.serialized ?? '';
-      // Mouse modes only: on Windows the new process's console asks for focus
-      // events itself, which is exactly the kind of mode it is entitled to.
+      // Mouse modes only: the new process may ask for others itself, which it
+      // is entitled to. On Windows its console asks for focus events, and on
+      // Linux bash's readline turns bracketed paste back on at every prompt.
       expect(describeSnapshotModes(snap)).not.toMatch(/\+[\w-]*mouse/);
-      expect(snap).not.toContain('\x1b[?2004h');
     },
     60_000,
   );
