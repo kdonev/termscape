@@ -5,7 +5,6 @@ import type {
   AgentTemplateInfo,
   TemplateProposal,
   Host,
-  Message,
   Note,
   Session,
   ServerMsg,
@@ -100,7 +99,6 @@ interface AppState {
   hostLogs: Record<string, string[]>;
   workspaces: Workspace[];
   sessions: Session[];
-  messages: Message[];
   /** What this machine has installed. */
   profiles: AgentProfileInfo[];
   /** What the picker offers: an agent plus what has already been chosen for it. */
@@ -202,7 +200,6 @@ export const useStore = create<AppState>((set, get) => ({
   hostLogs: {},
   workspaces: [],
   sessions: [],
-  messages: [],
   profiles: [],
   templates: [],
   templateProposals: [],
@@ -236,7 +233,6 @@ export const useStore = create<AppState>((set, get) => ({
           hosts: m.state.hosts,
           workspaces: m.state.workspaces,
           sessions: m.state.sessions,
-          messages: m.state.messages,
           profiles: m.state.profiles,
           templates: m.state.templates,
           templateProposals: m.state.templateProposals,
@@ -373,7 +369,6 @@ export const useStore = create<AppState>((set, get) => ({
 
       case 'messageSent':
         set((s) => ({
-          messages: [...s.messages, m.message].slice(-500),
           flashes: [
             ...s.flashes.filter((f) => Date.now() - f.at < 3000),
             {

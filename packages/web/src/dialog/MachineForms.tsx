@@ -11,49 +11,66 @@ import { DialogForm, Field } from './Dialog.js';
  * Nothing about them changed in the move except that they now have room.
  */
 
+/** A command to paste on the other machine, with a button that copies it. */
+function CopyLine({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <div className="join-url">
+      <code>{text}</code>
+      <button
+        className="btn"
+        type="button"
+        onClick={() => {
+          void navigator.clipboard?.writeText(text);
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1500);
+        }}
+      >
+        {copied ? 'copied' : 'copy'}
+      </button>
+    </div>
+  );
+}
+
 /**
  * The pull path. Nothing to fill in: the other machine fetches the installer
  * itself, which is the point - no credentials are typed here, and an install
  * failure shows up in the terminal of whoever can fix it.
+ *
+ * The commands are the same two the join page shows, so there is no need to
+ * open that page on the other machine first. Each run of one downloads an
+ * installer with a fresh single-use key, so a copied command stays good.
  */
 export function JoinInstructions() {
   const { enrollUrl, enrollAltUrl } = useStore(
     useShallow((s) => ({ enrollUrl: s.enrollUrl, enrollAltUrl: s.enrollAltUrl })),
   );
   const closeDialog = useStore((s) => s.closeDialog);
-  const [copied, setCopied] = useState(false);
+  const origin = enrollUrl ? new URL(enrollUrl).origin : null;
+  const altOrigin = enrollAltUrl ? new URL(enrollAltUrl).origin : null;
 
   return (
     <div className="dialog-body">
-      {enrollUrl ? (
+      {origin ? (
         <>
           <p className="dialog-note">
-            Open this on the machine you want to add. It installs the hub there and
-            connects back on its own.
+            Run one of these on the machine you want to add. It installs the hub there
+            under <code>~/.termscape</code> and connects back on its own.
           </p>
-          <div className="join-url">
-            <code>{enrollUrl}</code>
-            <button
-              className="btn"
-              type="button"
-              onClick={() => {
-                void navigator.clipboard?.writeText(enrollUrl);
-                setCopied(true);
-                setTimeout(() => setCopied(false), 1500);
-              }}
-            >
-              {copied ? 'copied' : 'copy'}
-            </button>
-          </div>
-          {enrollAltUrl && (
+          <div className="join-os">macOS · Linux</div>
+          <CopyLine text={`curl -fsSL ${origin}/join.sh | sh`} />
+          <div className="join-os">Windows (PowerShell)</div>
+          <CopyLine text={`irm ${origin}/join.ps1 | iex`} />
+          {altOrigin && (
             <p className="dialog-note">
-              If that machine cannot resolve this one by name, use <code>{enrollAltUrl}</code>{' '}
-              instead.
+              If that machine cannot resolve this one by name, use <code>{altOrigin}</code>{' '}
+              in place of <code>{origin}</code>.
             </p>
           )}
           <p className="dialog-note">
-            It needs Node 22 or newer. Its agents keep running if the link drops, and it
-            rejoins by itself.
+            It needs Node 22 or newer, and fetches its own copy if it has none. Its agents
+            keep running if the link drops, and it rejoins by itself. The same commands
+            are on <code>{enrollUrl}</code>.
           </p>
         </>
       ) : (

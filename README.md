@@ -140,7 +140,8 @@ peer on another machine exactly as it addresses one in the next window.
 
 Nothing to turn on: a hub started with no flags at all hands out join links.
 The startup banner prints an `enroll:` URL alongside the usual one, and the
-**+ machine** dialog shows the same URL with a copy button.
+**+ machine** dialog shows the install commands themselves, each with a copy
+button.
 
 That is a deliberate trade and worth knowing about, because `/join` is the one
 page served without your token — it has to be typed by hand on a machine that
@@ -148,8 +149,8 @@ has nothing yet. So on a network you do not trust, anyone who can reach this
 hub can pull the installer and put a machine on your canvas. `--listen
 loopback` is how you say no, and it turns off the network entirely.
 
-Open the join URL **on the machine you want to add** and run the command it
-shows:
+Run one of these **on the machine you want to add** — copied from the dialog,
+or from the join URL opened there:
 
 ```bash
 curl -fsSL http://studio:7777/join.sh | sh    # macOS, Linux
@@ -506,8 +507,8 @@ could be talked into sending an attacker's text to a peer.
 - Messages are length-capped, rate-limited per sender, and always arrive with a
   visible `[from <address>]` prefix - except in a shell, where they arrive as
   the bare command and are still recorded, sender included, in the message log.
-- Every delivery attempt is recorded with its outcome and shown in the message
-  log. Nothing is delivered invisibly.
+- Every delivery attempt is recorded with its outcome, and each one flashes an
+  edge between the two windows on the canvas. Nothing is delivered invisibly.
 - `spawn_agent` is capped per workspace, so a confused agent cannot recurse the
   machine to death.
 - An agent may only stop agents it spawned.
