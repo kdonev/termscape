@@ -99,6 +99,7 @@ function MachineNode({ machine }: { machine: TreeMachine }) {
           className="dot"
           style={{ background: HOST_STATE_COLOR[machine.state] ?? '#7c8596' }}
         />
+        <NodeIcon kind="machine" />
         <span className="node-label">{machine.label}</span>
         {machine.sub && <span className="node-sub">{machine.sub}</span>}
         <span className="spacer" />
@@ -313,6 +314,7 @@ function TemplatesNode() {
     <div className="node-group">
       <div className="node root">
         <Twisty collapsed={collapsed} onClick={() => setCollapsed((v) => !v)} />
+        <NodeIcon kind="template" />
         <span className="node-label">templates</span>
         <span className="node-sub">
           {proposals.length > 0
@@ -339,6 +341,7 @@ function TemplatesNode() {
           {proposals.map((p) => (
             <div className="node-group" key={p.id}>
               <div className="node template">
+                <NodeIcon kind="template" />
                 <span className="node-label">{p.template.id}</span>
                 <span className="node-sub">proposed by {p.fromAddr}</span>
                 <span className="spacer" />
@@ -386,6 +389,7 @@ function TemplateNode({ template }: { template: AgentTemplateInfo }) {
   return (
     <div className="node-group">
       <div className="node template">
+        <NodeIcon kind="template" />
         <span className="node-label">{template.id}</span>
         <span className="node-sub">
           {template.agent}
@@ -451,6 +455,7 @@ function WorkspaceNode({ node }: { node: TreeWorkspace }) {
     <div className="node-group">
       <div className="node workspace">
         <Twisty collapsed={collapsed} onClick={() => setCollapsed((v) => !v)} />
+        <NodeIcon kind="workspace" />
         <span className="node-label">{workspace.name}</span>
         <span className="node-sub" title={workspace.rootPath}>
           {workspace.rootPath}
@@ -534,6 +539,7 @@ function SessionNode({ session }: { session: Session }) {
       onClick={() => requestFocus(session.id)}
     >
       <span className="dot" style={{ background: statusColor(session) }} />
+      <NodeIcon kind="agent" />
       <span className="node-label" title={describeSession(session)}>
         {session.title || session.name}
       </span>
@@ -597,5 +603,29 @@ function Twisty({ collapsed, onClick }: { collapsed: boolean; onClick: () => voi
     <button className="twisty" aria-label={collapsed ? 'Expand' : 'Collapse'} onClick={onClick}>
       {collapsed ? '▸' : '▾'}
     </button>
+  );
+}
+
+/**
+ * What kind of thing a row is, drawn in front of its name. Stroked in the
+ * text colour, so it reads as part of the row rather than as its status -
+ * that is the dot's job.
+ */
+const NODE_ICON_PATHS: Record<'machine' | 'workspace' | 'agent' | 'template', string> = {
+  // A monitor on a stand.
+  machine: 'M2.5 3.5h11v7h-11z M6 13.5h4 M8 10.5v3',
+  // A folder.
+  workspace: 'M2 4.5v8h12v-6.5h-6.5l-1.5-1.5z',
+  // A terminal prompt: a chevron and a cursor.
+  agent: 'M3 4.5l3.5 3.5-3.5 3.5 M8.5 11.5h4.5',
+  // A page with its corner folded, and lines of text.
+  template: 'M4 2h5.5l2.5 2.5v9.5h-8z M9.5 2v2.5h2.5 M6 8h4 M6 10.5h4',
+};
+
+function NodeIcon({ kind }: { kind: keyof typeof NODE_ICON_PATHS }) {
+  return (
+    <svg className={`node-icon ${kind}`} viewBox="0 0 16 16" aria-hidden="true">
+      <path d={NODE_ICON_PATHS[kind]} />
+    </svg>
   );
 }
