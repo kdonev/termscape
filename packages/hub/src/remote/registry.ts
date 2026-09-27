@@ -123,7 +123,11 @@ export class PeerRegistry extends EventEmitter {
   addOutdated(host: Host, socket: WsSocket, remoteVersion: string): void {
     this.remove(host.id);
     this.markUpdatable(host.id, true);
-    const peer = new PeerConnection({ hostId: host.id, hubVersion: this.hubVersion });
+    const peer = new PeerConnection({
+      hostId: host.id,
+      label: host.label,
+      hubVersion: this.hubVersion,
+    });
     peer.on('error', () => {
       // Nothing to do: it is already outdated, and it redials on its own.
     });
@@ -189,6 +193,7 @@ export class PeerRegistry extends EventEmitter {
 
     const peer = new PeerConnection({
       hostId: host.id,
+      label: host.label,
       ...opts,
       hubVersion: this.hubVersion,
     });
@@ -480,7 +485,7 @@ export class PeerRegistry extends EventEmitter {
     const peer = this.peers.get(hostId);
     this.forget(address);
     try {
-      if (!peer?.connected) throw new Error(`host ${hostId} is not connected`);
+      if (!peer?.connected) throw this.notConnected(hostId);
       await peer.request({ t: 'removeSession', id: randomUUID(), address });
     } catch {
       // Unreachable, or it went away mid-request. The instruction waits in the
@@ -583,8 +588,8 @@ export class PeerRegistry extends EventEmitter {
     },
   ): Promise<Session> {
     const peer = this.peers.get(hostId);
-    if (!peer) throw new Error(`host ${hostId} is not connected`);
-    if (!peer.connected) throw new Error(`host ${hostId} is not connected`);
+    if (!peer) throw this.notConnected(hostId);
+    if (!peer.connected) throw this.notConnected(hostId);
 
     // Lineage is ours to keep, not the peer's (its session table would reject
     // a parent id it has never seen). The child's id is chosen here and sent
@@ -663,8 +668,14 @@ export class PeerRegistry extends EventEmitter {
    */
   async checkFolder(hostId: string, path: string): Promise<{ path: string }> {
     const peer = this.peers.get(hostId);
-    if (!peer) throw new Error(`host ${hostId} is not connected`);
-    if (!peer.connected) throw new Error(`host ${hostId} is not connected`);
+    if (!peer) throw this.notConnected(hostId);
+    if (!peer.connected) throw this.notConnected(hostId);
     return peer.request<{ path: string }>({ t: 'checkFolder', id: randomUUID(), path });
+  }
+
+  /** Named for the person reading it: the host's label, not its id. */
+  private notConnected(hostId: string): Error {
+    const label = this.store.listHosts().find((h) => h.id === hostId)?.label ?? hostId;
+    return new Error(`host "${label}" is not connected`);
   }
 }

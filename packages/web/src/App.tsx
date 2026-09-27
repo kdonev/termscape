@@ -101,10 +101,15 @@ export function App() {
       {errors.length > 0 && (
         <div className="errors">
           {errors.map((e, i) => (
-            <div key={i} className="error">
+            // Keyed on the flash count too, so a repeat remounts it and the
+            // flash animation plays again.
+            <div
+              key={`${e.message}#${e.flashes}`}
+              className={e.flashes > 0 ? 'error flash' : 'error'}
+            >
               {/* The message is not a dismiss button: selecting an error to
                   copy it is the usual reason for wanting it to stay. */}
-              <span className="error-body">{e}</span>
+              <span className="error-body">{e.message}</span>
               <button
                 className="error-close"
                 title="Dismiss"

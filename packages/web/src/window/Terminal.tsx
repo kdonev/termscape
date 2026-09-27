@@ -341,7 +341,7 @@ export function TerminalView({
      */
     const pasteFailed = (why: string) => {
       debug('input', sessionId, `paste FAILED: ${why}`);
-      useStore.setState((s) => ({ errors: [...s.errors, `Paste failed: ${why}`].slice(-5) }));
+      useStore.getState().showError(`Paste failed: ${why}`);
     };
     const pasteImage = async (image: Blob) => {
       if (!isPasteImageType(image.type)) throw new Error(`cannot paste an image of type ${image.type}`);

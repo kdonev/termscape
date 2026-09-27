@@ -148,7 +148,11 @@ interface AppState {
   dialog: DialogSpec | null;
   /** Snapshots delivered on attach, consumed once by the terminal component. */
   pendingSnapshots: Map<string, string>;
-  errors: string[];
+  /**
+   * The errors in the corner, oldest first. A message already showing is not
+   * stacked again: its `flashes` goes up instead, which replays its flash.
+   */
+  errors: { message: string; flashes: number }[];
 
   client: HubClient | null;
   init: (client: HubClient) => void;
@@ -170,6 +174,7 @@ interface AppState {
   openDialog: (spec: DialogSpec) => void;
   closeDialog: () => void;
   takeSnapshot: (sessionId: string) => string | null;
+  showError: (message: string) => void;
   dismissError: (i: number) => void;
 }
 
@@ -391,7 +396,7 @@ export const useStore = create<AppState>((set, get) => ({
         return;
 
       case 'error':
-        set((s) => ({ errors: [...s.errors, m.message].slice(-5) }));
+        get().showError(m.message);
         return;
 
       case 'agentsDetected':
@@ -507,5 +512,13 @@ export const useStore = create<AppState>((set, get) => ({
     return s;
   },
 
+  showError: (message) =>
+    set((s) => {
+      const shown = s.errors.find((e) => e.message === message);
+      if (!shown) return { errors: [...s.errors, { message, flashes: 0 }].slice(-5) };
+      return {
+        errors: s.errors.map((e) => (e === shown ? { message, flashes: e.flashes + 1 } : e)),
+      };
+    }),
   dismissError: (i) => set((s) => ({ errors: s.errors.filter((_, j) => j !== i) })),
 }));

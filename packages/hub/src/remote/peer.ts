@@ -11,6 +11,8 @@ import {
 
 export interface PeerOptions {
   hostId: string;
+  /** What the host is called, for error messages a person reads. */
+  label?: string;
   /**
    * Loopback URL of the tunnelled remote hub, e.g. ws://127.0.0.1:51234/peer.
    * Absent for an enrolled host: it dialled us, and we have no way to dial it.
@@ -265,7 +267,7 @@ export class PeerConnection extends EventEmitter {
   /** Send a request and await its reply. */
   request<T = unknown>(req: PeerRequest): Promise<T> {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      return Promise.reject(new Error(`host ${this.opts.hostId} is not connected`));
+      return Promise.reject(new Error(`host "${this.opts.label ?? this.opts.hostId}" is not connected`));
     }
     const id = 'id' in req ? req.id : randomUUID();
     return new Promise<T>((resolve, reject) => {
