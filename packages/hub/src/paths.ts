@@ -38,4 +38,6 @@ export const paths = {
    * deleted, so re-joining fails outright without this.
    */
   pidFile: () => join(hubHome(), 'hub.pid'),
+  /** Logs exported from the report-a-bug dialog, one file per export. */
+  bugReports: () => join(hubHome(), 'bug-reports'),
 };

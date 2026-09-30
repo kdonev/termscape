@@ -51,6 +51,8 @@ export type DialogSpec =
   | { kind: 'editMachine'; hostId: string }
   /** The link for one session: copy it, or stop sharing. */
   | { kind: 'share'; sessionId: string }
+  /** Open an issue, with the offer to export logs first. */
+  | { kind: 'reportBug' }
   /**
    * Destructive confirmation. The message to send is carried rather than a
    * callback, so the dialog needs to know nothing about what it is confirming

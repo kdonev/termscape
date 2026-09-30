@@ -20,6 +20,7 @@ import {
 import { Hub, HUB_VERSION } from './hub.js';
 import { debug, debugOn } from './debug.js';
 import { savePastedImage } from './session/paste-image.js';
+import { exportLogs } from './bug-report.js';
 import { createPeerServer, type PeerServer } from './remote/peer-serve.js';
 import { registerEnrollment, type Enrollment } from './remote/enroll.js';
 import {
@@ -745,6 +746,9 @@ export async function serve(opts: ServeOptions): Promise<ServeResult> {
         debug('input', `paste image ${msg.sessionId} saved: ${path}`);
         return { path };
       }
+
+      case 'exportLogs':
+        return { path: await exportLogs(hub) };
 
       case 'checkFolder':
         // Nothing to hand back beyond ok/err: the dialog already knows the

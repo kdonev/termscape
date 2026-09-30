@@ -313,6 +313,13 @@ export const ClientMsg = z.discriminatedUnion('t', [
 
   /** Re-probe what is installed, here and on every attached machine. */
   z.object({ t: z.literal('refreshAgents') }),
+
+  /**
+   * Write a bug report's logs to a file on this machine, collected from every
+   * attached one too, and answer with where it went. Never sent anywhere
+   * else: the tracker is public, and the person decides who gets the file.
+   */
+  z.object({ t: z.literal('exportLogs'), requestId }),
 ]);
 export type ClientMsg = z.infer<typeof ClientMsg>;
 
@@ -345,7 +352,8 @@ export type AckableMsg = Extract<
       | 'applyUpdate'
       | 'shareSession'
       | 'unshareSession'
-      | 'pasteImage';
+      | 'pasteImage'
+      | 'exportLogs';
   }
 >;
 
@@ -485,7 +493,10 @@ export const ServerMsg = z.discriminatedUnion('t', [
      * and the broadcast alone does not tell it which session was its own.
      */
     sessionId: z.string().optional(),
-    /** Where a `pasteImage` was saved, on the machine running the session. */
+    /**
+     * Where a `pasteImage` was saved, on the machine running the session, or
+     * where `exportLogs` wrote its file, on this one.
+     */
     path: z.string().optional(),
   }),
 ]);

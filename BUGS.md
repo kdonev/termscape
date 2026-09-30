@@ -126,3 +126,21 @@ earlier rounds of this investigation down the wrong path:
 - "The screen changed" is not evidence that a wheel did anything. A live agent
   window repaints on its own. Measure how *many* rows changed against an idle
   baseline: a scroll moves nearly all of them, a spinner moves one.
+
+## A message that never arrives
+
+The **report a bug** button offers to export logs before it opens the issue.
+The export is a file under `~/.termscape/bug-reports/`, written by the canvas
+hub with a section for every attached machine; it is never attached to the
+issue, because the tracker is public. Send it privately when asked.
+
+It holds, per machine: versions, the agents running there, every recent
+message's route, timing and outcome (never its text), and that hub's recent
+log. The `deliver` and `attach` topics are always kept in memory for this,
+whether or not `TERMSCAPE_DEBUG` is set, along with everything the hub printed
+to its console, minus the canvas token. `TERMSCAPE_DEBUG` still decides what
+is printed to stderr.
+
+For a message to an agent on an attached machine, read that machine's section:
+its hub is the one that typed the message and decided whether to press Enter
+again.

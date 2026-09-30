@@ -9,7 +9,7 @@ import { openInBrowser } from './browser.js';
 import { openAppWindow } from './window/open-window.js';
 import { ProfileRegistry } from './agents/profiles.js';
 import { which } from './agents/resolve.js';
-import { debugTopics } from './debug.js';
+import { captureConsole, debugTopics, redactFromLog } from './debug.js';
 import type { CliValues } from './cli-args.js';
 import { Updater } from './update/updater.js';
 import { installKind } from './update/install.js';
@@ -83,10 +83,13 @@ Joining another machine's canvas:
     return;
   }
 
+  // Before anything prints, so the bug-report export has all of it.
+  captureConsole();
   preflightAgents();
 
   mkdirSync(paths.home(), { recursive: true });
   const clientToken = values.token ?? mintClientToken();
+  redactFromLog(clientToken);
   writeFileSync(paths.tokenFile(), clientToken, { mode: 0o600 });
   // The join installer reads this to stop a previous hub before replacing its
   // files; on Windows a loaded .node cannot be deleted while it runs.

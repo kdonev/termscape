@@ -363,6 +363,15 @@ export const PeerRequest = z.discriminatedUnion('t', [
     mime: PasteImageMime,
     data: z.string(),
   }),
+  /**
+   * This machine's half of a bug report: its version, its agents, its recent
+   * messages without their text, and its in-memory log. Asked of every host
+   * because a message to an agent over here is typed in by this hub, so the
+   * trace that says whether it was ever submitted is on this side only.
+   * Added without a schema bump, like `pasteImage`: an older host drops the
+   * frame, and the report says it did not answer.
+   */
+  z.object({ t: z.literal('exportLogs'), id: z.string() }),
 ]);
 export type PeerRequest = z.infer<typeof PeerRequest>;
 

@@ -1,3 +1,5 @@
+import { format } from 'node:util';
+
 /**
  * Opt-in tracing, off unless asked for.
  *
@@ -23,6 +25,13 @@
  * wheel all the way to the program, set this on the canvas machine *and* on
  * the attached machine — the peer request id appears on both sides, so the
  * two logs line up on it.
+ *
+ * Separately from stderr, `deliver` and `attach` are always kept in memory,
+ * with whatever the hub printed to the console, for the bug-report export
+ * (see bug-report.ts). A lost message is noticed after the fact, when it is
+ * too late to restart the hub with tracing on; the few lines per message
+ * these topics cost are worth having on hand. `input` and `output` are kept
+ * only when they are on, for the reason above.
  */
 const topics = new Set(
   (process.env.TERMSCAPE_DEBUG ?? '')
@@ -33,6 +42,47 @@ const topics = new Set(
 
 const all = topics.has('all') || topics.has('1') || topics.has('true');
 
+/** Topics recorded in memory whether or not they are on. */
+const ALWAYS_KEPT = new Set(['deliver', 'attach']);
+
+/** How many lines the in-memory log holds before the oldest go. */
+export const RECENT_LOG_LINES = 5000;
+
+const recent: string[] = [];
+
+/** Values that must never reach the in-memory log, however they got printed. */
+const secrets = new Set<string>();
+
+/**
+ * Keep a value out of the in-memory log from now on.
+ *
+ * The banner prints the canvas URL with its token, for the person at the
+ * terminal. That line is fine on their screen and wrong in a file they may
+ * send to somebody else, so it is replaced as it is recorded.
+ */
+export function redactFromLog(secret: string): void {
+  if (secret.length >= 8) secrets.add(secret);
+}
+
+function remember(line: string): void {
+  for (const s of secrets) {
+    if (line.includes(s)) line = line.split(s).join('<redacted>');
+  }
+  recent.push(`${new Date().toISOString()} ${line}`);
+  if (recent.length > RECENT_LOG_LINES) recent.splice(0, recent.length - RECENT_LOG_LINES);
+}
+
+/** The in-memory log, oldest first, each line prefixed with its time. */
+export function recentLog(): string[] {
+  return [...recent];
+}
+
+/** For tests: start from an empty log. */
+export function clearRecentLog(): void {
+  recent.length = 0;
+  secrets.clear();
+}
+
 /**
  * Whether a topic is on. Exported so a caller can skip building a message it
  * is about to throw away — describing a mouse report costs more than logging
@@ -42,14 +92,47 @@ export function debugOn(topic: string): boolean {
   return all || topics.has(topic);
 }
 
+/** Set while `debug` prints, so the console tee does not record it twice. */
+let printing = false;
+
 /** One trace line on stderr, so it never lands in a piped stdout. */
 export function debug(topic: string, message: string): void {
-  if (!debugOn(topic)) return;
-  console.error(`[${topic}] ${message}`);
+  const on = debugOn(topic);
+  if (!on && !ALWAYS_KEPT.has(topic)) return;
+  const line = `[${topic}] ${message}`;
+  remember(line);
+  if (!on) return;
+  printing = true;
+  try {
+    console.error(line);
+  } finally {
+    printing = false;
+  }
 }
 
 /** Which topics are on, for the banner. Empty when tracing is off. */
 export function debugTopics(): string[] {
   if (all) return ['all'];
   return [...topics];
+}
+
+let captured = false;
+
+/**
+ * Keep what the hub prints to the console in the in-memory log as well.
+ *
+ * `[peer]`, `[warn]`, `[unhandled]` and the rest are printed straight to the
+ * console from wherever they happen, and a hub started from a shortcut or by
+ * the supervisor has nobody reading that console. Idempotent.
+ */
+export function captureConsole(): void {
+  if (captured) return;
+  captured = true;
+  for (const level of ['log', 'warn', 'error'] as const) {
+    const original = console[level].bind(console);
+    console[level] = (...args: unknown[]) => {
+      if (!printing) remember(format(...args));
+      original(...args);
+    };
+  }
 }

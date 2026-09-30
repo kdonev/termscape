@@ -14,6 +14,7 @@ import type { RequestResult } from '../net/client.js';
 import { writeClipboard } from '../window/clipboard.js';
 import { Dialog, DialogForm, Field } from './Dialog.js';
 import { JoinInstructions, SshForm } from './MachineForms.js';
+import { ReportBugDialog } from './ReportBug.js';
 
 /**
  * The one dialog that is up, if any.
@@ -48,6 +49,8 @@ function keyOf(spec: DialogSpec): string {
       return `editMachine:${spec.hostId}`;
     case 'share':
       return `share:${spec.sessionId}`;
+    case 'reportBug':
+      return 'reportBug';
     case 'confirm':
       return `confirm:${spec.title}`;
   }
@@ -71,6 +74,8 @@ function Body({ spec }: { spec: DialogSpec }) {
       return <EditMachineDialog hostId={spec.hostId} />;
     case 'share':
       return <ShareDialog sessionId={spec.sessionId} />;
+    case 'reportBug':
+      return <ReportBugDialog />;
     case 'confirm':
       return <ConfirmDialog spec={spec} />;
   }
