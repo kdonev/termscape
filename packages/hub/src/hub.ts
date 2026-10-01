@@ -70,7 +70,7 @@ type TemplateView = Omit<AgentTemplateInfo, 'env' | 'error'> & {
   error: string | null;
 };
 
-export const HUB_VERSION = '0.2.4';
+export const HUB_VERSION = '0.2.5';
 
 /**
  * How long changes are pooled before every attached machine is told the
