@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
-import type { Session, Workspace } from '@termscape/protocol';
+import type { Session, WindowRect, Workspace } from '@termscape/protocol';
 import { useStore } from '../state/store.js';
 import { TerminalView } from './Terminal.js';
 import { snapWorldPx } from '../canvas/viewport.js';
@@ -39,9 +39,12 @@ export const TerminalWindow = memo(function TerminalWindow({
     shared: s.shares.some((sh) => sh.sessionId === session.id),
     openDialog: s.openDialog,
   })));
-  const [drag, setDrag] = useState<null | { mode: 'move' | 'resize'; ox: number; oy: number }>(
-    null,
-  );
+  const [drag, setDrag] = useState<null | {
+    mode: 'move' | 'resize';
+    ox: number;
+    oy: number;
+    start: WindowRect;
+  }>(null);
   const rectRef = useRef(session.window);
   rectRef.current = session.window;
 
@@ -50,7 +53,7 @@ export const TerminalWindow = memo(function TerminalWindow({
       e.stopPropagation();
       (e.target as Element).setPointerCapture(e.pointerId);
       select(session.id);
-      setDrag({ mode, ox: e.clientX, oy: e.clientY });
+      setDrag({ mode, ox: e.clientX, oy: e.clientY, start: rectRef.current });
     },
     [select, session.id],
   );
@@ -59,26 +62,32 @@ export const TerminalWindow = memo(function TerminalWindow({
     if (!drag) return;
 
     const onMove = (e: PointerEvent) => {
-      // Divide by zoom so a drag tracks the cursor in world space rather than
-      // running away from it when zoomed out.
+      // Measured from the grab, never added to the current rect. A step-wise
+      // delta counts a move twice whenever an event lands between the store
+      // re-render and this effect picking up the new origin, which on a busy
+      // canvas sends the window running off ahead of the cursor (#43). It also
+      // means a session update carrying an older rect cannot pull the window
+      // back mid-drag. Divided by zoom so it tracks the cursor in world space.
       const dx = (e.clientX - drag.ox) / zoom;
       const dy = (e.clientY - drag.oy) / zoom;
       const r = rectRef.current;
+      const s = drag.start;
       moveWindow(
         session.id,
         drag.mode === 'move'
-          ? { ...r, x: r.x + dx, y: r.y + dy }
-          : { ...r, w: Math.max(MIN_W, r.w + dx), h: Math.max(MIN_H, r.h + dy) },
+          ? { ...r, x: s.x + dx, y: s.y + dy }
+          : { ...r, w: Math.max(MIN_W, s.w + dx), h: Math.max(MIN_H, s.h + dy) },
       );
-      setDrag({ ...drag, ox: e.clientX, oy: e.clientY });
     };
     const onUp = () => setDrag(null);
 
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
     return () => {
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
     };
   }, [drag, moveWindow, session.id, zoom]);
 

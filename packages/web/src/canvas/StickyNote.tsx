@@ -27,9 +27,9 @@ const COLORS: NoteColor[] = ['yellow', 'pink', 'green', 'blue'];
  * A free-floating sticky note on the canvas.
  *
  * Copies TerminalWindow's drag/resize pattern verbatim: pointer capture on
- * the handle, window-level move/up listeners while dragging, and a rectRef so
- * the move handler always reads the latest rect instead of one captured at
- * drag start. The one thing a window never needs that a note does is
+ * the handle, window-level move/up listeners while dragging, positions
+ * measured from the rect captured at the grab, and a rectRef so everything
+ * else about the note (text, colour, z) is the latest rather than the grab's. The one thing a window never needs that a note does is
  * broadcasting the result - see `putNote` in state/store.ts.
  */
 export const StickyNote = memo(function StickyNote({ note, zoom, selected, autoFocus }: Props) {
@@ -40,9 +40,12 @@ export const StickyNote = memo(function StickyNote({ note, zoom, selected, autoF
       selectNote: s.selectNote,
     })),
   );
-  const [drag, setDrag] = useState<null | { mode: 'move' | 'resize'; ox: number; oy: number }>(
-    null,
-  );
+  const [drag, setDrag] = useState<null | {
+    mode: 'move' | 'resize';
+    ox: number;
+    oy: number;
+    start: Note;
+  }>(null);
   const rectRef = useRef(note);
   rectRef.current = note;
   const textRef = useRef<HTMLTextAreaElement>(null);
@@ -79,7 +82,7 @@ export const StickyNote = memo(function StickyNote({ note, zoom, selected, autoF
       e.stopPropagation();
       (e.target as Element).setPointerCapture(e.pointerId);
       onSelect();
-      setDrag({ mode, ox: e.clientX, oy: e.clientY });
+      setDrag({ mode, ox: e.clientX, oy: e.clientY, start: rectRef.current });
     },
     [onSelect],
   );
@@ -88,31 +91,32 @@ export const StickyNote = memo(function StickyNote({ note, zoom, selected, autoF
     if (!drag) return;
 
     const onMove = (e: PointerEvent) => {
-      // Divide by zoom so the note tracks the cursor in world space rather
-      // than running away from it when zoomed out - identical to the window
-      // drag handler.
+      // Measured from the grab and divided by zoom, identical to the window
+      // drag handler - see the note there on why a step-wise delta runs off.
       const dx = (e.clientX - drag.ox) / zoom;
       const dy = (e.clientY - drag.oy) / zoom;
       const r = rectRef.current;
+      const s = drag.start;
       putNote(
         drag.mode === 'move'
-          ? { ...r, x: r.x + dx, y: r.y + dy, updatedAt: Date.now() }
+          ? { ...r, x: s.x + dx, y: s.y + dy, updatedAt: Date.now() }
           : {
               ...r,
-              w: Math.max(MIN_W, r.w + dx),
-              h: Math.max(MIN_H, r.h + dy),
+              w: Math.max(MIN_W, s.w + dx),
+              h: Math.max(MIN_H, s.h + dy),
               updatedAt: Date.now(),
             },
       );
-      setDrag({ ...drag, ox: e.clientX, oy: e.clientY });
     };
     const onUp = () => setDrag(null);
 
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
     return () => {
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
     };
   }, [drag, putNote, zoom]);
 
