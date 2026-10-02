@@ -397,7 +397,7 @@ a.btn { text-decoration: none; display: inline-block; }
 .panel {
   position: absolute;
   top: 0; right: 0; bottom: 0;
-  width: 420px;
+  width: var(--panel-width, 420px);
   max-width: 92vw;
   display: flex;
   flex-direction: column;
@@ -409,6 +409,17 @@ a.btn { text-decoration: none; display: inline-block; }
   z-index: 40;
 }
 .panel.open { transform: translateX(0); }
+.panel.resizing { transition: none; user-select: none; }
+/* Grab strip on the left edge; wider than the 1px border so it is easy to hit. */
+.panel-resize {
+  position: absolute;
+  top: 0; bottom: 0; left: -3px;
+  width: 7px;
+  cursor: col-resize;
+  touch-action: none;
+  z-index: 1;
+}
+.panel-resize:hover, .panel.resizing .panel-resize { background: var(--accent, #5b8def); opacity: 0.5; }
 /* Closed it is off screen but still focusable, which would let Tab wander
    into a panel nobody can see. */
 .panel[aria-hidden='true'] { visibility: hidden; }

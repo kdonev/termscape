@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import type { AgentTemplateInfo, Session } from '@termscape/protocol';
 import { UPGRADE_GRACE_MS, useStore } from '../state/store.js';
@@ -33,7 +33,26 @@ const HOST_STATE_COLOR: Record<string, string> = {
   error: '#e06c75',
 };
 
+const WIDTH_KEY = 'termscape-panel-width';
+const MIN_WIDTH = 280;
+
+function clampWidth(w: number): number {
+  return Math.max(MIN_WIDTH, Math.min(w, window.innerWidth * 0.92));
+}
+
+function storedWidth(): number | null {
+  try {
+    const n = Number(localStorage.getItem(WIDTH_KEY));
+    return n > 0 ? clampWidth(n) : null;
+  } catch {
+    return null;
+  }
+}
+
 export function Panel() {
+  const [width, setWidth] = useState<number | null>(storedWidth);
+  const [resizing, setResizing] = useState(false);
+
   const { hosts, workspaces, sessions, open, setOpen, openDialog } = useStore(
     useShallow((s) => ({
       hosts: s.hosts,
@@ -47,8 +66,49 @@ export function Panel() {
 
   const tree = buildTree(hosts, workspaces, sessions);
 
+  // The panel is anchored to the right edge, so its width is the distance from
+  // the pointer to the window's right side.
+  const startResize = (e: ReactPointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    const el = e.currentTarget;
+    el.setPointerCapture(e.pointerId);
+    setResizing(true);
+    let last = width ?? 420;
+    const move = (ev: PointerEvent) => {
+      last = clampWidth(window.innerWidth - ev.clientX);
+      setWidth(last);
+    };
+    const end = () => {
+      el.removeEventListener('pointermove', move);
+      el.removeEventListener('pointerup', end);
+      el.removeEventListener('pointercancel', end);
+      setResizing(false);
+      try {
+        localStorage.setItem(WIDTH_KEY, String(Math.round(last)));
+      } catch {
+        // Private mode: the width just won't survive a reload.
+      }
+    };
+    el.addEventListener('pointermove', move);
+    el.addEventListener('pointerup', end);
+    el.addEventListener('pointercancel', end);
+  };
+
   return (
-    <aside className={`panel ${open ? 'open' : ''}`} aria-hidden={!open}>
+    <aside
+      className={`panel ${open ? 'open' : ''}${resizing ? ' resizing' : ''}`}
+      style={
+        width ? ({ '--panel-width': `${width}px` } as React.CSSProperties) : undefined
+      }
+      aria-hidden={!open}
+    >
+      <div
+        className="panel-resize"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize panel"
+        onPointerDown={startResize}
+      />
       <header className="panel-head">
         <span className="panel-title">canvas</span>
         <span className="spacer" />
