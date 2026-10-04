@@ -594,7 +594,7 @@ function SessionNode({ session }: { session: Session }) {
 
   return (
     <div
-      className={`node session ${selectedId === session.id ? 'on' : ''}`}
+      className={`node session ${selectedId === session.id ? 'on' : ''} ${stopped ? 'stopped' : ''}`}
       // The row is the way back to a window you have panned away from.
       onClick={() => requestFocus(session.id)}
     >
@@ -667,25 +667,22 @@ function Twisty({ collapsed, onClick }: { collapsed: boolean; onClick: () => voi
 }
 
 /**
- * What kind of thing a row is, drawn in front of its name. Stroked in the
- * text colour, so it reads as part of the row rather than as its status -
- * that is the dot's job.
+ * What kind of thing a row is, drawn in front of its name as an emoji. The
+ * platform's emoji font draws it, so it looks a little different on each OS;
+ * state is still the dot's job, not the icon's.
  */
-const NODE_ICON_PATHS: Record<'machine' | 'workspace' | 'agent' | 'template', string> = {
-  // A monitor on a stand.
-  machine: 'M2.5 3.5h11v7h-11z M6 13.5h4 M8 10.5v3',
-  // A folder.
-  workspace: 'M2 4.5v8h12v-6.5h-6.5l-1.5-1.5z',
-  // A terminal prompt: a chevron and a cursor.
-  agent: 'M3 4.5l3.5 3.5-3.5 3.5 M8.5 11.5h4.5',
-  // A page with its corner folded, and lines of text.
-  template: 'M4 2h5.5l2.5 2.5v9.5h-8z M9.5 2v2.5h2.5 M6 8h4 M6 10.5h4',
+const NODE_ICONS: Record<'machine' | 'workspace' | 'agent' | 'template', string> = {
+  // U+FE0F asks for the colour form; without it some fonts draw a glyph.
+  machine: '\u{1F5A5}\u{FE0F}',
+  workspace: '\u{1F4C1}',
+  agent: '\u{1F916}',
+  template: '\u{1F4DD}',
 };
 
-function NodeIcon({ kind }: { kind: keyof typeof NODE_ICON_PATHS }) {
+function NodeIcon({ kind }: { kind: keyof typeof NODE_ICONS }) {
   return (
-    <svg className={`node-icon ${kind}`} viewBox="0 0 16 16" aria-hidden="true">
-      <path d={NODE_ICON_PATHS[kind]} />
-    </svg>
+    <span className={`node-icon ${kind}`} aria-hidden="true">
+      {NODE_ICONS[kind]}
+    </span>
   );
 }
