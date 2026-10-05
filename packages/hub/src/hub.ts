@@ -1930,8 +1930,15 @@ export class Hub extends EventEmitter implements AgentApi {
    * agent in the next window, one on a machine this hub holds, and one only
    * the canvas can reach. No caller sees which.
    */
-  async deliverFrom(fromAddr: string, to: string, text: string) {
-    const where = this.locate(to);
+  async deliverFrom(
+    fromAddr: string,
+    to: string,
+    text: string,
+    // Only for a caller that knows better than the directory: a child the
+    // canvas has just created is not in an attached hub's view of it yet.
+    route?: 'uplink',
+  ) {
+    const where = route ?? this.locate(to);
 
     // An unknown address goes down the local path deliberately: the router
     // records the failed attempt with its reason, which is what keeps the
@@ -2051,30 +2058,38 @@ export class Hub extends EventEmitter implements AgentApi {
      * Resolved, and the opening instruction built, ahead of the workspace: a
      * `host` needs the resolved agent id before it can even ask whether that
      * machine can run it, and a relay carries only resolved values, never a
-     * template name — the two hubs do not share config. One injection,
-     * delivered once, by whichever hub ends up owning the child's PTY: the
-     * template's opening instruction first, then what the spawning agent
-     * asked for, attributed. Delivering them separately would race two
-     * injections on the same ready-signal, landing back to back in undefined
-     * order, so the opening merges here and rides to the child however it
-     * gets there.
+     * template name — the two hubs do not share config. Only the template's
+     * opening instruction rides with the child. What the spawning agent asked
+     * for is a message, sent once the child exists: merged into the opening
+     * it was typed as one paste, and an agent whose opening says "wait for
+     * the first plan" read the task as part of its own role text (issue 49).
+     * As a message it arrives on its own turn, attributed, in the message
+     * log, and `deliverFrom` holds it behind the opening's gate (issue 27),
+     * so the two cannot race.
      */
     const picked = await this.pickSpawnTemplate(me, opts.profile);
-    // Attributed, except in a shell, which would run the prefix (issue 30).
-    const childProfile = this.profiles.get(picked.agent);
-    const instruction = !opts.prompt
-      ? null
-      : childProfile && isPlainTerminal(childProfile)
-        ? opts.prompt
-        : `[from ${me.address}] ${opts.prompt}`;
-    const opening = [picked.prompt, instruction].filter(Boolean).join('\n\n') || undefined;
+    const opening = picked.prompt || undefined;
+
+    const sendTask = (child: string, route?: 'uplink') => {
+      debug(
+        'deliver',
+        `spawn ${me.address} -> ${child}: template ${picked.template ?? '-'}, ` +
+          `opening ${opening?.length ?? 0} chars, task ${opts.prompt?.length ?? 0} chars`,
+      );
+      if (!opts.prompt) return;
+      // Not awaited: spawn_agent returns as soon as the child exists. A
+      // failure is already in the message log, from the router.
+      this.deliverFrom(me.address, child, opts.prompt, route).catch((err: Error) =>
+        debug('deliver', `spawn ${me.address} -> ${child}: task not delivered - ${err.message}`),
+      );
+    };
 
     // A `host` naming something beyond this hub's own machine has to go up
     // the link: an attached hub holds rows for nothing but itself, and only
     // the canvas can say whether the machine exists, is reachable, or can
     // run this agent.
     if (opts.host !== undefined && this.uplink?.attached && !this.namesThisMachine(opts.host)) {
-      return this.uplink.ask<{
+      const result = await this.uplink.ask<{
         address: string;
         workspace: string;
         profile: string;
@@ -2098,6 +2113,9 @@ export class Hub extends EventEmitter implements AgentApi {
         },
         { timeoutMs: SPAWN_RELAY_TIMEOUT_MS },
       );
+      // Up the link, whatever the directory says: the child was only just made.
+      sendTask(result.address, 'uplink');
+      return result;
     }
 
     let ws: Workspace;
@@ -2126,6 +2144,7 @@ export class Hub extends EventEmitter implements AgentApi {
       { workspaceId: ws.id, name: opts.name, spawnedBy: me.id, parentAddress: me.address },
       { ...picked, prompt: opening, restorePrompt: picked.prompt ?? null },
     );
+    sendTask(child.address);
 
     return {
       address: child.address,

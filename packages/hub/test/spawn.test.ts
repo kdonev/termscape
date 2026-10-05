@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { INPUT_MODES_RESET, describeSnapshotModes, type Session } from '@termscape/protocol';
 import { createRequire } from 'node:module';
 import { Hub } from '../src/hub.js';
+import { recentLog } from '../src/debug.js';
 import { removeTree } from './tmp.js';
 import { STAND_IN, standInToml } from './stand-in.js';
 
@@ -124,7 +125,7 @@ describe('spawn_agent', () => {
   );
 
   it(
-    'merges the template opening and the spawn instruction into one injection',
+    'types the template opening alone, then delivers the spawn task as a message (issue 49)',
     async () => {
       // A prompt without a model: a shell carrying --model would be a session
       // that exits before the readiness wait can ever see it type.
@@ -139,12 +140,83 @@ describe('spawn_agent', () => {
       const child = hub.sessions.list().find((s) => s.spawnedBy === parent.id)!;
       expect(child).toBeDefined();
 
-      // Both halves of the instruction arrive, each exactly once — a second
-      // delivery would wake the child twice on the same ready-signal.
+      // Each arrives exactly once, the task on its own turn and attributed:
+      // pasted together, an opening that says "wait for a plan" swallows it.
       const text = await waitForText(() => out.get(child.id) ?? '', 'run the tests');
       expect(count(text, 'TEMPLATE OPENING')).toBe(1);
       expect(count(text, 'run the tests')).toBe(1);
       expect(count(text, '[from ')).toBe(1);
+      const open = text.indexOf('TEMPLATE OPENING');
+      const task = text.indexOf('[from ');
+      expect(open).toBeGreaterThanOrEqual(0);
+      expect(task).toBeGreaterThan(open);
+      expect(text.slice(open, task)).not.toContain('run the tests');
+
+      // And it is a message like any other: in the log, parent to child.
+      const sent = hub.store.listMessages().filter((m) => m.toAddr === child.address);
+      expect(sent).toHaveLength(1);
+      expect(sent[0]).toMatchObject({
+        fromAddr: parent.address,
+        body: 'run the tests',
+        deliveryState: 'delivered',
+      });
+    },
+    60_000,
+  );
+
+  it(
+    'delivers the task as a message when the template has no opening',
+    async () => {
+      const ws = hub.createWorkspace('crew8', folder('crew8'));
+      const parent = await hub.startSession({ workspaceId: ws.id, profile: STAND_IN });
+
+      const out = new Map<string, string>();
+      hub.on('data', (id: string, chunk: string) => out.set(id, (out.get(id) ?? '') + chunk));
+
+      await hub.spawnAgent(parent.id, { prompt: 'run the tests' });
+      const child = hub.sessions.list().find((s) => s.spawnedBy === parent.id)!;
+
+      const text = await waitForText(() => out.get(child.id) ?? '', 'run the tests');
+      expect(count(text, '[from ')).toBe(1);
+      expect(hub.store.listMessages().some((m) => m.toAddr === child.address)).toBe(true);
+    },
+    60_000,
+  );
+
+  it(
+    'lands a send_message made right after spawn_agent behind the task',
+    async () => {
+      hub.saveTemplate({ id: 'reviewer', agent: STAND_IN, prompt: 'TEMPLATE OPENING' });
+      const ws = hub.createWorkspace('crew9', folder('crew9'));
+      const parent = await hub.startSession({ workspaceId: ws.id, profile: 'reviewer' });
+
+      const out = new Map<string, string>();
+      hub.on('data', (id: string, chunk: string) => out.set(id, (out.get(id) ?? '') + chunk));
+
+      const spawned = await hub.spawnAgent(parent.id, { prompt: 'TASK-ONE' });
+      const sent = hub.sendMessage(parent.id, spawned.address, 'FOLLOW-UP-TWO');
+
+      const child = hub.sessions.list().find((s) => s.spawnedBy === parent.id)!;
+      const text = await waitForText(() => out.get(child.id) ?? '', 'FOLLOW-UP-TWO');
+      await sent;
+      expect(text.indexOf('TEMPLATE OPENING')).toBeLessThan(text.indexOf('TASK-ONE'));
+      expect(text.indexOf('TASK-ONE')).toBeLessThan(text.indexOf('FOLLOW-UP-TWO'));
+    },
+    60_000,
+  );
+
+  it(
+    'logs every spawn, with what was typed and what was sent',
+    async () => {
+      hub.saveTemplate({ id: 'reviewer', agent: STAND_IN, prompt: 'TEMPLATE OPENING' });
+      const ws = hub.createWorkspace('crew10', folder('crew10'));
+      const parent = await hub.startSession({ workspaceId: ws.id, profile: 'reviewer' });
+
+      const spawned = await hub.spawnAgent(parent.id, { prompt: 'run the tests' });
+      const line = recentLog().find((l) => l.includes(`spawn ${parent.address} -> ${spawned.address}`));
+      expect(line).toContain('template reviewer');
+      expect(line).toContain(`opening ${'TEMPLATE OPENING'.length} chars`);
+      expect(line).toContain(`task ${'run the tests'.length} chars`);
     },
     60_000,
   );

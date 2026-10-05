@@ -550,6 +550,33 @@ describe("list_hosts and spawn_agent's host, across the link", () => {
     expect(hubB.sessions.getByAddress(`${hostWsName}/byhost`)).not.toBeNull();
   });
 
+  it('delivers the spawn task to a child on an attached machine, attributed once', async () => {
+    const here = hubA.sessions.getByAddress('localws/here')!;
+    const address = `${hostWsName}/withtask`;
+    const result = await hubA.spawnAgent(here.id, {
+      host: 'test-remote',
+      workspace: hostWsName,
+      name: 'withtask',
+      prompt: 'hello from the canvas',
+    });
+    expect(result.address).toBe(address);
+
+    const child = hubB.sessions.getByAddress(address)!;
+    await waitFor(
+      () => (outputB.get(child.id) ?? '').includes('hello from the canvas'),
+      15_000,
+      'the task to reach the attached machine terminal',
+    );
+    const text = outputB.get(child.id) ?? '';
+    expect(text.split('[from localws/here]').length - 1).toBe(1);
+
+    const sent = hubA.store
+      .listMessages()
+      .filter((m) => m.fromAddr === 'localws/here' && m.toAddr === address);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ body: 'hello from the canvas', deliveryState: 'delivered' });
+  });
+
   it('refuses an unknown host from the canvas, naming what exists', async () => {
     const here = hubA.sessions.getByAddress('localws/here')!;
     await expect(hubA.spawnAgent(here.id, { host: 'nope' })).rejects.toThrow(/unknown host/i);

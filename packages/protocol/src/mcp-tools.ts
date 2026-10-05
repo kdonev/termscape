@@ -66,7 +66,12 @@ export const SpawnAgentInput = z.object({
   prompt: z
     .string()
     .optional()
-    .describe('First instruction, injected once the new agent is ready.'),
+    .describe(
+      "The new agent's first task. It is delivered as a message from you once the " +
+        "agent's template opening has been typed, so put the whole task here, not a " +
+        'note that it will follow. Omit it and the agent gets only its template\'s ' +
+        'opening and waits: send the task with send_message.',
+    ),
 });
 
 /** No input: list_hosts always reports the whole canvas from wherever it is called. */
