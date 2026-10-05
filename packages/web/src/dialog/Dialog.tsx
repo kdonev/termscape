@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useStore } from '../state/store.js';
+import { isBackdropDismiss } from './backdrop.js';
 
 /**
  * The shell every dialog in the app sits in.
@@ -19,6 +20,8 @@ export function Dialog({
 }) {
   const closeDialog = useStore((s) => s.closeDialog);
   const ref = useRef<HTMLDialogElement>(null);
+  const pressed = useRef<EventTarget | null>(null);
+  const released = useRef<EventTarget | null>(null);
 
   useEffect(() => {
     const el = ref.current;
@@ -52,10 +55,28 @@ export function Dialog({
       className="dialog"
       ref={ref}
       onClose={closeDialog}
+      onPointerDown={(e) => {
+        pressed.current = e.target;
+      }}
+      onPointerUp={(e) => {
+        released.current = e.target;
+      }}
       onClick={(e) => {
-        // The element fills the viewport once it is modal; only a click that
-        // lands on it rather than on the card inside is a backdrop click.
-        if (e.target === ref.current) ref.current?.close();
+        // The element fills the viewport once it is modal, so the backdrop is
+        // the element itself. Where the click landed is not enough to tell: a
+        // drag that starts in a field and ends outside the card is delivered
+        // to the dialog, the closest thing containing both. The press and the
+        // release must each have been on it too (issue 47), and the click
+        // still has to be, since a keyboard click has no pointer events.
+        const dismiss = isBackdropDismiss(
+          ref.current,
+          pressed.current,
+          released.current,
+          e.target,
+        );
+        pressed.current = null;
+        released.current = null;
+        if (dismiss) ref.current?.close();
       }}
     >
       <div className="dialog-card">
