@@ -12,6 +12,7 @@ import type { Store } from '../db/store.js';
 import { DEFAULT_WINDOW } from '../db/store.js';
 import type { WebSocket as WsSocket } from 'ws';
 import { PeerConnection } from './peer.js';
+import { PEER_DELIVER_TIMEOUT_MS } from './delivery-timing.js';
 
 /**
  * Re-key a peer's session for this canvas.
@@ -546,7 +547,13 @@ export class PeerRegistry extends EventEmitter {
     if (!found.peer.connected) {
       throw new Error(`host for "${to}" is not connected`);
     }
-    await found.peer.request({ t: 'deliver', id: randomUUID(), from, to, body });
+    // Longer than a plain request: the machine holds the message behind the
+    // agent's opening, and giving up before it does would report a failure for
+    // a message that then arrives.
+    await found.peer.request(
+      { t: 'deliver', id: randomUUID(), from, to, body },
+      { timeoutMs: PEER_DELIVER_TIMEOUT_MS },
+    );
   }
 
   /**

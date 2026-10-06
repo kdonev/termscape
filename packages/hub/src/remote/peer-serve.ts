@@ -206,9 +206,11 @@ export function createPeerServer(hub: Hub, clientToken: string): PeerServer {
           case 'deliver': {
             // The originating hub already authenticated the sender, so its
             // reported `from` is trusted. Attribution is still applied here,
-            // so the receiving agent sees the true origin address.
-            const r = hub.router.send(req.from, req.to, req.body);
-            return r.delivered ? ok({ delivered: true }) : err(r.error ?? 'delivery failed');
+            // so the receiving agent sees the true origin address. Held behind
+            // the agent's opening like any local delivery, which is why the
+            // canvas asks with a timeout that outlasts it (delivery-timing.ts).
+            await hub.deliverHere(req.from, req.to, req.body);
+            return ok({ delivered: true });
           }
 
           case 'readScreen': {

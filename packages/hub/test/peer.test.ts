@@ -10,6 +10,11 @@ import { WebSocket as WsClient } from 'ws';
 import { BinaryFrameKind, encodeBinaryFrame, type Host } from '@termscape/protocol';
 import { Hub, HUB_VERSION } from '../src/hub.js';
 import { serve } from '../src/server.js';
+import {
+  DELIVERY_WAIT_CAP_MS,
+  PEER_DELIVER_TIMEOUT_MS,
+  UPLINK_DELIVER_TIMEOUT_MS,
+} from '../src/remote/delivery-timing.js';
 import { removeTree } from './tmp.js';
 import { declareStandIn, STAND_IN } from './stand-in.js';
 
@@ -553,28 +558,97 @@ describe("list_hosts and spawn_agent's host, across the link", () => {
   it('delivers the spawn task to a child on an attached machine, attributed once', async () => {
     const here = hubA.sessions.getByAddress('localws/here')!;
     const address = `${hostWsName}/withtask`;
-    const result = await hubA.spawnAgent(here.id, {
-      host: 'test-remote',
-      workspace: hostWsName,
-      name: 'withtask',
-      prompt: 'hello from the canvas',
-    });
-    expect(result.address).toBe(address);
 
+    // When each chunk arrived, to tell a task typed once the shell is reading
+    // from one typed into the middle of its start-up (issue 49).
+    const chunks = new Map<string, { at: number; text: string }[]>();
+    const record = (id: string, text: string) => {
+      const list = chunks.get(id) ?? [];
+      list.push({ at: Date.now(), text });
+      chunks.set(id, list);
+    };
+    hubB.on('data', record);
+    try {
+      const result = await hubA.spawnAgent(here.id, {
+        host: 'test-remote',
+        workspace: hostWsName,
+        name: 'withtask',
+        prompt: 'hello from the canvas',
+      });
+      expect(result.address).toBe(address);
+
+      const child = hubB.sessions.getByAddress(address)!;
+      await waitFor(
+        () => (outputB.get(child.id) ?? '').includes('hello from the canvas'),
+        15_000,
+        'the task to reach the attached machine terminal',
+      );
+    } finally {
+      hubB.off('data', record);
+    }
     const child = hubB.sessions.getByAddress(address)!;
-    await waitFor(
-      () => (outputB.get(child.id) ?? '').includes('hello from the canvas'),
-      15_000,
-      'the task to reach the attached machine terminal',
-    );
     const text = outputB.get(child.id) ?? '';
     expect(text.split('[from localws/here]').length - 1).toBe(1);
+
+    /*
+     * It was held behind the shell's opening rather than typed at once. The
+     * attached machine used to type it the moment it arrived, into a terminal
+     * that was not reading yet: a POSIX terminal echoed it, and the shell
+     * echoed it again when it started. Windows echoes once either way, so the
+     * count above cannot tell. What can is the silence in front of it: the
+     * opening gate waits for the shell to stop drawing before it lets the
+     * message through, and an immediate write has nothing before it at all.
+     */
+    const seen = chunks.get(child.id) ?? [];
+    let before = 0;
+    const start = text.indexOf('[from localws/here]');
+    let first = -1;
+    for (let i = 0; i < seen.length; i++) {
+      before += seen[i]!.text.length;
+      if (before > start) {
+        first = i;
+        break;
+      }
+    }
+    expect(first, 'the message should arrive after some output of the shell').toBeGreaterThan(0);
+    expect(seen[first]!.at - seen[first - 1]!.at).toBeGreaterThanOrEqual(1000);
 
     const sent = hubA.store
       .listMessages()
       .filter((m) => m.fromAddr === 'localws/here' && m.toAddr === address);
     expect(sent).toHaveLength(1);
     expect(sent[0]).toMatchObject({ body: 'hello from the canvas', deliveryState: 'delivered' });
+  });
+
+  it('holds a message over the link behind the opening, and still reports it delivered', async () => {
+    const here = hubA.sessions.getByAddress('localws/here')!;
+    const address = `${hostWsName}/held`;
+    await hubA.spawnAgent(here.id, {
+      host: 'test-remote',
+      workspace: hostWsName,
+      name: 'held',
+    });
+
+    // Straight after the spawn, while the shell is still drawing: the request
+    // has to sit on the attached machine until the opening is over. A held
+    // message is a delivered one, not one that failed and then arrived.
+    const t0 = Date.now();
+    const result = await hubA.deliverFrom('localws/here', address, 'held message');
+    expect(result.delivered).toBe(true);
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(500);
+
+    const child = hubB.sessions.getByAddress(address)!;
+    expect(outputB.get(child.id) ?? '').toContain('held message');
+    expect(
+      hubA.store.listMessages().find((m) => m.toAddr === address && m.body === 'held message'),
+    ).toMatchObject({ deliveryState: 'delivered' });
+  });
+
+  it('gives each hop of a delivery longer than the one inside it', () => {
+    // The wait on the attached machine is the cap; anything that asks it has to
+    // outlast that, or a held message reports as failed and arrives anyway.
+    expect(PEER_DELIVER_TIMEOUT_MS).toBeGreaterThan(DELIVERY_WAIT_CAP_MS);
+    expect(UPLINK_DELIVER_TIMEOUT_MS).toBeGreaterThan(PEER_DELIVER_TIMEOUT_MS);
   });
 
   it('refuses an unknown host from the canvas, naming what exists', async () => {

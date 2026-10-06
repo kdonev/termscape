@@ -265,7 +265,10 @@ export class PeerConnection extends EventEmitter {
   }
 
   /** Send a request and await its reply. */
-  request<T = unknown>(req: PeerRequest): Promise<T> {
+  request<T = unknown>(
+    req: PeerRequest,
+    opts: { timeoutMs?: number } = {},
+  ): Promise<T> {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       return Promise.reject(new Error(`host "${this.opts.label ?? this.opts.hostId}" is not connected`));
     }
@@ -274,7 +277,7 @@ export class PeerConnection extends EventEmitter {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         reject(new Error(`peer request "${req.t}" timed out`));
-      }, REQUEST_TIMEOUT_MS);
+      }, opts.timeoutMs ?? REQUEST_TIMEOUT_MS);
       timer.unref?.();
       this.pending.set(id, {
         resolve: resolve as (v: unknown) => void,

@@ -41,6 +41,7 @@ import { canSee, type Lineage } from './agents/visibility.js';
 import type { AgentApi } from './mcp/server.js';
 import { PeerRegistry } from './remote/registry.js';
 import { SPAWN_RELAY_TIMEOUT_MS, type Uplink } from './remote/peer-serve.js';
+import { DELIVERY_WAIT_CAP_MS, UPLINK_DELIVER_TIMEOUT_MS } from './remote/delivery-timing.js';
 import { deploy, type DeployResult } from './remote/deployer.js';
 import { hubTarballPath } from './remote/tarball.js';
 import { debug } from './debug.js';
@@ -85,18 +86,6 @@ const ANNOUNCE_COALESCE_MS = 300;
  */
 const OPENING_QUIET_MS = 1500;
 const OPENING_READY_CAP_MS = 20_000;
-
-/**
- * How long a delivery waits for a starting agent before going in regardless.
- *
- * There has to be a bound. A session's readiness gate deliberately outlasts
- * its own cap while a question is on screen - the instruction is still wanted
- * once the human answers - but a `send_message` that blocks its caller until
- * somebody walks over to a window is worse than a message that arrives badly.
- * So the wait is bounded here, and past it delivery is what it always was:
- * immediate, recorded, and the CLI's business.
- */
-const DELIVERY_WAIT_CAP_MS = 20_000;
 
 /** Colours cycled through when a workspace is created, for canvas grouping. */
 const WORKSPACE_COLORS = [
@@ -1943,24 +1932,7 @@ export class Hub extends EventEmitter implements AgentApi {
     // An unknown address goes down the local path deliberately: the router
     // records the failed attempt with its reason, which is what keeps the
     // promise that no message is ever dropped silently.
-    if (where === 'local' || where === null) {
-      // Behind the target's opening, if it is still starting. This is the one
-      // place delivery is not immediate, and the exception earns itself: the
-      // alternative is writing into a CLI that is not reading, which is not a
-      // delivery at all.
-      const target = this.sessions.getByAddress(to);
-      if (target) {
-        const t0 = Date.now();
-        await this.awaitOpened(target.id);
-        const waited = Date.now() - t0;
-        if (waited > 50) {
-          debug('deliver', `${fromAddr} -> ${to}: held ${waited}ms behind the agent's opening`);
-        }
-      }
-      const r = this.router.send(fromAddr, to, text);
-      if (!r.delivered) throw new Error(r.error ?? 'delivery failed');
-      return { delivered: true, to, deliveredAt: r.deliveredAt };
-    }
+    if (where === 'local' || where === null) return this.deliverHere(fromAddr, to, text);
 
     // Off this machine: whoever owns the PTY performs the injection. We still
     // record the attempt locally so the message log and the canvas edge are
@@ -1978,7 +1950,12 @@ export class Hub extends EventEmitter implements AgentApi {
       if (where === 'remote') await this.peers.deliver(fromAddr, to, text);
       // Only the canvas knows where every address lives, so an attached hub
       // hands the message up rather than trying to route it itself.
-      else await this.uplink!.ask({ t: 'deliver', from: fromAddr, to, body: text });
+      else {
+        await this.uplink!.ask(
+          { t: 'deliver', from: fromAddr, to, body: text },
+          { timeoutMs: UPLINK_DELIVER_TIMEOUT_MS },
+        );
+      }
       const m: Message = {
         id, fromAddr, toAddr: to, body: text,
         sentAt, deliveredAt: Date.now(), deliveryState: 'delivered', error: null,
@@ -1998,6 +1975,32 @@ export class Hub extends EventEmitter implements AgentApi {
       this.emit('message', m);
       throw err;
     }
+  }
+
+  /**
+   * Type a message into an agent this hub holds, once it is ready for it.
+   *
+   * Behind the target's opening, if it is still starting. This is the one
+   * place delivery is not immediate, and the exception earns itself: the
+   * alternative is writing into a CLI that is not reading, which is not a
+   * delivery at all. Public because the same wait applies when the message
+   * arrives over the peer link rather than from this hub's own agents - a
+   * machine that was told to type it straight away typed it into a terminal
+   * that was not reading yet, and the shell echoed it twice (issue 49).
+   */
+  async deliverHere(fromAddr: string, to: string, text: string) {
+    const target = this.sessions.getByAddress(to);
+    if (target) {
+      const t0 = Date.now();
+      await this.awaitOpened(target.id);
+      const waited = Date.now() - t0;
+      if (waited > 50) {
+        debug('deliver', `${fromAddr} -> ${to}: held ${waited}ms behind the agent's opening`);
+      }
+    }
+    const r = this.router.send(fromAddr, to, text);
+    if (!r.delivered) throw new Error(r.error ?? 'delivery failed');
+    return { delivered: true, to, deliveredAt: r.deliveredAt };
   }
 
   /**
