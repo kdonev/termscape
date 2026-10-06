@@ -637,8 +637,14 @@ describe("list_hosts and spawn_agent's host, across the link", () => {
     expect(result.delivered).toBe(true);
     expect(Date.now() - t0).toBeGreaterThanOrEqual(500);
 
+    // The write has happened by now, but the terminal's echo of it comes back
+    // asynchronously.
     const child = hubB.sessions.getByAddress(address)!;
-    expect(outputB.get(child.id) ?? '').toContain('held message');
+    await waitFor(
+      () => (outputB.get(child.id) ?? '').includes('held message'),
+      15_000,
+      'the held message to reach the attached machine terminal',
+    );
     expect(
       hubA.store.listMessages().find((m) => m.toAddr === address && m.body === 'held message'),
     ).toMatchObject({ deliveryState: 'delivered' });

@@ -11,17 +11,23 @@ import { join } from 'node:path';
  * these tests are checking. `brief = "flag"` is what makes it an agent in the
  * hub's eyes - nothing is typed, since there is no flag in its args to carry
  * the brief anywhere.
+ *
+ * Off Windows it is bash without readline, not whatever `$SHELL` is. A typed
+ * line is then echoed by the tty exactly once, whenever it arrives. With
+ * readline (or zsh's line editor) a line typed while the shell is busy is
+ * echoed by the kernel and then redrawn when the editor reads it, which shows
+ * the same text twice and made the counts in these tests depend on how slow
+ * the machine was.
  */
 export const STAND_IN = 'stand-in';
 
 export function standInToml(): string {
-  const shell =
-    process.platform === 'win32'
-      ? (process.env.COMSPEC ?? 'powershell.exe')
-      : (process.env.SHELL ?? '/bin/bash');
+  const windows = process.platform === 'win32';
+  const shell = windows ? (process.env.COMSPEC ?? 'powershell.exe') : '/bin/bash';
   return [
     `[${STAND_IN}]`,
     `command = ${JSON.stringify(shell)}`,
+    ...(windows ? [] : ['args = ["--noediting", "--noprofile", "--norc"]']),
     'mcp = false',
     'brief = "flag"',
     'inject = "raw"',
