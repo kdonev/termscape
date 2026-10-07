@@ -144,12 +144,16 @@ export function buildMcpServer(callerSessionId: string, api: AgentApi): McpServe
     'spawn_agent',
     {
       description:
-        'Start a new agent, by default in your own workspace, and optionally give it a ' +
-        'first instruction. Use this to delegate work you want done in parallel. Pass ' +
+        "Start a new agent, by default in your own workspace. Put the new agent's whole " +
+        'task in `prompt`; that is the only way this call gives it anything to do. ' +
+        "Without `prompt` it gets only its template's opening and waits until you " +
+        'send_message it. Use this to delegate work you want done in parallel. Pass ' +
         '`host` to start it on another machine on the canvas — call list_hosts first to ' +
         'see what exists, what is reachable, and what each one has installed. An agent ' +
         'started on another machine cannot be stopped with stop_agent yet.',
-      inputSchema: SpawnAgentInput.shape,
+      // The object itself, not `.shape`: the SDK rebuilds a shape as a non-strict
+      // object, which would strip a misnamed key instead of refusing it.
+      inputSchema: SpawnAgentInput,
     },
     (opts) => guard(() => api.spawnAgent(callerSessionId, opts)),
   );

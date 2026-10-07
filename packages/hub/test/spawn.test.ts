@@ -217,6 +217,12 @@ describe('spawn_agent', () => {
       expect(line).toContain('template reviewer');
       expect(line).toContain(`opening ${'TEMPLATE OPENING'.length} chars`);
       expect(line).toContain(`task ${'run the tests'.length} chars`);
+      expect(spawned.note).toBeUndefined();
+
+      // No `prompt` at all reads differently from an empty one.
+      const bare = await hub.spawnAgent(parent.id, {});
+      const bareLine = recentLog().find((l) => l.includes(`spawn ${parent.address} -> ${bare.address}`));
+      expect(bareLine).toContain('task none');
     },
     60_000,
   );
@@ -382,9 +388,15 @@ describe('spawn_agent', () => {
       const out = new Map<string, string>();
       hub.on('data', (id: string, chunk: string) => out.set(id, (out.get(id) ?? '') + chunk));
 
-      await hub.spawnAgent(parent.id, {});
+      const spawned = await hub.spawnAgent(parent.id, {});
       const child = hub.sessions.list().find((s) => s.spawnedBy === parent.id)!;
       expect(child).toBeDefined();
+
+      // Said in the result, not just as `promptQueued: false`: a caller that
+      // reads past it reports the work as handed off (issue 49).
+      expect(spawned.promptQueued).toBe(false);
+      expect(spawned.note).toContain(spawned.address);
+      expect(spawned.note).toContain('send_message');
 
       const text = await waitForText(() => out.get(child.id) ?? '', 'TEMPLATE OPENING');
       expect(count(text, 'TEMPLATE OPENING')).toBe(1);

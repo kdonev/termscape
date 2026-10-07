@@ -701,6 +701,19 @@ describe("list_hosts and spawn_agent's host, across the link", () => {
     );
     const text = outputA.get(child.id) ?? '';
     expect(text.split(`[from ${there.address}]`).length - 1).toBe(1);
+    expect(result).not.toHaveProperty('note');
+  });
+
+  it('tells a relayed spawn with no task that the child is waiting for one (issue 49)', async () => {
+    const there = hubB.sessions.getByAddress('remotews/there')!;
+    const result = await hubB.spawnAgent(there.id, {
+      host: 'canvas',
+      workspace: 'localws',
+      name: 'notask',
+    });
+    expect(result.promptQueued).toBe(false);
+    expect(result.note).toContain(result.address);
+    expect(result.note).toContain('send_message');
   });
 
   it(

@@ -2077,7 +2077,10 @@ export class Hub extends EventEmitter implements AgentApi {
       debug(
         'deliver',
         `spawn ${me.address} -> ${child}: template ${picked.template ?? '-'}, ` +
-          `opening ${opening?.length ?? 0} chars, task ${opts.prompt?.length ?? 0} chars`,
+          `opening ${opening?.length ?? 0} chars, ` +
+          // "none" is a call that carried no `prompt` key at all; "0 chars" is an
+          // empty string. The two point at different mistakes in the caller.
+          `task ${opts.prompt === undefined ? 'none' : `${opts.prompt.length} chars`}`,
       );
       if (!opts.prompt) return;
       // Not awaited: spawn_agent returns as soon as the child exists. A
@@ -2086,6 +2089,24 @@ export class Hub extends EventEmitter implements AgentApi {
         debug('deliver', `spawn ${me.address} -> ${child}: task not delivered - ${err.message}`),
       );
     };
+
+    // A spawn with no task leaves the child with only its template's opening,
+    // waiting. `promptQueued: false` alone is easy to read past, and a caller
+    // that then reports the work as handed off has handed off nothing (issue
+    // 49). Built here from `opts`, not taken from the canvas's answer, so it
+    // does not depend on which version answered.
+    const withNote = <R extends { address: string; promptQueued: boolean }>(
+      result: R,
+    ): R & { note?: string } =>
+      opts.prompt
+        ? result
+        : {
+            ...result,
+            note:
+              `No task was given, so ${result.address} has only its template's opening ` +
+              'and will wait. It does nothing until you send it the task with ' +
+              'send_message - do that now, before you report the work as handed off.',
+          };
 
     // A `host` naming something beyond this hub's own machine has to go up
     // the link: an attached hub holds rows for nothing but itself, and only
@@ -2118,7 +2139,7 @@ export class Hub extends EventEmitter implements AgentApi {
       );
       // Up the link, whatever the directory says: the child was only just made.
       sendTask(result.address, 'uplink');
-      return result;
+      return withNote(result);
     }
 
     let ws: Workspace;
@@ -2149,13 +2170,13 @@ export class Hub extends EventEmitter implements AgentApi {
     );
     sendTask(child.address);
 
-    return {
+    return withNote({
       address: child.address,
       workspace: ws.name,
       profile: child.profile,
       host: this.hostLabelForWorkspace(ws),
       promptQueued: !!opts.prompt,
-    };
+    });
   }
 
   /**

@@ -24,8 +24,8 @@ const stubApi: AgentApi = {
   proposeTemplate: async () => ({}),
 };
 
-async function connectedClient(): Promise<Client> {
-  const server = buildMcpServer('caller', stubApi);
+async function connectedClient(api: AgentApi = stubApi): Promise<Client> {
+  const server = buildMcpServer('caller', api);
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: 'guidance-test', version: '0.0.0' });
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
@@ -66,6 +66,56 @@ describe('list_hosts and spawn_agent host', () => {
     expect(tools.some((t) => t.name === 'list_hosts')).toBe(true);
     const spawnAgent = tools.find((t) => t.name === 'spawn_agent')!;
     expect(spawnAgent.inputSchema.properties).toHaveProperty('host');
+    await client.close();
+  });
+});
+
+describe('spawn_agent task parameter (issue 49)', () => {
+  const recording = () => {
+    const calls: unknown[] = [];
+    const api: AgentApi = {
+      ...stubApi,
+      spawnAgent: async (_caller, opts) => {
+        calls.push(opts);
+        return {};
+      },
+    };
+    return { calls, api };
+  };
+
+  it('advertises a closed schema, so the model sees the real key name', async () => {
+    const client = await connectedClient();
+    const { tools } = await client.listTools();
+    const spawnAgent = tools.find((t) => t.name === 'spawn_agent')!;
+    expect(spawnAgent.inputSchema.additionalProperties).toBe(false);
+    await client.close();
+  });
+
+  it('refuses a plan passed under another key instead of spawning a bare agent', async () => {
+    const { calls, api } = recording();
+    const client = await connectedClient(api);
+    const result = await client.callTool({ name: 'spawn_agent', arguments: { task: 'the plan' } });
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result.content)).toMatch(/task/);
+    expect(calls).toEqual([]);
+    await client.close();
+  });
+
+  it('passes `prompt` through to the hub', async () => {
+    const { calls, api } = recording();
+    const client = await connectedClient(api);
+    const result = await client.callTool({ name: 'spawn_agent', arguments: { prompt: 'the plan' } });
+    expect(result.isError).toBeFalsy();
+    expect(calls).toEqual([expect.objectContaining({ prompt: 'the plan' })]);
+    await client.close();
+  });
+
+  it('names `prompt` and send_message in the description', async () => {
+    const client = await connectedClient();
+    const { tools } = await client.listTools();
+    const spawnAgent = tools.find((t) => t.name === 'spawn_agent')!;
+    expect(spawnAgent.description).toMatch(/`prompt`/);
+    expect(spawnAgent.description).toMatch(/send_message/);
     await client.close();
   });
 });

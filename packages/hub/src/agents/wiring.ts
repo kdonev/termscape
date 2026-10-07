@@ -392,8 +392,9 @@ always \`workspace/name\`, and every one of them appears in
 - \`list_templates\` — the saved ways of starting an agent: what CLI each one
   runs, on what model, with what opening instruction. A template id is what
   \`spawn_agent\` takes as its \`profile\`.
-- \`spawn_agent\` — start a new agent in your workspace and optionally give it
-  a first instruction. Use this to delegate work you want done in parallel —
+- \`spawn_agent\` — start a new agent in your workspace and give it its task in
+  \`prompt\` (without one it gets only its template's opening and waits for
+  your send_message). Use this to delegate work you want done in parallel —
   or on another machine, with \`host\`.
 - \`read_screen\` — a one-off look at another agent's terminal without
   interrupting it, for before you hand someone work or when an answer has not

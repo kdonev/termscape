@@ -45,7 +45,15 @@ export const SendMessageInput = z.object({
     ),
 });
 
-export const SpawnAgentInput = z.object({
+/**
+ * Strict, unlike the other tools. Every field here is optional, so a plan
+ * passed under the wrong key (`task`, `message`, ...) would otherwise be
+ * stripped without a word and turn into a bare spawn that sits waiting for a
+ * task nobody sends. Refusing the unknown key makes the caller retry with
+ * `prompt`, and it puts `additionalProperties: false` in the advertised schema
+ * so the model sees the real key name up front.
+ */
+export const SpawnAgentInput = z.strictObject({
   profile: z.string().optional().describe('Agent profile id. Defaults to your own profile.'),
   name: z.string().optional().describe('Name for the new agent. Auto-generated if omitted.'),
   host: z
@@ -67,7 +75,8 @@ export const SpawnAgentInput = z.object({
     .string()
     .optional()
     .describe(
-      "The new agent's first task. It is delivered as a message from you once the " +
+      "The new agent's first task - this parameter, `prompt`, is the only place it can " +
+        "go. It is delivered as a message from you once the " +
         "agent's template opening has been typed, so put the whole task here, not a " +
         'note that it will follow. Omit it and the agent gets only its template\'s ' +
         'opening and waits: send the task with send_message.',
