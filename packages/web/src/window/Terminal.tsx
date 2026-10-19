@@ -303,9 +303,13 @@ export function TerminalView({
      * sent in reply to the attach *this mount is about to send*, so it is
      * watched for rather than read here: it lands in the store a moment later.
      *
-     * `wrote` is what keeps that honest. A serialized screen does not begin by
-     * clearing anything, so writing one over output already applied appends a
-     * second copy of the screen rather than correcting the first.
+     * `wrote` is what says how to apply one when it comes. A serialized
+     * screen does not begin by clearing anything - it is bare content,
+     * verified against the addon's own output - so writing one over output
+     * already applied appends a second copy of the screen rather than
+     * correcting the first. A screen that arrives once something has been
+     * written therefore has to replace what is there rather than follow it;
+     * see the subscription below for when that happens and why.
      */
     let wrote = false;
     const write = (chunk: string) => {
@@ -333,6 +337,10 @@ export function TerminalView({
      * already in its attached set, and the hub adds to that set and sends the
      * snapshot in one synchronous turn. So `wrote` is still false when it
      * arrives and it is drawn, exactly as a fresh mount wants.
+     *
+     * A reconnect's re-attach is not one of these. Its screen arrives while
+     * this mount is still watching and is applied there, over a reset; it
+     * never reaches the store with nobody to take it.
      */
     const left = useStore.getState().takeSnapshot(sessionId);
 
@@ -342,13 +350,48 @@ export function TerminalView({
      * order that does not depend on that being true.
      */
     const unwatchSnapshot = useStore.subscribe((s) => {
-      if (wrote || !s.pendingSnapshots.has(sessionId)) return;
+      if (!s.pendingSnapshots.has(sessionId)) return;
       const late = useStore.getState().takeSnapshot(sessionId);
       if (!late) return;
+
+      /*
+       * A screen arriving after something has been written can only be a
+       * reconnect's re-attach, and is the one chance this window has to be
+       * right again.
+       *
+       * The hub sends a screen in reply to an attach and at no other time,
+       * and this mount sends exactly two kinds: its own, which arrives before
+       * any output (the hub adds the socket to the attached set and answers
+       * in one synchronous turn - see the hub's attach-order test), and the
+       * one `client` re-sends for every session when a dropped socket comes
+       * back. So `wrote` dates the screen without anything having to carry a
+       * timestamp.
+       *
+       * It used to be dropped, which left the window showing what it had
+       * before the socket went down with the output produced while it was
+       * down missing from the middle - and for an idle agent nothing ever
+       * redrew over the gap. Resetting first is what makes writing it safe:
+       * the screen replaces the terminal's contents instead of being appended
+       * to them. That makes a reconnect cost what a remount already costs,
+       * which is the comparison worth making - the snapshot carries the hub's
+       * scrollback with it, so what is actually lost is the browser's own
+       * history beyond that, the scroll position and any selection. A wrong
+       * screen is worse. `reset` keeps the grid and the Unicode 11 width
+       * table; the modes come back with the screen, exactly as on a remount.
+       *
+       * Two windows on one session still share a single re-attach, so the one
+       * that takes the screen resyncs and the other stays as it was - the
+       * same asymmetry `client.attach` already notes for a second window's
+       * missing snapshot.
+       */
+      const resync = wrote;
+      if (resync) term.reset();
       debug(
         'attach',
         sessionId,
-        `snapshot arrived after mount, ${late.length}B restores:`,
+        resync
+          ? `re-attached: reset, then ${late.length}B restores:`
+          : `snapshot arrived after mount, ${late.length}B restores:`,
         describeSnapshotModes(late),
       );
       write(late);

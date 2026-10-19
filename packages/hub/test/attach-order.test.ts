@@ -151,3 +151,73 @@ describe('attaching to a window that is already producing output', () => {
     }
   }, 30_000);
 });
+
+/** The highest line number a screen mentions, or 0 for a screen with none. */
+function drawnUpTo(serialized: string): number {
+  const seen = [...serialized.matchAll(/line (\d+)/g)].map((m) => Number(m[1]));
+  return seen.length > 0 ? Math.max(...seen) : 0;
+}
+
+/**
+ * The screen a browser is handed when it comes back after losing its socket.
+ *
+ * The hub streams only to attached sockets, so everything the window drew
+ * while the browser was away is missing from that browser's terminal and
+ * cannot be recovered from the stream. What recovers it is the screen the
+ * re-attach is answered with, which `TerminalView` applies over a reset. This
+ * is the half of that the hub owns: the screen has to be current, not the one
+ * the browser was already given before it went away.
+ */
+describe('re-attaching after the socket went away', () => {
+  it('is answered with a screen that has what was drawn in between', async () => {
+    const session = await hub.startSession({ workspaceId, profile: NOISY, name: 'reconnect' });
+    await waitFor(
+      () => drawnUpTo(hub.sessions.snapshotForAttach(session.id)?.serialized ?? '') > 0,
+      15_000,
+      'the window to draw something',
+    );
+
+    // A browser that attaches, is shown the window, and then loses its socket.
+    const first = await connect();
+    const seen: string[] = [];
+    first.on('message', (raw: Buffer, isBinary: boolean) => {
+      if (isBinary) return;
+      const msg = JSON.parse(raw.toString()) as ServerMsg;
+      if (msg.t === 'snapshot' && msg.sessionId === session.id) seen.push(msg.serialized);
+    });
+    first.send(JSON.stringify({ t: 'attach', sessionId: session.id }));
+    await waitFor(() => seen.length > 0, 15_000, 'the first screen');
+    const before = drawnUpTo(seen[0]!);
+    // So the comparison at the end is against a real screen, not an empty one.
+    expect(before).toBeGreaterThan(0);
+    first.close();
+
+    try {
+      // The window goes on working with nobody watching.
+      await waitFor(
+        () => drawnUpTo(hub.sessions.snapshotForAttach(session.id)?.serialized ?? '') > before + 10,
+        15_000,
+        'the window to draw on without a browser',
+      );
+
+      const again = await connect();
+      try {
+        const resync: string[] = [];
+        again.on('message', (raw: Buffer, isBinary: boolean) => {
+          if (isBinary) return;
+          const msg = JSON.parse(raw.toString()) as ServerMsg;
+          if (msg.t === 'snapshot' && msg.sessionId === session.id) resync.push(msg.serialized);
+        });
+        again.send(JSON.stringify({ t: 'attach', sessionId: session.id }));
+        await waitFor(() => resync.length > 0, 15_000, 'the screen for the re-attach');
+
+        // Current, not the screen this browser was given the first time.
+        expect(drawnUpTo(resync[0]!)).toBeGreaterThan(before);
+      } finally {
+        again.close();
+      }
+    } finally {
+      hub.sessions.stop(session.id);
+    }
+  }, 60_000);
+});
