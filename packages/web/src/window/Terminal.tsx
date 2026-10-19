@@ -160,9 +160,36 @@ export function TerminalView({
   followGridRef.current = { cols: followCols, rows: followRows };
 
   /**
-   * Size the PTY from the window geometry. The frame's clientWidth/Height are
-   * layout sizes, unaffected by the world transform or by the host's own
+   * The grid this window's geometry asks for. The frame's clientWidth/Height
+   * are layout sizes, unaffected by the world transform or by the host's own
    * counter-scale, so this is world pixels at any zoom.
+   */
+  const measureGrid = useCallback(() => {
+    const frame = frameRef.current;
+    if (!frame) return null;
+    return gridFor(
+      frame.clientWidth,
+      frame.clientHeight,
+      measureBaseCell(),
+      TERMINAL_LINE_HEIGHT,
+    );
+  }, []);
+
+  /**
+   * The last grid this window told the hub about, so a mount always tells it
+   * once and a later layout only when the answer changed.
+   *
+   * Tracked apart from `term.cols`, which stopped being able to stand in for
+   * it: the terminal is now created at the measured grid, so by the time the
+   * mount effect calls applyGrid the two already agree and a comparison
+   * against them would send nothing at all. Cleared on mount rather than
+   * initialised once, because a window that re-attaches has to say its size
+   * again - the pty may have been resized by someone else meanwhile.
+   */
+  const sentGridRef = useRef<{ cols: number; rows: number } | null>(null);
+
+  /**
+   * Put that grid on the terminal and on the pty behind it.
    *
    * Never called in 'follow' mode - see the prop's own comment for why a
    * share view must not do this.
@@ -170,24 +197,24 @@ export function TerminalView({
   const applyGrid = useCallback(() => {
     if (follow) return;
     const term = termRef.current;
-    const frame = frameRef.current;
-    if (!term || !frame || !client) return;
-    const { cols, rows } = gridFor(
-      frame.clientWidth,
-      frame.clientHeight,
-      measureBaseCell(),
-      TERMINAL_LINE_HEIGHT,
-    );
-    if (cols === term.cols && rows === term.rows) return;
-    // Logged next to the input, because a mouse report is a pair of
-    // coordinates and xterm refuses to encode one outside this grid. A window
-    // and a pty that disagree on size therefore lose wheels near the edges
-    // and nowhere else, which reads as intermittent rather than as a size
-    // problem.
-    debug('attach', sessionId, `grid ${term.cols}x${term.rows} -> ${cols}x${rows}`);
-    term.resize(cols, rows);
+    if (!term || !client) return;
+    const grid = measureGrid();
+    if (!grid) return;
+    const { cols, rows } = grid;
+    if (cols !== term.cols || rows !== term.rows) {
+      // Logged next to the input, because a mouse report is a pair of
+      // coordinates and xterm refuses to encode one outside this grid. A window
+      // and a pty that disagree on size therefore lose wheels near the edges
+      // and nowhere else, which reads as intermittent rather than as a size
+      // problem.
+      debug('attach', sessionId, `grid ${term.cols}x${term.rows} -> ${cols}x${rows}`);
+      term.resize(cols, rows);
+    }
+    const sent = sentGridRef.current;
+    if (sent && sent.cols === cols && sent.rows === rows) return;
+    sentGridRef.current = { cols, rows };
     client.send({ t: 'resize', sessionId, cols, rows });
-  }, [client, sessionId, follow]);
+  }, [client, sessionId, follow, measureGrid]);
 
   // Read through a ref inside the mount effect: the initial font size must
   // match the current zoom (a terminal mounted while zoomed in has to start
@@ -199,11 +226,26 @@ export function TerminalView({
     const host = hostRef.current;
     if (!host || !client) return;
 
-    // In 'follow' mode the terminal is created at the owner's grid directly,
-    // rather than at xterm's 80x24 default and resized a moment later -
-    // otherwise the very first thing written into it (the snapshot below)
-    // would wrap against the wrong width for one frame.
-    const initialGrid = follow ? followGridRef.current : null;
+    /*
+     * The grid the terminal is created at, so that nothing is ever written
+     * against xterm's 80x24 default and reflowed out of it afterwards.
+     *
+     * A share view takes the owner's grid; a canvas window measures its own,
+     * the same number applyGrid is about to send to the hub. Both for the same
+     * reason, and it is not cosmetic: the snapshot written below is a whole
+     * screen, and xterm's reflow does not undo a wrap it did at the narrower
+     * width. A 120-column screen parsed at 80 kept its box borders broken
+     * across two rows after the resize, and left the cursor on the wrong row
+     * and 80 columns from where the program had it - which is the anchor every
+     * relative redraw after it is measured from. See the reflow test in the
+     * hub's snapshot-grid.test.ts.
+     *
+     * `sentGridRef` is cleared here, not above: the hub has to be told this
+     * window's grid once per attach, and applyGrid can no longer tell that
+     * from the terminal it now agrees with.
+     */
+    sentGridRef.current = null;
+    const initialGrid = follow ? followGridRef.current : measureGrid();
     const term = new XTerm({
       theme: THEME,
       fontFamily: TERMINAL_FONT_FAMILY,
