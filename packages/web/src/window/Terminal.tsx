@@ -299,19 +299,13 @@ export function TerminalView({
      *
      * A remote session's screen lives on another machine, so it comes back
      * in-band on the output stream and the listener below writes it like any
-     * other chunk. A local one is answered with a `snapshot` message instead -
-     * and that message is sent in reply to the attach *this mount is about to
-     * send*, so at this point there is nothing to take yet. Taking it here and
-     * stopping was a silent bug: the snapshot landed in the store a moment
-     * later with nobody left to read it, and a freshly mounted local window
-     * stayed blank until the program happened to redraw. An idle agent never
-     * does, so the window simply stayed empty.
+     * other chunk. A local one is answered with a `snapshot` message instead,
+     * sent in reply to the attach *this mount is about to send*, so it is
+     * watched for rather than read here: it lands in the store a moment later.
      *
-     * Hence both: take one if a previous mount left it behind, and otherwise
-     * watch for the one this attach is about to produce. `wrote` is what keeps
-     * the two honest - a snapshot is the whole screen, so replaying it after
-     * live output has already been applied would undo that output rather than
-     * complete it.
+     * `wrote` is what keeps that honest. A serialized screen does not begin by
+     * clearing anything, so writing one over output already applied appends a
+     * second copy of the screen rather than correcting the first.
      */
     let wrote = false;
     const write = (chunk: string) => {
@@ -320,19 +314,33 @@ export function TerminalView({
       term.write(chunk);
     };
 
-    const pending = useStore.getState().takeSnapshot(sessionId);
-    if (pending) write(pending);
-    debug(
-      'attach',
-      sessionId,
-      'mounted;',
-      pending
-        ? `snapshot ${pending.length}B restores: ${describeSnapshotModes(pending)}`
-        : 'no snapshot yet; watching for the one this attach asks for',
-    );
+    /*
+     * Anything an earlier attach left in the store, dropped rather than drawn.
+     *
+     * This used to be written, to keep a remounted window from coming up
+     * blank. But a snapshot is only ever left behind when nobody was there to
+     * take it, which means it answers an attach that is already over: the
+     * window the mount before this one asked about, not this one. Drawing it
+     * also set `wrote`, so the snapshot this attach is about to produce was
+     * then dropped in its turn and left behind for the mount after - every
+     * window permanently one attach out of date, showing a screen from
+     * whenever it was last culled off the canvas, which for an idle agent is
+     * never corrected because nothing redraws over it.
+     *
+     * Dropping it costs nothing it was earning. The hub answers this attach
+     * with a current screen, and for a local session that reply is the first
+     * frame this socket gets for the window - output reaches only sockets
+     * already in its attached set, and the hub adds to that set and sends the
+     * snapshot in one synchronous turn. So `wrote` is still false when it
+     * arrives and it is drawn, exactly as a fresh mount wants.
+     */
+    const left = useStore.getState().takeSnapshot(sessionId);
 
-    const detach = client.attach(sessionId, write);
-
+    /*
+     * Watching starts before the attach that produces what it waits for. The
+     * reply cannot beat it - it is a round trip to the hub - but this is the
+     * order that does not depend on that being true.
+     */
     const unwatchSnapshot = useStore.subscribe((s) => {
       if (wrote || !s.pendingSnapshots.has(sessionId)) return;
       const late = useStore.getState().takeSnapshot(sessionId);
@@ -345,6 +353,17 @@ export function TerminalView({
       );
       write(late);
     });
+
+    const detach = client.attach(sessionId, write);
+
+    debug(
+      'attach',
+      sessionId,
+      'mounted;',
+      left
+        ? `dropped ${left.length}B left by an earlier attach; watching for this one's`
+        : 'watching for the snapshot this attach asks for',
+    );
 
     /*
      * Whether a wheel became a mouse report, and nothing else can answer it.
