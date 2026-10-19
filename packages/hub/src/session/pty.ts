@@ -23,6 +23,7 @@ const require = createRequire(import.meta.url);
 const pty = require('node-pty') as typeof import('node-pty');
 const { Terminal } = require('@xterm/headless') as typeof import('@xterm/headless');
 const { SerializeAddon } = require('@xterm/addon-serialize') as typeof import('@xterm/addon-serialize');
+const { Unicode11Addon } = require('@xterm/addon-unicode11') as typeof import('@xterm/addon-unicode11');
 
 export interface PtyStartOptions {
   argv: string[];
@@ -35,6 +36,41 @@ export interface PtyStartOptions {
 export interface PtyExit {
   exitCode: number;
   signal?: number;
+}
+
+/**
+ * Put a terminal on Unicode 11 widths, which is the only setting under which
+ * it counts a column the way the program writing to it does.
+ *
+ * xterm ships one width table, Unicode 6, and registers it as the active
+ * version. Unicode 6 predates every emoji block: `🤔` (U+1F914) is not in its
+ * wide ranges at all, so xterm advances the cursor by one cell for a glyph the
+ * font paints across two. Agents count with a current table - Ink, and so
+ * Claude Code, uses `string-width` - and for them the same character is two.
+ *
+ * That disagreement is not cosmetic, because a TUI redraws by arithmetic. Ink
+ * works out how many rows its last frame took as `ceil(width / columns)` and
+ * moves the cursor up by that many to draw the next one. Every such emoji in a
+ * frame makes it one column narrower here than the program believes, so a
+ * frame the program has wrapped onto two rows can occupy one here: the cursor
+ * then goes up one row too far and the new frame lands on top of whatever was
+ * above it - the status line, usually, which ends up half overwritten and half
+ * still there. It looks like a terminal redrawing in a random place, and
+ * because it needs the frame to be near a wrap it comes and goes as the text
+ * changes length, which is what makes it intermittent. See issue 50, where a
+ * mod whose `AbovePrompt` band carried four such emoji and a clock redrew it
+ * every second, into whichever four window widths the band's current length
+ * happened to straddle.
+ *
+ * Both terminals need this and for the same reason, not merely to match each
+ * other: the mirror here measures what the program drew (and serializes it,
+ * persists it, and answers `read_screen` from it), the browser's terminal in
+ * `TerminalView` renders it. A fix in one alone would move the seam rather
+ * than close it.
+ */
+export function useUnicode11(term: XTerm): void {
+  term.loadAddon(new Unicode11Addon());
+  term.unicode.activeVersion = '11';
 }
 
 /** How much history the hub keeps in memory for live reattach. Never persisted. */
@@ -175,6 +211,7 @@ export class PtySession extends EventEmitter {
     });
     this.serializer = new SerializeAddon();
     this.term.loadAddon(this.serializer);
+    useUnicode11(this.term);
 
     // OSC 0 and OSC 2, read off the mirror terminal rather than with a regex
     // over the stream. The parser already handles a sequence split across two

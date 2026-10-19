@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { Terminal as XTerm } from '@xterm/xterm';
 import { WebglAddon } from '@xterm/addon-webgl';
+import { Unicode11Addon } from '@xterm/addon-unicode11';
 import '@xterm/xterm/css/xterm.css';
 import { MAX_PASTE_IMAGE_BYTES, describeSnapshotModes } from '@termscape/protocol';
 import { useStore } from '../state/store.js';
@@ -217,6 +218,19 @@ export function TerminalView({
         : {}),
     });
     term.open(host);
+
+    /*
+     * Unicode 11 widths, before anything is written.
+     *
+     * xterm's own table is Unicode 6, which is older than every emoji block
+     * and so counts U+1F914 as one column where the font paints two and the
+     * program that wrote it counted two. A TUI sizes its redraws off that
+     * count, so the difference puts whole frames on the wrong row - see
+     * `useUnicode11` in the hub's pty.ts for the arithmetic and for why the
+     * mirror terminal there needs the same table.
+     */
+    term.loadAddon(new Unicode11Addon());
+    term.unicode.activeVersion = '11';
 
     /*
      * WebGL where it is available, and a way back when it is not.
