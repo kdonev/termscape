@@ -32,6 +32,7 @@ export const TerminalWindow = memo(function TerminalWindow({
   maximized,
   onMaximize,
 }: Props) {
+  const canvasMode = useStore((s) => s.canvasMode);
   const { moveWindow, select, client, shared, openDialog } = useStore(useShallow((s) => ({
     moveWindow: s.moveWindow,
     select: s.select,
@@ -133,8 +134,8 @@ export const TerminalWindow = memo(function TerminalWindow({
           className="btn"
           title={
             maximized
-              ? 'Back to the previous view (Ctrl+2)'
-              : 'Zoom the canvas to this terminal (Ctrl+2)'
+              ? 'Back to the previous view (Ctrl/⌘ + -)'
+              : 'Zoom the canvas to this terminal (Ctrl/⌘ + +)'
           }
           onPointerDown={(e) => e.stopPropagation()}
           onClick={() => onMaximize(session.id)}
@@ -215,7 +216,12 @@ export const TerminalWindow = memo(function TerminalWindow({
           w={w}
           h={h}
           renderScale={renderScale}
-          focused={selected}
+          /*
+           * Canvas mode takes the keyboard off the terminal, which is what
+           * makes plain keys safe to navigate with: a mode that left the
+           * agent focused would send every `x` to both (issue 52).
+           */
+          focused={selected && !canvasMode}
         />
       </div>
 

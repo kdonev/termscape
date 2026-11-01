@@ -12,6 +12,7 @@ import { rightClickAction } from './rightClick.js';
 import { pinScroll, restoreScroll, type ScrollPin } from './scrollPin.js';
 import { readClipboardContent, writeClipboard, type ClipboardContent } from './clipboard.js';
 import { isPasteImageType, pasteChord, pastedImage, toBase64 } from './paste.js';
+import { reserved } from '../canvas/keymap.js';
 import {
   TERMINAL_FONT_FAMILY,
   TERMINAL_LINE_HEIGHT,
@@ -494,6 +495,21 @@ export function TerminalView({
      */
     let pasteFallback: string | undefined;
     term.attachCustomKeyEventHandler((e) => {
+      /*
+       * The canvas's own chords, kept away from the program (issue 52).
+       *
+       * A terminal cannot tell Ctrl+Shift+E from Ctrl+E - both are 0x05 - so
+       * without this xterm encodes the chord and writes it to the pty: the
+       * panel opens *and* Claude Code moves its cursor to end of line. The
+       * canvas has a window-level listener that has already acted on the key
+       * by the time this runs; all that is left is to not type it as well.
+       *
+       * Returning false stops xterm without preventDefault, which is what the
+       * paste chords below rely on. The canvas's listener calls preventDefault
+       * itself for the browser's sake.
+       */
+      if (reserved(e, IS_MAC)) return false;
+
       const chord = pasteChord(e, IS_MAC);
       if (!chord) return true;
       if (chord.route === 'async' && typeof navigator.clipboard?.read === 'function') {
@@ -743,7 +759,11 @@ export function TerminalView({
     const term = termRef.current;
     if (!term) return;
     term.options.cursorBlink = focused;
+    // Blurred explicitly, not just left alone: canvas mode turns `focused`
+    // off while the window stays selected, and the keys it navigates with
+    // have to stop reaching the prompt (issue 52).
     if (focused) term.focus();
+    else term.blur();
   }, [focused]);
 
   return (
@@ -758,6 +778,23 @@ export function TerminalView({
        * up whichever one happened.
        */
       onContextMenu={(e) => e.preventDefault()}
+      /*
+       * Clicking into a terminal ends canvas mode (issue 52).
+       *
+       * The click focuses xterm's textarea itself, natively, and the effect
+       * above cannot undo that: `focused` is already false while the mode is
+       * on, so it does not change and the effect never runs. The terminal
+       * therefore really does have the keyboard, while the toolbar still
+       * claims the canvas does - and the mode keys are dead anyway, because
+       * the canvas hands plain keys back to anything inside a textarea. The
+       * honest reading of the click is "I want to type here", so the mode
+       * ends and what the flag says is true again.
+       *
+       * onFocus rather than a click handler because it is focus that is the
+       * problem: a click that lands on a terminal already focused, or focus
+       * arriving by any other route, has to be caught too.
+       */
+      onFocus={() => useStore.getState().setCanvasMode(false)}
     >
       <div
         className="term-scale"

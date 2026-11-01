@@ -569,6 +569,129 @@ export function stepOutTo(
   return next ? fitTo([next], viewportW, viewportH) : null;
 }
 
+/**
+ * How much bigger a workspace box must be than the window inside it before it
+ * counts as a rung of its own. A workspace holding one window is that window
+ * plus WS_PAD and the label strip, so fitting it looks almost exactly like
+ * focusing the window — a key press that visibly does nothing reads as broken.
+ */
+export const LADDER_MIN_GROWTH = 1.3;
+
+/**
+ * The rungs of the zoom ladder for one window, innermost first.
+ *
+ * Kept here rather than built at the call site so that both keys and any
+ * future gesture walk the same rungs, and so the "a workspace of one window
+ * is not a rung" rule has one home and a test.
+ *
+ * `group` or `all` may be null — a canvas with nothing on it — and a rung that
+ * adds nothing to see is dropped rather than stepped onto.
+ */
+export function zoomLadder(window: Rect, group: Rect | null, all: Rect | null): Rect[] {
+  const rungs = [window];
+  if (
+    group &&
+    (group.w / Math.max(1, window.w) >= LADDER_MIN_GROWTH ||
+      group.h / Math.max(1, window.h) >= LADDER_MIN_GROWTH)
+  ) {
+    rungs.push(group);
+  }
+  // The outermost rung is only worth having if it is bigger than the one
+  // below, which it is not on a canvas holding a single workspace.
+  const inner = rungs[rungs.length - 1]!;
+  if (
+    all &&
+    (all.w / Math.max(1, inner.w) >= LADDER_MIN_GROWTH ||
+      all.h / Math.max(1, inner.h) >= LADDER_MIN_GROWTH)
+  ) {
+    rungs.push(all);
+  }
+  return rungs;
+}
+
+/**
+ * One step in, along the same ladder stepOutTo walks the other way: from
+ * everything to the selected window's workspace, from the workspace to the
+ * window (issue 52).
+ *
+ * `ladder` is the whole thing, innermost first — the window, its workspace,
+ * every window on the canvas — where stepOutTo takes only the rungs above the
+ * window. Both read the current rung off the screen the same way, by asking
+ * which rungs fit on it, so panning by hand between presses cannot desync
+ * them from each other.
+ *
+ * The innermost rung is framed with focusRect rather than fitTo, because
+ * arriving at one window should look like arriving from its own maximize
+ * button, which is what that function is for.
+ *
+ * Null means there is nothing tighter to go to.
+ */
+export function stepInTo(
+  ladder: Rect[],
+  v: Viewport,
+  viewportW: number,
+  viewportH: number,
+): Viewport | null {
+  const visible = visibleWorldRect(v, viewportW, viewportH, 0);
+  // The rung we are at: the first that does not fit on screen. Everything
+  // below it does fit, so the one to go to is two below - one below is the
+  // rung we are already on.
+  const at = ladder.findIndex((c) => !rectContains(visible, c));
+  const target = (at === -1 ? ladder.length : at) - 2;
+  if (target < 0) return null;
+  const rect = ladder[target]!;
+  return target === 0
+    ? focusRect(rect, viewportW, viewportH)
+    : fitTo([rect], viewportW, viewportH);
+}
+
+/**
+ * Which window a direction points at from `from`, or undefined.
+ *
+ * Nearest-centre in a straight line is the obvious rule and the wrong one: on
+ * a sparse canvas it hands you a window far off to the side because it
+ * happens to be a few pixels closer than the one plainly below. So a
+ * candidate must first be in the half-plane the direction names — strictly
+ * past `from`'s centre on that axis — and candidates are then scored by
+ * distance along the axis plus the sideways offset weighted up. The weight is
+ * what makes "down" prefer the window below over the one below and far right.
+ *
+ * Centres rather than edges, so overlapping windows still have an order.
+ *
+ * Takes a bare rect rather than a window, because notes are navigation stops
+ * too and a note is not a window - the canvas hands this one list of both.
+ */
+export function neighbourIn<T extends { rect: Rect }>(
+  items: T[],
+  from: T,
+  dir: 'left' | 'right' | 'up' | 'down',
+): T | undefined {
+  const centre = (r: Rect) => ({ x: r.x + r.w / 2, y: r.y + r.h / 2 });
+  const origin = centre(from.rect);
+  /** How much a sideways offset counts against a candidate. */
+  const SKEW = 2;
+
+  let best: T | undefined;
+  let bestScore = Infinity;
+  for (const item of items) {
+    if (item === from) continue;
+    const c = centre(item.rect);
+    const dx = c.x - origin.x;
+    const dy = c.y - origin.y;
+    // Along the direction, and across it. Both positive once the half-plane
+    // test below has passed.
+    const along = dir === 'left' ? -dx : dir === 'right' ? dx : dir === 'up' ? -dy : dy;
+    const across = dir === 'left' || dir === 'right' ? Math.abs(dy) : Math.abs(dx);
+    if (along <= 0) continue;
+    const score = along + across * SKEW;
+    if (score < bestScore) {
+      bestScore = score;
+      best = item;
+    }
+  }
+  return best;
+}
+
 /* ----------------------------------------------------- viewport tweening */
 
 /**

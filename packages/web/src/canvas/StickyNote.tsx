@@ -40,6 +40,10 @@ export const StickyNote = memo(function StickyNote({ note, zoom, selected, autoF
       selectNote: s.selectNote,
     })),
   );
+  // A note is a navigation stop like a window, so it takes and releases the
+  // keyboard on the same rule a terminal does (issue 52).
+  const canvasMode = useStore((s) => s.canvasMode);
+  const focused = selected && !canvasMode;
   const [drag, setDrag] = useState<null | {
     mode: 'move' | 'resize';
     ox: number;
@@ -56,6 +60,21 @@ export const StickyNote = memo(function StickyNote({ note, zoom, selected, autoF
     // the keyboard back from whatever the user is doing.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  /*
+   * Follow the selection in and out of canvas mode, exactly as Terminal.tsx
+   * does. Keyed on `focused` alone, so a remote edit still cannot steal the
+   * keyboard: that changes the note's text, not whether it is ours.
+   *
+   * The blur is the half that matters - entering canvas mode while the
+   * cursor is in a note has to stop `hjkl` being typed into the note.
+   */
+  useEffect(() => {
+    const el = textRef.current;
+    if (!el) return;
+    if (focused) el.focus();
+    else el.blur();
+  }, [focused]);
 
   /**
    * Bring this note to the front of the stack, unless it already is.
@@ -179,6 +198,14 @@ export const StickyNote = memo(function StickyNote({ note, zoom, selected, autoF
           e.stopPropagation();
           onSelect();
         }}
+        /*
+         * Clicking into a note ends canvas mode, for the same reason it does
+         * in a terminal: the click focuses the textarea natively and the
+         * effect above cannot undo it, because `focused` is already false
+         * while the mode is on and so never changes. The note would really
+         * have the keyboard while the toolbar still claimed the canvas did.
+         */
+        onFocus={() => useStore.getState().setCanvasMode(false)}
         onChange={(e) => putNote({ ...note, text: e.target.value, updatedAt: Date.now() })}
       />
 

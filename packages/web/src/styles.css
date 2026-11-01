@@ -88,6 +88,23 @@ a.btn { text-decoration: none; display: inline-block; }
    as an active tab, so "on" reads the same way everywhere it appears. */
 .btn.on { background: #1e2a45; border-color: var(--accent); color: var(--accent); }
 
+/* Canvas mode's flag in the toolbar (issue 52). Brighter than an active tab
+   and faintly alive, because it is reporting that the keyboard currently does
+   something other than what the user last did with it - a state worth
+   noticing without being a thing that blinks at you all day. */
+.btn.mode-flag {
+  border-color: var(--accent);
+  color: var(--accent);
+  animation: mode-flag-in 220ms ease-out;
+}
+@keyframes mode-flag-in {
+  from { opacity: 0; transform: translateY(-3px); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .btn.mode-flag { animation: none; }
+}
+
 /* ------------------------------------------------------------ canvas */
 
 .canvas {
@@ -757,3 +774,137 @@ a.btn { text-decoration: none; display: inline-block; }
   resize: vertical;
   min-height: 56px;
 }
+
+/* ------------------------------------------------------- shortcut sheet */
+
+/* The list of every shortcut (issue 52). Two columns rather than a table, so
+   a long description wraps under itself instead of stretching the key column
+   and misaligning every other row. */
+.shortcut-sheet section + section { margin-top: 18px; }
+.shortcut-sheet h4 {
+  margin: 0 0 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: lowercase;
+}
+.shortcut-sheet dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 6px 14px;
+  margin: 0;
+}
+.shortcut-sheet dl > div { display: contents; }
+.shortcut-sheet dt { margin: 0; }
+.shortcut-sheet dd { margin: 0; align-self: center; }
+.shortcut-sheet kbd {
+  display: inline-block;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px 6px;
+  font: inherit;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+/* ------------------------------------------------------------ jump badges */
+
+/* The badges shown over every window during a jump (issue 52).
+
+   Outside .world, so they are placed by the viewport but never scaled by it:
+   the zoomed-out canvas, where a window may be a few pixels wide, is exactly
+   where a badge has to stay readable. pointer-events: none because the layer
+   covers the whole canvas and must not swallow a click - the jump is a
+   keyboard affair, and the mouse carries on working underneath it. */
+.jump-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 50;
+}
+
+.jump-badge {
+  position: absolute;
+  top: 0;
+  left: 0;
+  /* Nudged up and left so the badge overhangs its window's corner rather than
+     covering the title underneath it. */
+  margin: -10px 0 0 -10px;
+  background: var(--accent);
+  color: #0b0e14;
+  border-radius: 5px;
+  padding: 1px 6px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  line-height: 1.5;
+  text-transform: lowercase;
+  box-shadow: 0 2px 8px rgb(0 0 0 / 55%);
+}
+
+/* Ruled out by what has been typed. Kept on screen rather than hidden: the
+   badges staying put is what makes the second keystroke predictable. */
+.jump-badge.dim { opacity: 0.25; }
+
+/* The letters already typed, on a badge still in the running. */
+.jump-badge .hit { opacity: 0.45; }
+
+/* --------------------------------------------------------- the palette */
+
+/* The command palette (issue 52): one search box over every window and every
+   command worth picking from a list. Tighter than the other dialogs - the
+   gaps that suit a form read as sloppy on a list you scan at speed. */
+.palette { gap: 10px; padding: 12px; min-width: min(560px, 86vw); }
+.palette .input { width: 100%; }
+
+/* Capped rather than grown to fit: a canvas with thirty agents would
+   otherwise make a dialog taller than the window. */
+.palette-list {
+  max-height: min(380px, 52vh);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.palette-row {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  padding: 6px 8px;
+  /* Never squashed. The list is a flex column with a max-height, and a flex
+     item shrinks by default: once the entries overflow, every row gets
+     compressed below its own line height and `overflow: hidden` clips the
+     text down to fragments. A short list fits and looks perfect, which is
+     what makes this one worth spelling out. */
+  flex: 0 0 auto;
+  border-radius: 5px;
+  cursor: pointer;
+  /* The list scrolls under a fixed box, so a row must never reflow the
+     dialog by wrapping. */
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+/* One cursor, driven by both the arrow keys and the mouse - :hover as well
+   would mean two, and the one under the pointer is not the one Enter runs. */
+.palette-row.on { background: #1e2a45; }
+
+.palette-kind { color: var(--muted); font-size: 11px; width: 10px; flex: 0 0 auto; }
+.palette-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.palette-hint {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 11px;
+  margin-left: auto;
+  padding-left: 12px;
+}
+
+/* The characters the query matched. Colour rather than weight: bolding
+   individual letters makes the row jitter as you type, because the glyphs
+   change width. */
+.palette-hit { color: var(--accent); font-weight: inherit; }
+
+.palette-empty { color: var(--muted); padding: 10px 8px; }

@@ -53,6 +53,8 @@ export type DialogSpec =
   | { kind: 'share'; sessionId: string }
   /** Open an issue, with the offer to export logs first. */
   | { kind: 'reportBug' }
+  /** Every shortcut, listed. Carries nothing: the keymap is the content. */
+  | { kind: 'shortcuts' }
   /**
    * Destructive confirmation. The message to send is carried rather than a
    * callback, so the dialog needs to know nothing about what it is confirming
@@ -126,8 +128,8 @@ interface AppState {
   /**
    * Which note is selected, kept separate from `selectedId`.
    *
-   * `selectedId` names a session and drives terminal focus and the Ctrl+2
-   * zoom - things a note has no equivalent of. Folding notes into it would
+   * `selectedId` names a session and drives terminal focus and the zoom
+   * ladder - things a note has no equivalent of. Folding notes into it would
    * mean every reader of `selectedId` (the terminal that grabs the keyboard
    * on selection, `toggleMaximize`) now has to first check what kind of thing
    * it points at. Selecting one clears the other; see `select`/`selectNote`.
@@ -146,6 +148,17 @@ interface AppState {
   focusRequest: { sessionId: string; at: number; alsoId?: string } | null;
   /** Whether the tree panel is slid out over the canvas. */
   panelOpen: boolean;
+  /**
+   * Whether the canvas has the keyboard rather than the focused terminal
+   * (issue 52).
+   *
+   * Plain keys navigate the canvas while this is on, which is only safe
+   * because turning it on blurs the terminal: a mode that left the agent
+   * focused would send every `x` both to the canvas and to the prompt. The
+   * toolbar shows it, because a modal keyboard with nothing on screen saying
+   * so is a trap.
+   */
+  canvasMode: boolean;
   /** The one dialog that is up, or null. */
   dialog: DialogSpec | null;
   /** Snapshots delivered on attach, consumed once by the terminal component. */
@@ -173,6 +186,7 @@ interface AppState {
   createNoteAt: (p: { x: number; y: number }) => void;
   requestFocus: (sessionId: string) => void;
   setPanelOpen: (open: boolean) => void;
+  setCanvasMode: (on: boolean) => void;
   openDialog: (spec: DialogSpec) => void;
   closeDialog: () => void;
   takeSnapshot: (sessionId: string) => string | null;
@@ -219,6 +233,7 @@ export const useStore = create<AppState>((set, get) => ({
   selectedNoteId: null,
   focusRequest: null,
   panelOpen: false,
+  canvasMode: false,
   dialog: null,
   pendingSnapshots: new Map(),
   errors: [],
@@ -502,6 +517,12 @@ export const useStore = create<AppState>((set, get) => ({
   // click on empty canvas re-renders nothing.
   setPanelOpen: (panelOpen) =>
     set((s) => (s.panelOpen === panelOpen ? s : { panelOpen })),
+
+  // Guarded for the same reason as setPanelOpen: Escape clears the selection
+  // whether or not the mode was on, and re-rendering every terminal on the
+  // canvas for a write that changes nothing is not worth it.
+  setCanvasMode: (canvasMode) =>
+    set((s) => (s.canvasMode === canvasMode ? s : { canvasMode })),
 
   takeSnapshot: (sessionId) => {
     const s = get().pendingSnapshots.get(sessionId);

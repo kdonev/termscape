@@ -8,6 +8,7 @@ import {
   fitTo,
   focusRect,
   lerpViewport,
+  neighbourIn,
   pinchIntent,
   rectContains,
   rectContainsPoint,
@@ -15,8 +16,10 @@ import {
   renderScaleFor,
   screenToWorld,
   snapWorldPx,
+  stepInTo,
   stepOutTo,
   terminalFontSize,
+  zoomLadder,
   visibleWorldRect,
   wheelStream,
   wheelZoomFactor,
@@ -552,6 +555,83 @@ describe('stepOutTo', () => {
   });
 });
 
+describe('stepInTo', () => {
+  const VIEW = { w: 1600, h: 1000 };
+  const one = { x: 0, y: 0, w: 720, h: 460 };
+  const two = { x: 900, y: 0, w: 720, h: 460 };
+  const far = { x: 4000, y: 2000, w: 720, h: 460 };
+  const ws = workspaceBounds([one, two])!;
+  const all = boundsOf([one, two, far])!;
+  const ladder = [one, ws, all];
+  const sees = (v: { panX: number; panY: number; zoom: number }, r: typeof one) =>
+    rectContains(visibleWorldRect(v, VIEW.w, VIEW.h, 0), r);
+
+  it('steps from everything in to the selected window’s workspace', () => {
+    const next = stepInTo(ladder, fitTo([all], VIEW.w, VIEW.h), VIEW.w, VIEW.h)!;
+    expect(next).not.toBeNull();
+    expect(sees(next, ws)).toBe(true);
+    // and not past it, which is what makes this a ladder rather than a jump.
+    expect(sees(next, all)).toBe(false);
+  });
+
+  it('steps from the workspace in to the window', () => {
+    const next = stepInTo(ladder, fitTo([ws], VIEW.w, VIEW.h), VIEW.w, VIEW.h)!;
+    expect(next).not.toBeNull();
+    expect(sees(next, one)).toBe(true);
+    expect(sees(next, ws)).toBe(false);
+  });
+
+  it('has nowhere tighter to go once the window fills the view', () => {
+    expect(stepInTo(ladder, focusRect(one, VIEW.w, VIEW.h), VIEW.w, VIEW.h)).toBeNull();
+  });
+
+  it('undoes a step out, so the two keys are inverses', () => {
+    const start = fitTo([all], VIEW.w, VIEW.h);
+    const inOnce = stepInTo(ladder, start, VIEW.w, VIEW.h)!;
+    const back = stepOutTo([ws, all], inOnce, VIEW.w, VIEW.h)!;
+    expect(sees(back, all)).toBe(true);
+  });
+
+  it('walks the rungs zoomLadder gives it, in both directions', () => {
+    const rungs = zoomLadder(one, ws, all);
+    expect(rungs).toEqual([one, ws, all]);
+    const mid = stepInTo(rungs, fitTo([all], VIEW.w, VIEW.h), VIEW.w, VIEW.h)!;
+    expect(sees(mid, ws)).toBe(true);
+    expect(sees(stepInTo(rungs, mid, VIEW.w, VIEW.h)!, one)).toBe(true);
+  });
+});
+
+describe('zoomLadder', () => {
+  const one = { x: 0, y: 0, w: 720, h: 460 };
+  const two = { x: 900, y: 0, w: 720, h: 460 };
+  const far = { x: 4000, y: 2000, w: 720, h: 460 };
+
+  it('skips a workspace of one window, which would look like nothing happened', () => {
+    // far is alone in its workspace, so its box is the window plus padding and
+    // a label strip: a rung the user cannot tell from the one below it.
+    const solo = workspaceBounds([far])!;
+    const all = boundsOf([one, two, far])!;
+    expect(zoomLadder(far, solo, all)).toEqual([far, all]);
+  });
+
+  it('keeps a workspace that holds more than one window', () => {
+    const ws = workspaceBounds([one, two])!;
+    const all = boundsOf([one, two, far])!;
+    expect(zoomLadder(one, ws, all)).toEqual([one, ws, all]);
+  });
+
+  it('drops the outermost rung when the canvas is that one workspace', () => {
+    const ws = workspaceBounds([one, two])!;
+    const all = boundsOf([one, two])!;
+    expect(zoomLadder(one, ws, all)).toEqual([one, ws]);
+  });
+
+  it('is just the window on a canvas holding nothing else', () => {
+    expect(zoomLadder(one, workspaceBounds([one])!, boundsOf([one])!)).toEqual([one]);
+    expect(zoomLadder(one, null, null)).toEqual([one]);
+  });
+});
+
 describe('lerpViewport', () => {
   const VIEW = { w: 1600, h: 1000 };
   const a = { panX: 0, panY: 0, zoom: 0.4 };
@@ -730,5 +810,59 @@ describe('wheelFlickIntent', () => {
       wheelFlickIntent({ ratio: Number.POSITIVE_INFINITY, durationMs: 100, events: 4 }),
     ).toBeNull();
     expect(wheelFlickIntent(spin(WHEEL_FLICK_MIN_DETENTS + 1, -1))).toBeNull();
+  });
+});
+
+describe('neighbourIn', () => {
+  /*
+   * The rule these pin down is "in that direction, then nearest" rather than
+   * plain nearest. Nearest alone is what makes arrow-key navigation on a
+   * sparse canvas feel random, so the half-plane test comes first and the
+   * sideways weighting breaks the ties it leaves.
+   */
+  const win = (x: number, y: number) => ({ x, y, w: 700, h: 440 });
+  const at = (id: string, x: number, y: number) => ({ id, rect: win(x, y) });
+
+  const centre = at('centre', 1000, 1000);
+  const left = at('left', 0, 1000);
+  const right = at('right', 2000, 1000);
+  const up = at('up', 1000, 0);
+  const down = at('down', 1000, 2000);
+  const all = [centre, left, right, up, down];
+
+  it('reads the four directions off the canvas', () => {
+    expect(neighbourIn(all, centre, 'left')?.id).toBe('left');
+    expect(neighbourIn(all, centre, 'right')?.id).toBe('right');
+    expect(neighbourIn(all, centre, 'up')?.id).toBe('up');
+    expect(neighbourIn(all, centre, 'down')?.id).toBe('down');
+  });
+
+  it('stops at the edge rather than wrapping round', () => {
+    // Wrapping would fly the viewport across the whole canvas on a key the
+    // user pressed to nudge one window over.
+    expect(neighbourIn(all, left, 'left')).toBeUndefined();
+    expect(neighbourIn(all, up, 'up')).toBeUndefined();
+  });
+
+  it('never returns the window it started from', () => {
+    expect(neighbourIn([centre], centre, 'down')).toBeUndefined();
+  });
+
+  it('prefers the window straight on over a closer one off to the side', () => {
+    // straight is further down than skew is away, so plain nearest-centre
+    // would pick skew and feel like "down" went sideways.
+    const straight = at('straight', 1000, 1900);
+    const skew = at('skew', 2600, 1300);
+    expect(neighbourIn([centre, straight, skew], centre, 'down')?.id).toBe('straight');
+  });
+
+  it('ignores a window the direction does not point at', () => {
+    const behind = at('behind', 1000, 200);
+    expect(neighbourIn([centre, behind], centre, 'down')).toBeUndefined();
+  });
+
+  it('orders windows that overlap, since it measures centres', () => {
+    const over = { id: 'over', rect: win(1200, 1000) };
+    expect(neighbourIn([centre, over], centre, 'right')?.id).toBe('over');
   });
 });

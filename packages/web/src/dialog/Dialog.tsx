@@ -13,12 +13,21 @@ import { isBackdropDismiss } from './backdrop.js';
  */
 export function Dialog({
   title,
+  onClose,
   children,
 }: {
   title: string;
+  /**
+   * What closing it means. Defaults to clearing the store's dialog slot,
+   * which is where every dialog opened through `openDialog` lives. A caller
+   * that owns its own open/shut state - the palette, which the canvas renders
+   * so it can reach the canvas's own commands - passes its own instead.
+   */
+  onClose?: () => void;
   children: React.ReactNode;
 }) {
-  const closeDialog = useStore((s) => s.closeDialog);
+  const closeFromStore = useStore((s) => s.closeDialog);
+  const closeDialog = onClose ?? closeFromStore;
   const ref = useRef<HTMLDialogElement>(null);
   const pressed = useRef<EventTarget | null>(null);
   const released = useRef<EventTarget | null>(null);

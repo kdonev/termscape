@@ -90,7 +90,8 @@ export function App() {
             message each other, and spawn helpers.
           </p>
           <p className="hint">
-            Scroll to pan · Ctrl/⌘ + scroll to zoom · Ctrl/⌘ + 1 to fit
+            Scroll to pan · Ctrl/⌘ + scroll to zoom · Ctrl/⌘ + Shift + Space
+            for the keyboard
           </p>
           <button className="btn primary" onClick={() => setPanelOpen(true)}>
             open the machines panel

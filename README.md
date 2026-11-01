@@ -51,11 +51,13 @@ libxdo3` on Debian and Ubuntu), or the canvas opens in your browser instead.
    to review your last change"*. The message shows up in the other agent's
    terminal with the sender's name, and the answer comes back the same way.
    Agents can also start helpers of their own.
-5. **Find your way around.** Scroll to pan, **Ctrl/⌘ + scroll** to zoom,
-   **Ctrl/⌘ + 1** to see everything, **Ctrl/⌘ + 2** to zoom in on one
-   terminal. Clicking an agent in the panel takes you to it.
-6. **See what was said.** **messages** in the top bar lists every message the
-   agents have sent each other.
+5. **Find your way around.** Scroll to pan, **Ctrl/⌘ + scroll** to zoom, and
+   **Ctrl/⌘ + +** / **Ctrl/⌘ + -** to step in to one terminal, out to the
+   workspace around it, and out to everything. Clicking an agent in the panel
+   takes you to it.
+6. **Keep your hands on the keyboard.** **Ctrl/⌘ + Shift + Space** hands the
+   keyboard to the canvas, where `hjkl` moves between agents, **?** lists every
+   shortcut, and **Enter** starts typing to the agent you landed on.
 7. **Come back later.** Stop Termscape and start it again. The canvas returns
    as you left it, and **resume** on a window continues that agent's
    conversation. (Agents that can't continue one show **restart** instead.)
@@ -85,8 +87,10 @@ npx @kdonev/termscape --listen loopback
 
 ## Using the canvas
 
-- **Scroll** to pan, **Ctrl/⌘ + scroll** to zoom, **Ctrl/⌘ + 1** to fit,
-  **Ctrl/⌘ + 2** to zoom to one terminal
+- **Scroll** to pan, **Ctrl/⌘ + scroll** to zoom, **Ctrl/⌘ + +** and
+  **Ctrl/⌘ + -** to walk the zoom ladder: one terminal, the workspace around
+  it, everything
+- **The keyboard** can drive all of it — see [Keyboard](#keyboard)
 - A **quick flick** of the zoom — a fast pinch, or a fast spin of the wheel —
   navigates instead of zooming: in over a terminal maximizes it, out steps
   back to the workspace around it and then to everything. Zooming at any
@@ -104,6 +108,64 @@ npx @kdonev/termscape --listen loopback
 - **share** on a window's title bar hands a reviewer a link to that one
   terminal, live, with nothing else on the canvas visible to them — see
   [Security](#security) for what the link actually grants
+
+## Keyboard
+
+The canvas can be driven without the mouse. The hard part is that most of the
+time the keyboard belongs to an agent, so the shortcuts come in two kinds.
+
+**Chords** work anywhere, including while you are typing to an agent. They sit
+on Ctrl/⌘ + Shift because a terminal cannot tell `Ctrl+Shift+K` from `Ctrl+K`
+— both are the same byte — so no agent can bind them, and taking them costs
+you nothing: `Ctrl+K` still reaches the agent as `Ctrl+K`.
+
+| Keys | What it does |
+| --- | --- |
+| **Ctrl/⌘ + Shift + Space** | Canvas mode on or off |
+| **Ctrl/⌘ + Shift + K** | Command palette |
+| **Ctrl/⌘ + Shift + F** | Jump to a window by its badge |
+| **Ctrl/⌘ + Shift + E** | Machines panel |
+| **Ctrl/⌘ + Shift + ←↓↑→** | Select the next window or note over |
+| **Ctrl/⌘ + +** / **Ctrl/⌘ + -** | In to the window, out to the workspace, out to everything |
+
+**Canvas mode** takes the keyboard off the agent so plain keys can navigate.
+The top bar says so while it is on, and **Esc** or **Enter** gives the keyboard
+back.
+
+| Keys | What it does |
+| --- | --- |
+| `h` `j` `k` `l` or arrows | Select the next window or note over |
+| **Shift** + those | Pan |
+| `+` / `-` | The same zoom ladder |
+| **Tab** / **Shift + Tab** | Next or previous window or note |
+| `1`–`9` | The nth window of this workspace |
+| **Enter** | Type to the selected agent, or into the note |
+| `p` | Machines panel |
+| `a` / `n` / **Shift + W** | New agent here, new note, new workspace |
+| `r` / `x` | Resume or restart, remove |
+| `?` | Every shortcut, listed |
+| **Esc** | Close, then deselect, then leave canvas mode |
+
+### The palette
+
+**Ctrl/⌘ + Shift + K** opens one search box over three things:
+
+- **Every window**, under the address on its title bar — type part of it and
+  press Enter to fly there and start typing to that agent.
+- **Every command**, so the keys above never have to grow to cover everything.
+- **Every workspace crossed with every agent template**, as *New claude in
+  termscape* — one keystroke sequence to start a terminal anywhere, without
+  opening a dialog and picking twice. A template whose agent is not installed
+  on that workspace's machine is not offered.
+
+Matching is fuzzy and understands initials, so `nw` finds *New workspace*. To
+set a model, an effort or an opening task, use **+ agent** in the panel; the
+palette is the quick path, not a replacement for the dialog.
+
+### A deliberate gap
+
+**Ctrl/⌘ + Shift + -** is left alone, because that is undo in Claude Code and
+`Ctrl+_` in any shell. Use the unshifted **Ctrl/⌘ + -** to zoom out.
 
 ## Requirements
 

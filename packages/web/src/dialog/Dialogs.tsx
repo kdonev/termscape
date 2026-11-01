@@ -15,6 +15,7 @@ import { writeClipboard } from '../window/clipboard.js';
 import { Dialog, DialogForm, Field } from './Dialog.js';
 import { JoinInstructions, SshForm } from './MachineForms.js';
 import { ReportBugDialog } from './ReportBug.js';
+import { ShortcutsDialog } from './Shortcuts.js';
 
 /**
  * The one dialog that is up, if any.
@@ -51,6 +52,8 @@ function keyOf(spec: DialogSpec): string {
       return `share:${spec.sessionId}`;
     case 'reportBug':
       return 'reportBug';
+    case 'shortcuts':
+      return 'shortcuts';
     case 'confirm':
       return `confirm:${spec.title}`;
   }
@@ -76,6 +79,8 @@ function Body({ spec }: { spec: DialogSpec }) {
       return <ShareDialog sessionId={spec.sessionId} />;
     case 'reportBug':
       return <ReportBugDialog />;
+    case 'shortcuts':
+      return <ShortcutsDialog />;
     case 'confirm':
       return <ConfirmDialog spec={spec} />;
   }

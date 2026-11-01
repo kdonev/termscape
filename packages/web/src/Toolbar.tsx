@@ -10,12 +10,23 @@ const RELEASES_URL = 'https://github.com/kdonev/termscape/releases';
  * of their own: who you are connected to and the way into that tree.
  */
 export function Toolbar() {
-  const { connected, hubVersion, panelOpen, setPanelOpen, openDialog, sessions } = useStore(
+  const {
+    connected,
+    hubVersion,
+    panelOpen,
+    setPanelOpen,
+    canvasMode,
+    setCanvasMode,
+    openDialog,
+    sessions,
+  } = useStore(
     useShallow((s) => ({
       connected: s.connected,
       hubVersion: s.hubVersion,
       panelOpen: s.panelOpen,
       setPanelOpen: s.setPanelOpen,
+      canvasMode: s.canvasMode,
+      setCanvasMode: s.setCanvasMode,
       openDialog: s.openDialog,
       sessions: s.sessions,
     })),
@@ -34,6 +45,23 @@ export function Toolbar() {
       </div>
 
       <span className="spacer" />
+
+      {/*
+        * Canvas mode has to be visible. Plain keys mean something different
+        * while it is on, and a modal keyboard with nothing on screen saying so
+        * is how you lose a sentence you thought you were typing to an agent.
+        * It is a button as well as a light, because a mode you can only leave
+        * by knowing the chord is worse.
+        */}
+      {canvasMode && (
+        <button
+          className="btn primary mode-flag"
+          title="The keyboard is navigating the canvas. Enter types to the selected agent; Esc leaves."
+          onClick={() => setCanvasMode(false)}
+        >
+          canvas keys · esc
+        </button>
+      )}
 
       <button
         className="btn"
