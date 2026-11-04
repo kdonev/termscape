@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { canvasLog } from '../debug.js';
 import { useStore } from '../state/store.js';
 import { writeClipboard } from '../window/clipboard.js';
 import { Dialog } from './Dialog.js';
@@ -62,7 +63,12 @@ export function ReportBugDialog() {
   const exportLogs = () => {
     setBusy(true);
     setError(null);
-    (client ? client.request({ t: 'exportLogs' }) : Promise.reject(new Error('not connected to the hub')))
+    // The canvas's kept viewport trace travels with the request: the hub
+    // cannot see what the page decided about its own view, so a bug about
+    // where the canvas ended up is only diagnosable from these lines.
+    (client
+      ? client.request({ t: 'exportLogs', canvas: canvasLog() })
+      : Promise.reject(new Error('not connected to the hub')))
       .then(
         (r) => {
           setBusy(false);
@@ -86,8 +92,9 @@ export function ReportBugDialog() {
         </p>
         <p className="dialog-note">
           The file holds versions, the agents on each machine, when messages were
-          sent and whether they were delivered, and each hub's recent log. It does
-          not hold message text, terminal contents or tokens.
+          sent and whether they were delivered, each hub's recent log, and this
+          canvas's own record of how it zoomed and panned. It does not hold
+          message text, terminal contents or tokens.
         </p>
         {path && (
           <>

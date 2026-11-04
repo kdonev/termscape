@@ -318,8 +318,18 @@ export const ClientMsg = z.discriminatedUnion('t', [
    * Write a bug report's logs to a file on this machine, collected from every
    * attached one too, and answer with where it went. Never sent anywhere
    * else: the tracker is public, and the person decides who gets the file.
+   *
+   * `canvas` is the browser's own kept trace, which no hub can see: the view
+   * is decided in the page, so a bug about where the canvas ended up is
+   * diagnosed from lines only the page has. Optional, and capped rather than
+   * trusted - an older canvas sends none, and the cap is what stops a page
+   * from deciding how large a hub's message may be.
    */
-  z.object({ t: z.literal('exportLogs'), requestId }),
+  z.object({
+    t: z.literal('exportLogs'),
+    requestId,
+    canvas: z.array(z.string().max(2000)).max(4000).optional(),
+  }),
 ]);
 export type ClientMsg = z.infer<typeof ClientMsg>;
 

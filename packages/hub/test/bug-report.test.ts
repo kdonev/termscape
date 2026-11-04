@@ -68,6 +68,34 @@ describe('a report', () => {
     expect(line).not.toContain('THE-SECRET-BODY');
   });
 
+  /*
+   * Issue 53: the canvas decides its own view, so a report about where it
+   * ended up is diagnosed from lines only the browser has. They ride along
+   * with the export request and become a section of their own - last, and
+   * absent when the export came from the tray or the CLI rather than a page.
+   */
+  it('keeps the canvas section the browser sent, after the machines', async () => {
+    const bare = {
+      store: { listHosts: () => [] },
+      peers: { peer: () => null },
+      sessions: { list: () => [] },
+      messages: () => [],
+    } as unknown as Hub;
+
+    const lines = ['2026-11-04T12:00:00.000Z [viewport] focus target=(0,0 900x600)'];
+    const text = formatReport(await collectReport(bare, 50, lines));
+    expect(text).toContain('== this canvas (browser)');
+    expect(text).toContain('-- log (1 lines)');
+    expect(text).toContain(lines[0]!);
+    expect(text.indexOf('== this machine (canvas)')).toBeLessThan(
+      text.indexOf('== this canvas (browser)'),
+    );
+
+    // Nothing sent, no section: the hub exports for its own reasons too.
+    expect(formatReport(await collectReport(bare, 50))).not.toContain('(browser)');
+    expect(formatReport(await collectReport(bare, 50, []))).not.toContain('(browser)');
+  });
+
   it('says so when an attached machine does not answer, without waiting on it', async () => {
     const fake = {
       store: {
@@ -169,6 +197,26 @@ describe('exportLogs over the socket', () => {
       expect(text).not.toContain(marker);
       expect(text).toContain('the banner would print');
       expect(text).not.toContain(CLIENT_TOKEN);
+    } finally {
+      sock.close();
+    }
+  });
+
+  /*
+   * The whole path for issue 53's trace: the canvas sends its kept lines with
+   * the request, the schema accepts them, and they come back out of the file
+   * the hub wrote. Typechecking the field is not enough - a line the hub
+   * silently dropped would cost the next report rather than fail here.
+   */
+  it('writes the canvas trace the page sent along with the request', async () => {
+    const line = '2026-11-04T12:00:00.000Z [viewport] focus target=(1200,340 900x600) ' +
+      'canvas=1920x980 panel=open:420px zoom=1 pan=0,0 -> zoom=0.92 pan=-700,-200';
+    const sock = await connect(CLIENT_TOKEN);
+    try {
+      const { path } = await request(sock, { t: 'exportLogs', canvas: [line] });
+      const text = readFileSync(path!, 'utf8');
+      expect(text).toContain('== this canvas (browser)');
+      expect(text).toContain(line);
     } finally {
       sock.close();
     }

@@ -748,7 +748,9 @@ export async function serve(opts: ServeOptions): Promise<ServeResult> {
       }
 
       case 'exportLogs':
-        return { path: await exportLogs(hub) };
+        // The canvas's own trace rides along with the request, because the
+        // page is the only place that has it.
+        return { path: await exportLogs(hub, msg.canvas) };
 
       case 'checkFolder':
         // Nothing to hand back beyond ok/err: the dialog already knows the

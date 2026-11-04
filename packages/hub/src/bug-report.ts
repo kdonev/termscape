@@ -20,6 +20,11 @@ import { paths } from './paths.js';
  * message is diagnosed from. The trace lines themselves only ever carry
  * lengths and ids (see debug.ts), and the canvas token is redacted from the
  * console lines kept with them.
+ *
+ * The browser contributes a section of its own, because the canvas decides its
+ * own view and no hub can see that. It holds to the same rule: geometry, ids
+ * and timings, never titles, addresses or terminal contents. See
+ * web/src/canvas/trace.ts.
  */
 
 /** How long an attached machine gets to answer, well inside a dialog's patience. */
@@ -38,10 +43,15 @@ export interface HubLogs {
   log: string[];
 }
 
-/** A section of the report: a hub's logs, or why there are none. */
+/**
+ * A section of the report: a hub's logs, why there are none, or - for the
+ * browser, which runs no hub - a bare list of trace lines.
+ */
 export interface ReportPart {
   label: string;
   logs?: HubLogs;
+  /** Trace lines with no hub behind them. Used for the canvas's own. */
+  lines?: string[];
   error?: string;
 }
 
@@ -119,6 +129,7 @@ function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
 export async function collectReport(
   hub: Hub,
   timeoutMs = PEER_EXPORT_TIMEOUT_MS,
+  canvas?: string[],
 ): Promise<ReportPart[]> {
   const here: ReportPart = { label: 'this machine (canvas)', logs: collectLocal(hub) };
   const hosts = hub.store.listHosts();
@@ -145,7 +156,18 @@ export async function collectReport(
       }
     }),
   );
-  return [here, ...there];
+  /*
+   * The browser's section, last.
+   *
+   * Last rather than first although the page is where a canvas bug is seen,
+   * because it is the only section whose absence is normal: the hub exports
+   * logs for its own reasons too (the tray, a CLI), and nothing is wrong when
+   * no page asked. A section that is sometimes missing reads better at the end
+   * than as a hole near the top.
+   */
+  const browser: ReportPart[] =
+    canvas && canvas.length > 0 ? [{ label: 'this canvas (browser)', lines: canvas }] : [];
+  return [here, ...there, ...browser];
 }
 
 /** One plain-text file, readable in anything, one section per machine. */
@@ -158,6 +180,12 @@ export function formatReport(parts: ReportPart[]): string {
   ];
   for (const part of parts) {
     out.push(`${'='.repeat(78)}`, `== ${part.label}`, `${'='.repeat(78)}`);
+    // Before the no-logs branch: a browser section has lines and no hub, and
+    // is not a machine that failed to answer.
+    if (part.lines) {
+      out.push(`-- log (${part.lines.length} lines)`, ...part.lines, '');
+      continue;
+    }
     if (!part.logs) {
       out.push(part.error ?? 'no logs', '');
       continue;
@@ -189,9 +217,14 @@ function stamp(d: Date): string {
   );
 }
 
-/** Collect, format and write the report; returns where it went. */
-export async function exportLogs(hub: Hub): Promise<string> {
-  const text = formatReport(await collectReport(hub));
+/**
+ * Collect, format and write the report; returns where it went.
+ *
+ * `canvas` is the browser's kept trace when a page asked for the export, and
+ * absent when anything else did.
+ */
+export async function exportLogs(hub: Hub, canvas?: string[]): Promise<string> {
+  const text = formatReport(await collectReport(hub, PEER_EXPORT_TIMEOUT_MS, canvas));
   const dir = paths.bugReports();
   mkdirSync(dir, { recursive: true });
   const file = join(dir, `termscape-logs-${stamp(new Date())}.log`);

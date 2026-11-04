@@ -94,7 +94,9 @@ traces only half of itself otherwise:
     TERMSCAPE_DEBUG=input,output,attach npx termscape
 
 In the browser, load the canvas with `?debug=input,output,attach`; it sticks
-until `?debug=off`. Then scroll over the window that will not scroll.
+until `?debug=off`. Then scroll over the window that will not scroll. The
+browser has one topic of its own, `viewport`, which no hub takes — see "A view
+that ends up in the wrong place" below.
 
 What the trace answers, in the order worth asking:
 
@@ -139,8 +141,47 @@ message's route, timing and outcome (never its text), and that hub's recent
 log. The `deliver` and `attach` topics are always kept in memory for this,
 whether or not `TERMSCAPE_DEBUG` is set, along with everything the hub printed
 to its console, minus the canvas token. `TERMSCAPE_DEBUG` still decides what
-is printed to stderr.
+is printed to stderr. The browser adds a section of its own when the export was
+asked for from a canvas — its `viewport` trace, which no hub can see.
 
 For a message to an agent on an attached machine, read that machine's section:
 its hub is the one that typed the message and decided whether to press Enter
 again.
+
+## A view that ends up in the wrong place
+
+"The zoom is off and it does not focus properly on the windows" (issue 53) is a
+description of the result, and the result is the one thing that cannot say
+which step produced it. A view is decided in several: the rect a command picked,
+the fill it framed it at, the device-pixel alignment that nudges the zoom
+afterwards, and whatever gesture came before all of it. The exported logs now
+carry a `this canvas (browser)` section with one line per step, kept whether or
+not tracing is on — for the same reason `deliver` is, a view nobody asked for
+is noticed after the fact. Reading it:
+
+- `canvas WxH dpr=…` — what everything else is measured against, and the one
+  number that changes without anyone touching the canvas (browser zoom, or a
+  monitor with different scaling).
+- `focus target=(x,y wxh) canvas=… panel=open:420px zoom=… -> zoom=…` — a
+  command and the rect it framed. The canvas measures its own full width while
+  the panel sits *on top of* it, so a view correctly centred in the canvas is
+  off-centre on the part of it anyone can see. `panel=open:…px` is how much.
+- `align … dzoom=…%` — the only step that moves a view nobody asked to move. It
+  is bounded by half a device pixel of text, which at `dpr=1` is a step of
+  1/12, and it is taken about the viewport centre while a gesture zooms about
+  the pointer. A few percent is expected; much more, or a long run of them, is
+  a suspect.
+- `gesture pinch|wheel ratio=… intent=… -> …` — what a gesture asked for and
+  what it was read as. `intent=none -> zoom only` is a flick that did not fire,
+  which leaves the view part-way between two levels.
+- `ladder in|out rungs=[…] -> …` — the rungs a zoom key chose from. Which rung
+  a press is on is read off the screen rather than stored, so a press that went
+  somewhere unexpected is a question about these rects.
+- `renderScale … deviceFont=…` — the scale terminals rasterize at. Clamped at
+  both ends of the zoom range, where a terminal is magnified or minified rather
+  than re-rasterized to match; that looks like the zoom being wrong and is not.
+
+The lines hold geometry, session ids and timings only. Window titles, agent
+addresses, terminal contents and the canvas token stay out, so the file is as
+sendable as the rest of the report. In the browser, `?debug=viewport` prints
+the same lines to the console as they happen.

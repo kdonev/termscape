@@ -33,6 +33,15 @@ import {
   zoomLadder,
 } from './viewport.js';
 import type { Point, Rect, WheelStream } from './viewport.js';
+import {
+  fmtRect,
+  traceAlign,
+  traceCanvasSize,
+  traceFrame,
+  traceGesture,
+  traceLadder,
+  traceRenderScale,
+} from './trace.js';
 import { globalChord, modeKey, type Command } from './keymap.js';
 import { assignLabels, matchLabel } from './labels.js';
 import { Palette } from './Palette.js';
@@ -164,11 +173,20 @@ export function Canvas() {
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
-    const ro = new ResizeObserver(() => {
-      setSize({ w: el.clientWidth, h: el.clientHeight });
-    });
+    // Traced on change rather than per observation: everything a command
+    // computes is measured against these two numbers, so a view that framed
+    // the wrong area is read from here first.
+    const measure = () => {
+      const next = { w: el.clientWidth, h: el.clientHeight };
+      setSize((cur) => {
+        if (cur.w === next.w && cur.h === next.h) return cur;
+        traceCanvasSize(next.w, next.h, dpr());
+        return next;
+      });
+    };
+    const ro = new ResizeObserver(measure);
     ro.observe(el);
-    setSize({ w: el.clientWidth, h: el.clientHeight });
+    measure();
     return () => ro.disconnect();
   }, []);
 
@@ -205,7 +223,13 @@ export function Canvas() {
   useEffect(() => {
     if (interacting) return;
     const aligned = alignViewport(viewport, sizeRef.current.w, sizeRef.current.h, devicePixelRatio);
-    if (!sameViewport(aligned, viewport)) setViewport(aligned);
+    if (!sameViewport(aligned, viewport)) {
+      // The one step that moves a view nobody asked to move. Traced with the
+      // zoom change as a percentage, which is what says whether it is the
+      // suspect in a view that ended up off where it was aimed.
+      traceAlign(viewport, aligned);
+      setViewport(aligned);
+    }
   }, [viewport, interacting, devicePixelRatio, setViewport]);
 
   const settle = useCallback(() => {
@@ -245,7 +269,14 @@ export function Canvas() {
   // change, which is why it keys off the ratio it is currently matching.
   useEffect(() => {
     const mq = window.matchMedia(`(resolution: ${devicePixelRatio}dppx)`);
-    const onChange = () => setDevicePixelRatio(dpr());
+    const onChange = () => {
+      const next = dpr();
+      // A device pixel changing size re-decides both the alignment grain and
+      // the render scale, and it happens without the user touching the canvas
+      // - browser zoom, or a drag to a monitor with different scaling.
+      traceCanvasSize(sizeRef.current.w, sizeRef.current.h, next);
+      setDevicePixelRatio(next);
+    };
     mq.addEventListener('change', onChange);
     return () => mq.removeEventListener('change', onChange);
   }, [devicePixelRatio]);
@@ -261,7 +292,14 @@ export function Canvas() {
   useEffect(() => {
     if (interacting) return;
     const next = renderScaleFor(viewport.zoom, devicePixelRatio);
-    setRenderScale((cur) => (cur === next ? cur : next));
+    setRenderScale((cur) => {
+      if (cur === next) return cur;
+      // Clamped at both ends, so this stops following the zoom at the ends of
+      // the range - where a terminal is magnified or minified rather than
+      // rasterized to match, which looks like the zoom being wrong.
+      traceRenderScale(viewport.zoom, devicePixelRatio, next);
+      return next;
+    });
   }, [viewport.zoom, devicePixelRatio, interacting]);
 
   /* -------------------------------------------------------------- pan */
@@ -447,7 +485,14 @@ export function Canvas() {
 
       // Aligned up front so the settle effect finds nothing to nudge, which is
       // what keeps `applied` equal to the live viewport once the glide lands.
-      const next = alignViewport(focusRect(target.window, w, h), w, h, dprRef.current);
+      const framed = focusRect(target.window, w, h);
+      const next = alignViewport(framed, w, h, dprRef.current);
+      // Both halves, because they are two different suspects: `framed` is the
+      // rect and the fill this command chose, `next` is what alignment left of
+      // it. A focus that lands under the panel shows up in neither number but
+      // in the panel width traceFrame measures alongside them.
+      traceFrame('focus', target.window, viewportRef.current, next, { w, h },
+        `session=${sessionId} framedZoom=${framed.zoom}`);
       setMaximized({ sessionId, restore: restore ?? carried, applied: next });
       glideTo(next);
     },
@@ -469,8 +514,12 @@ export function Canvas() {
         s.id === focusRequest.sessionId || s.id === focusRequest.alsoId,
       );
       if (pair.length > 0) {
+        const { w, h } = sizeRef.current;
+        const to = fitTo(pair.map((s) => s.window), w, h);
         setMaximized(null);
-        glideTo(fitTo(pair.map((s) => s.window), sizeRef.current.w, sizeRef.current.h));
+        traceFrame('focus-pair', boundsOf(pair.map((s) => s.window)), viewportRef.current, to,
+          { w, h }, `sessions=${pair.length}`);
+        glideTo(to);
       }
       return;
     }
@@ -490,6 +539,8 @@ export function Canvas() {
       ) {
         setMaximized(null);
         select(sessionId);
+        traceFrame('unmaximize', null, viewportRef.current, state.restore, sizeRef.current,
+          `session=${sessionId}`);
         glideTo(state.restore);
         return;
       }
@@ -553,7 +604,15 @@ export function Canvas() {
     const intent = b.notch
       ? wheelFlickIntent({ ratio: b.ratio, durationMs, events: b.events })
       : pinchIntent({ ratio: b.ratio, durationMs, events: b.events });
-    if (!intent) return;
+    const burst = { ratio: b.ratio, durationMs, events: b.events };
+    if (!intent) {
+      // Worth a line even though nothing happens: a gesture that was meant as
+      // a flick and read as zooming leaves the view part-way between two
+      // levels, which is reported as the zoom being wrong rather than as a
+      // gesture that did not fire.
+      traceGesture(b.notch ? 'wheel' : 'pinch', burst, null, 'zoom only');
+      return;
+    }
 
     const world = screenToWorld(b.anchor, b.startViewport);
     const all = sessionsRef.current;
@@ -566,7 +625,11 @@ export function Canvas() {
     if (intent === 'in') {
       // Nothing under the fingers means nothing was aimed at, and the pinch's
       // own zoom is all that happens.
-      if (!under) return;
+      if (!under) {
+        traceGesture(b.notch ? 'wheel' : 'pinch', burst, intent, 'nothing under the pointer');
+        return;
+      }
+      traceGesture(b.notch ? 'wheel' : 'pinch', burst, intent, `focus ${under.id}`);
       focusSession(under.id, b.startViewport);
       return;
     }
@@ -585,11 +648,20 @@ export function Canvas() {
 
     const { w, h } = sizeRef.current;
     const next = stepOutTo(containers, viewportRef.current, w, h);
-    if (!next) return;
+    if (!next) {
+      traceGesture(b.notch ? 'wheel' : 'pinch', burst, intent, 'nothing left to reveal');
+      return;
+    }
+    const to = alignViewport(next, w, h, dprRef.current);
+    traceGesture(b.notch ? 'wheel' : 'pinch', burst, intent, 'step out');
     // The view is no longer one window's close-up, so the ⤡ state stops
     // describing it.
     setMaximized(null);
-    glideTo(alignViewport(next, w, h, dprRef.current));
+    // No target rect: which container stepOutTo picked is its own business,
+    // and the containers it chose from are the next line down anyway.
+    traceFrame('pinch-out', null, viewportRef.current, to, { w, h },
+      `containers=${containers.length}`);
+    glideTo(to);
   }, [focusSession, glideTo]);
 
   const noteZoom = useCallback(
@@ -752,8 +824,12 @@ export function Canvas() {
     // Windows only, not notes: the badges are on windows, and a note parked
     // far out would shrink every one of them to fit something unlabelled.
     const { w, h } = sizeRef.current;
+    const windows = ordered.map((x) => x.window);
+    const to = alignViewport(fitTo(windows, w, h), w, h, dprRef.current);
     setMaximized(null);
-    glideTo(alignViewport(fitTo(ordered.map((x) => x.window), w, h), w, h, dprRef.current));
+    traceFrame('jump-open', boundsOf(windows), viewportRef.current, to, { w, h },
+      `windows=${ordered.length}`);
+    glideTo(to);
   }, [glideTo]);
 
   /**
@@ -773,7 +849,9 @@ export function Canvas() {
       // window's close-up - otherwise cancelling a jump would quietly turn a
       // maximized window's ⤡ back into ⤢.
       setMaximized(j.restoreMaximized);
-      glideTo(alignViewport(j.restore, w, h, dprRef.current));
+      const to = alignViewport(j.restore, w, h, dprRef.current);
+      traceFrame('jump-cancel', null, viewportRef.current, to, { w, h });
+      glideTo(to);
     },
     [glideTo],
   );
@@ -827,9 +905,12 @@ export function Canvas() {
           dir === 'in'
             ? stepInTo(rungs, viewportRef.current, w, h)
             : stepOutTo(rungs.slice(1), viewportRef.current, w, h);
+        traceLadder(dir, rungs, to);
         if (!to) return;
+        const aligned = alignViewport(to, w, h, dprRef.current);
         setMaximized(null);
-        glideTo(alignViewport(to, w, h, dprRef.current));
+        traceFrame(`ladder-${dir}`, note, viewportRef.current, aligned, { w, h }, 'on=note');
+        glideTo(aligned);
         return;
       }
 
@@ -846,6 +927,10 @@ export function Canvas() {
         dir === 'in'
           ? stepInTo(ladder, viewportRef.current, w, h)
           : stepOutTo(ladder.slice(1), viewportRef.current, w, h);
+      // The rungs as well as the answer: which rung a press steps to is read
+      // off the screen, so a press that went somewhere unexpected is a
+      // question about the rungs it chose from.
+      traceLadder(dir, ladder, next);
       if (!next) return;
 
       // Landing on one window is the same thing the maximize button does, so
@@ -855,8 +940,11 @@ export function Canvas() {
         focusSession(anchor.id);
         return;
       }
+      const aligned = alignViewport(next, w, h, dprRef.current);
       setMaximized(null);
-      glideTo(alignViewport(next, w, h, dprRef.current));
+      traceFrame(`ladder-${dir}`, null, viewportRef.current, aligned, { w, h },
+        `anchor=${anchor.id} rungs=${ladder.length}`);
+      glideTo(aligned);
     },
     [focusSession, glideTo, ladderFor],
   );
@@ -893,8 +981,13 @@ export function Canvas() {
       const { w, h } = sizeRef.current;
       const visible = visibleWorldRect(viewportRef.current, w, h, 0);
       if (!rectContains(visible, target.rect)) {
+        const to = alignViewport(fitTo([target.rect], w, h), w, h, dprRef.current);
         setMaximized(null);
-        glideTo(alignViewport(fitTo([target.rect], w, h), w, h, dprRef.current));
+        // `visible` too: this is the one decision taken from what is on screen
+        // rather than from a rect, so whether it fired at all is the question.
+        traceFrame('land', target.rect, viewportRef.current, to, { w, h },
+          `${target.kind}=${target.id} visible=(${fmtRect(visible)})`);
+        glideTo(to);
       }
     },
     [glideTo, select, selectNote],
