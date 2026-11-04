@@ -59,6 +59,10 @@ jobs:
 
   # The gate PLAN.md asks for: install the real artifact the way a user would,
   # on every platform, and make sure the thing starts and serves its UI.
+  #
+  # The steps live in .github/actions/smoke so this job and the macOS one below
+  # cannot drift apart. Checking out is new with that: the two legs need the
+  # repository only to find that action.
   smoke:
     needs: pack
     name: smoke (${{ matrix.os }})
@@ -66,49 +70,51 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest]
     steps:
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/smoke
 
-      - uses: actions/download-artifact@v4
-        with:
-          name: tarball
-          path: tarball
+  # macOS, apart from the other two and not a blocker.
+  #
+  # GitHub's hosted macOS runners are capacity-constrained, and a release that
+  # has been built and smoke-tested on two platforms should not sit unpublished
+  # because a third runner was never handed out - which is what happened to
+  # v0.3.1: 15 minutes of queueing, then "the job was not acquired by Runner of
+  # type hosted", with no log because no step ever ran.
+  #
+  # But "not a blocker" must not quietly mean "not a gate". `continue-on-error`
+  # alone would publish over a macOS smoke test that really failed, which is the
+  # one thing this job is for. So the two cases are told apart by whether any
+  # step ran at all: a job that failed its steps says so in its output, a job
+  # that was never acquired has no output to say it with, and `publish` below
+  # refuses only on the former. A cancelled or timed-out job also runs nothing
+  # and is treated as absent rather than as a verdict - the gate is for a macOS
+  # that answered and said no.
+  smoke-macos:
+    needs: pack
+    name: smoke (macos-latest, not a blocker)
+    runs-on: macos-latest
+    continue-on-error: true
+    outputs:
+      verdict: ${{ steps.verdict.outputs.result }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/smoke
 
-      - name: Install globally
+      # Only reached when a step above failed, which is what makes an empty
+      # output mean "never ran" rather than "passed".
+      - name: Record that the smoke test itself failed
+        id: verdict
+        if: failure()
         shell: bash
-        run: npm install -g ./tarball/*.tgz
-
-      - name: Starts and reports its version
-        shell: bash
-        run: |
-          got="$(termscape --version)"
-          echo "version: $got"
-          test -n "$got"
-
-      - name: Serves the canvas
-        shell: bash
-        env:
-          TERMSCAPE_HOME: ${{ runner.temp }}/termscape-home
-        run: |
-          mkdir -p "$TERMSCAPE_HOME"
-          # --no-open because CI has no browser to hand the URL to.
-          termscape --port 7789 --no-open --token ci-smoke-token > hub.log 2>&1 &
-          for _ in $(seq 1 60); do
-            curl -sf http://127.0.0.1:7789/health >/dev/null && break
-            sleep 1
-          done
-          echo "--- hub.log ---"; cat hub.log
-          curl -sf http://127.0.0.1:7789/health
-          # The UI is the half most likely to be lost in packaging: the hub
-          # finds it by a different relative path once installed.
-          curl -sf http://127.0.0.1:7789/ | grep -q '<div id="root">'
-          echo "canvas served ok"
+        run: echo "result=fail" >> "$GITHUB_OUTPUT"
 
   publish:
-    needs: smoke
+    needs: [smoke, smoke-macos]
+    # `needs` covers the two required legs; this covers the third, which is
+    # only ever a veto when it ran and failed. See smoke-macos.
+    if: needs.smoke-macos.outputs.verdict != 'fail'
     runs-on: ubuntu-latest
     permissions:
       contents: read

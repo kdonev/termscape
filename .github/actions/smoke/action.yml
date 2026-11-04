@@ -1,0 +1,48 @@
+name: Smoke-test the packed tarball
+description: >
+  Install the release artifact the way a user would and check that the hub
+  starts and serves the canvas. Shared by the required legs and by the macOS
+  one, which is not a blocker (see release.yml) - the point of a composite
+  action here is that the two cannot drift apart.
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 24
+
+    - uses: actions/download-artifact@v4
+      with:
+        name: tarball
+        path: tarball
+
+    - name: Install globally
+      shell: bash
+      run: npm install -g ./tarball/*.tgz
+
+    - name: Starts and reports its version
+      shell: bash
+      run: |
+        got="$(termscape --version)"
+        echo "version: $got"
+        test -n "$got"
+
+    - name: Serves the canvas
+      shell: bash
+      env:
+        TERMSCAPE_HOME: ${{ runner.temp }}/termscape-home
+      run: |
+        mkdir -p "$TERMSCAPE_HOME"
+        # --no-open because CI has no browser to hand the URL to.
+        termscape --port 7789 --no-open --token ci-smoke-token > hub.log 2>&1 &
+        for _ in $(seq 1 60); do
+          curl -sf http://127.0.0.1:7789/health >/dev/null && break
+          sleep 1
+        done
+        echo "--- hub.log ---"; cat hub.log
+        curl -sf http://127.0.0.1:7789/health
+        # The UI is the half most likely to be lost in packaging: the hub
+        # finds it by a different relative path once installed.
+        curl -sf http://127.0.0.1:7789/ | grep -q '<div id="root">'
+        echo "canvas served ok"
